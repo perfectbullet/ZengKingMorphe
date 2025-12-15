@@ -17,10 +17,19 @@
 **团队配置**：4人小团队（1前端 + 1AI研发 + 2其他）
 
 **AI研发职责范围**：
-- ✅ 完整的后端服务开发（FastAPI REST API + WebSocket）
-- ✅ 业务服务层（对话管理、知识库管理、任务编排）
-- ✅ AI核心引擎（LangGraph工作流 + 对话引擎 + 知识检索）
+- ✅ 完整的后端服务开发（FastAPI REST API + SSE流式响应）
+- ✅ 业务服务层（对话管理、知识库管理）
+- ✅ AI核心引擎（LangGraph工作流 + RAG检索 + 联网检索 + 文档评分）
 - ✅ 数据库集成（MongoDB + Chroma + ElasticSearch）
+- ✅ Java接口集成（FAQ数据、敏感词数据）
+
+**核心功能优先级**（更新）：
+1. **RAG知识库检索**（最高优先级）
+2. **联网检索**（核心功能）
+3. **流式输出（SSE）**（核心功能）
+4. 文档相关性评分
+5. Java接口集成（FAQ、敏感词）
+6. 简化的意图识别
 
 ### 1.2 技术架构
 
@@ -28,7 +37,7 @@
 ┌─────────────┐
 │  Vue前端界面 │
 └──────┬──────┘
-       │ REST API / WebSocket
+       │ REST API / SSE
 ┌──────▼───────────────────────────────┐
 │      Python AI引擎服务            │
 │   (FastAPI + LangGraph)          │
@@ -37,37 +46,38 @@
 │  业务服务层：                      │
 │  - 对话管理服务（会话/上下文）      │
 │  - 知识库管理服务（文档/向量化）    │
-│  - 任务编排服务（异步调度）        │
+│  - Java接口集成（FAQ/敏感词）      │
 ├──────────────────────────────────────┤
-│  LangGraph工作流编排：            │
-│  - 对话引擎（多轮对话/流式响应）   │
-│  - 知识库RAG（向量检索/上下文增强）│
-│  - 意图识别（分类/实体提取）       │
+│  LangGraph工作流编排（更新）：     │
+│  - RAG检索（向量检索/文档评分）    │
+│  - 联网检索（Web Search）         │
+│  - 流式响应（SSE）                │
+│  - 简化的意图识别                 │
 └──────┬───────────────────────────────┘
        │
-   ┌───┴────┬─────────┬──────────┐
-   │        │         │          │
-┌──▼──┐ ┌──▼──┐  ┌───▼───┐ ┌───▼────┐
-│MongoDB│ │Chroma│  │ElasticSearch│ │外部LLM│
-└─────┘ └─────┘  └──────┘ └────────┘
+   ┌───┴────┬─────────┬──────────┬──────────┐
+   │        │         │          │          │
+┌──▼──┐ ┌──▼──┐  ┌───▼───┐ ┌───▼────┐ ┌──▼────┐
+│MongoDB│ │Chroma│  │ElasticSearch│ │外部LLM│ │Java API│
+└─────┘ └─────┘  └──────┘ └────────┘ └────────┘
 ```
 
-### 1.3 开发时间规划
+### 1.3 开发时间规划（更新版）
 
-| 阶段 | 时间 | 目标 |
-|------|------|------|
-| Phase 1 | 2周 | 基础服务搭建 |
-| Phase 2 | 2周 | 知识库与检索 |
-| Phase 3 | 1.5周 | 意图识别与质量保障 |
-| Phase 4 | 1.5周 | 系统集成与优化 |
-| **总计** | **7周** | **完整AI引擎** |
+| 阶段 | 时间 | 目标 | 核心交付 |
+|------|------|------|----------|
+| Phase 1 | 2周 | RAG检索+流式响应 | RAG检索、SSE流式输出 |
+| Phase 2 | 2周 | 联网检索+文档评分 | 联网检索、文档评分、Java接口集成 |
+| Phase 3 | 1.5周 | 简化意图识别+质量保障 | 意图识别、敏感词过滤 |
+| Phase 4 | 1.5周 | 系统集成与优化 | Docker部署、监控 |
+| **总计** | **7周** | **完整AI引擎** | **生产级系统** |
 
 ---
 
-## 二、Phase 1：基础服务搭建（2周）
+## 二、Phase 1：RAG检索+流式响应（2周）
 
 ### 目标
-搭建FastAPI服务框架，实现基本对话能力
+搭建FastAPI服务框架，实现RAG知识库检索和SSE流式输出（核心功能）
 
 ### 2.1 第1-2天：项目初始化
 
@@ -970,14 +980,416 @@ async def init_collections():
 
 ---
 
-## 三、Phase 2：知识库与检索（2周）
+## 三、Phase 2：联网检索+文档评分+Java接口集成（2周）
 
 ### 目标
-实现知识库管理和混合检索策略
+实现联网检索、文档相关性评分和Java接口集成（核心功能）
 
-### 3.1 第15-17天：知识库管理服务
+### 3.1 第15-17天：文档相关性评分机制
 
-（继续补充...）
+#### 任务清单
+- [ ] 实现LLM文档评分
+- [ ] 配置相关性阈值
+- [ ] 集成到LangGraph工作流
+
+#### 文档评分实现（app/core/document_grader.py）
+
+```python
+from typing import Dict, List
+from app.utils.llm_client import LLMClient
+from app.utils.logger import logger
+
+class DocumentGrader:
+    """文档相关性评分器"""
+    
+    def __init__(self, llm_client: LLMClient):
+        self.llm = llm_client
+        self.threshold = 0.6  # 相关性阈值
+    
+    async def grade_document(
+        self,
+        query: str,
+        document: str
+    ) -> float:
+        """对单个文档进行相关性打分"""
+        
+        grading_prompt = f"""你是一个文档相关性评估专家。请评估以下文档与用户问题的相关性。
+
+用户问题：{query}
+
+检索文档：{document[:800]}
+
+评分标准：
+- 1.0: 高度相关，能直接完整回答问题
+- 0.7-0.9: 相关性强，包含大部分答案
+- 0.5-0.6: 中等相关，包含部分有用信息
+- 0.3-0.4: 弱相关，信息不够充分
+- 0.0-0.2: 不相关或无关
+
+请仅返回0-1之间的数字分数，例如：0.85
+"""
+        
+        try:
+            score_str = await self.llm.complete(
+                prompt=grading_prompt,
+                temperature=0.1,
+                max_tokens=10
+            )
+            score = float(score_str.strip())
+            
+            # 确保分数在0-1之间
+            score = max(0.0, min(1.0, score))
+            
+            logger.info(f"Document grading: {score:.2f}")
+            return score
+            
+        except Exception as e:
+            logger.error(f"Document grading failed: {e}")
+            # 失败时返回中等分数，避免误判
+            return 0.5
+    
+    async def grade_documents(
+        self,
+        query: str,
+        documents: List[Dict]
+    ) -> List[Dict]:
+        """对多个文档进行评分"""
+        
+        graded_docs = []
+        for doc in documents:
+            score = await self.grade_document(query, doc["content"])
+            doc["relevance_score"] = score
+            graded_docs.append(doc)
+        
+        # 按分数排序
+        graded_docs.sort(key=lambda x: x["relevance_score"], reverse=True)
+        
+        return graded_docs
+    
+    def is_relevant(self, score: float) -> bool:
+        """判断文档是否相关"""
+        return score >= self.threshold
+```
+
+### 3.2 第18-20天：联网检索功能
+
+#### 任务清单
+- [ ] 集成搜索引擎API（Tavily）
+- [ ] 实现联网检索触发逻辑
+- [ ] 搜索结果处理
+- [ ] 集成到LangGraph工作流
+
+#### 联网检索实现（app/core/web_search.py）
+
+```python
+from typing import List, Dict
+from tavily import TavilyClient
+from app.config import settings
+from app.utils.logger import logger
+
+class WebSearchEngine:
+    """联网检索引擎"""
+    
+    def __init__(self):
+        self.client = TavilyClient(api_key=settings.TAVILY_API_KEY)
+        self.max_results = 5
+        self.timeout = 10
+    
+    def should_search_web(self, query: str, relevance_score: float) -> bool:
+        """判断是否需要联网检索"""
+        
+        # 条件1：文档相关性低于阈值
+        if relevance_score < 0.6:
+            logger.info("Low relevance score, triggering web search")
+            return True
+        
+        # 条件2：包含实时性关键词
+        realtime_keywords = [
+            "今天", "明天", "最近", "现在", "当前",
+            "天气", "气温", "降雨",
+            "新闻", "热点", "最新",
+            "股价", "汇率", "行情"
+        ]
+        
+        if any(keyword in query for keyword in realtime_keywords):
+            logger.info("Realtime keyword detected, triggering web search")
+            return True
+        
+        return False
+    
+    async def search(self, query: str) -> List[Dict]:
+        """执行联网检索"""
+        
+        try:
+            logger.info(f"Searching web for: {query}")
+            
+            # 调用Tavily搜索API
+            results = self.client.search(
+                query=query,
+                max_results=self.max_results,
+                search_depth="basic"
+            )
+            
+            # 提取搜索结果
+            web_docs = []
+            for result in results.get("results", []):
+                web_docs.append({
+                    "id": f"web_{hash(result['url'])}",
+                    "content": result.get("content", ""),
+                    "title": result.get("title", ""),
+                    "url": result.get("url", ""),
+                    "score": result.get("score", 0.5),
+                    "source": "web_search"
+                })
+            
+            logger.info(f"Found {len(web_docs)} web results")
+            return web_docs
+            
+        except Exception as e:
+            logger.error(f"Web search failed: {e}")
+            return []
+```
+
+#### 更新LangGraph工作流（app/core/langgraph_workflow.py）
+
+```python
+# 新增节点函数
+
+async def grade_documents(state: ConversationState) -> ConversationState:
+    """文档评分节点"""
+    from app.core.document_grader import DocumentGrader
+    from app.utils.llm_client import get_llm_client
+    
+    logger.info("Grading documents...")
+    
+    docs = state["retrieved_docs"]
+    if not docs:
+        state["relevance_score"] = 0.0
+        return state
+    
+    grader = DocumentGrader(get_llm_client())
+    graded_docs = await grader.grade_documents(
+        query=state["user_query"],
+        documents=docs
+    )
+    
+    state["retrieved_docs"] = graded_docs
+    state["relevance_score"] = graded_docs[0]["relevance_score"] if graded_docs else 0.0
+    
+    logger.info(f"Max relevance score: {state['relevance_score']}")
+    return state
+
+async def web_search(state: ConversationState) -> ConversationState:
+    """联网检索节点"""
+    from app.core.web_search import WebSearchEngine
+    
+    logger.info("Performing web search...")
+    
+    engine = WebSearchEngine()
+    web_docs = await engine.search(state["user_query"])
+    
+    # 将联网搜索结果添加到检索文档
+    state["retrieved_docs"].extend(web_docs)
+    state["web_search_used"] = True
+    
+    logger.info(f"Added {len(web_docs)} web search results")
+    return state
+
+def should_search_web(state: ConversationState) -> str:
+    """判断是否需要联网检索"""
+    from app.core.web_search import WebSearchEngine
+    
+    engine = WebSearchEngine()
+    relevance_score = state.get("relevance_score", 0.0)
+    
+    if engine.should_search_web(state["user_query"], relevance_score):
+        return "web_search"
+    else:
+        return "generate_answer"
+
+# 更新工作流图构建
+def build_conversation_graph() -> StateGraph:
+    """构建对话工作流图（更新版）"""
+    graph = StateGraph(ConversationState)
+    
+    # ... 前面的节点 ...
+    
+    # 新增节点
+    graph.add_node("grade_documents", grade_documents)
+    graph.add_node("web_search", web_search)
+    
+    # 更新工作流
+    graph.add_edge("hybrid_search", "grade_documents")
+    
+    # 条件边：根据文档评分决定是否联网检索
+    graph.add_conditional_edges(
+        "grade_documents",
+        should_search_web,
+        {
+            "web_search": "web_search",
+            "generate_answer": "enhance_context"
+        }
+    )
+    
+    graph.add_edge("web_search", "enhance_context")
+    graph.add_edge("enhance_context", "generate_answer")
+    
+    # ... 后续节点 ...
+    
+    return graph.compile()
+```
+
+### 3.3 第21-23天：Java接口集成
+
+#### 任务清单
+- [ ] 实现Java FAQ接口调用
+- [ ] 实现Java敏感词接口调用
+- [ ] FAQ数据向量化
+- [ ] 敏感词检测引擎（AC自动机）
+
+#### Java接口客户端（app/services/java_client.py）
+
+```python
+import httpx
+from typing import List, Dict
+from app.config import settings
+from app.utils.logger import logger
+
+class JavaAPIClient:
+    """Java平台API客户端"""
+    
+    def __init__(self):
+        self.base_url = settings.JAVA_API_BASE_URL
+        self.timeout = 30
+    
+    async def get_faq_list(
+        self,
+        kb_id: str = None,
+        category: str = None,
+        page: int = 1,
+        page_size: int = 100
+    ) -> List[Dict]:
+        """获取FAQ列表"""
+        
+        params = {
+            "page": page,
+            "page_size": page_size,
+            "status": "active"
+        }
+        
+        if kb_id:
+            params["kb_id"] = kb_id
+        if category:
+            params["category"] = category
+        
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.get(
+                    f"{self.base_url}/api/java/faq/list",
+                    params=params
+                )
+                response.raise_for_status()
+                
+                data = response.json()
+                return data["data"]["items"]
+                
+        except Exception as e:
+            logger.error(f"Failed to get FAQ list from Java API: {e}")
+            return []
+    
+    async def sync_all_faqs(self) -> List[Dict]:
+        """全量同步FAQ数据"""
+        
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.get(
+                    f"{self.base_url}/api/java/faq/sync-all"
+                )
+                response.raise_for_status()
+                
+                data = response.json()
+                logger.info(f"Synced {data['data']['total']} FAQs from Java API")
+                return data["data"]["items"]
+                
+        except Exception as e:
+            logger.error(f"Failed to sync FAQs: {e}")
+            return []
+    
+    async def get_sensitive_words(self) -> List[Dict]:
+        """获取敏感词库"""
+        
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.get(
+                    f"{self.base_url}/api/java/sensitive-words/list",
+                    params={"status": "active"}
+                )
+                response.raise_for_status()
+                
+                data = response.json()
+                logger.info(f"Got {len(data['data']['items'])} sensitive words")
+                return data["data"]["items"]
+                
+        except Exception as e:
+            logger.error(f"Failed to get sensitive words: {e}")
+            return []
+```
+
+### 3.4 第24-28天：FAQ向量化和敏感词引擎
+
+#### FAQ同步服务（app/services/faq_sync.py）
+
+```python
+from app.services.java_client import JavaAPIClient
+from app.utils.db import get_chroma, get_elasticsearch
+from app.utils.llm_client import get_embedding_client
+
+class FAQSyncService:
+    """FAQ同步服务"""
+    
+    async def sync_faqs_from_java(self):
+        """从Java平台同步FAQ并向量化"""
+        
+        # 1. 调用Java接口获取FAQ
+        client = JavaAPIClient()
+        faqs = await client.sync_all_faqs()
+        
+        # 2. 向量化FAQ问题
+        embedding_client = get_embedding_client()
+        questions = [faq["question"] for faq in faqs]
+        embeddings = await embedding_client.embed_batch(questions)
+        
+        # 3. 存储到Chroma
+        chroma = get_chroma()
+        collection = chroma.get_or_create_collection("faq_collection")
+        
+        collection.add(
+            ids=[faq["faq_id"] for faq in faqs],
+            embeddings=embeddings,
+            documents=questions,
+            metadatas=[{
+                "answer": faq["answer"],
+                "category": faq["category"],
+                "keywords": ",".join(faq["keywords"])
+            } for faq in faqs]
+        )
+        
+        # 4. 索引到ElasticSearch
+        es = await get_elasticsearch()
+        for faq in faqs:
+            await es.index(
+                index="faq_index",
+                id=faq["faq_id"],
+                document={
+                    "question": faq["question"],
+                    "answer": faq["answer"],
+                    "keywords": faq["keywords"],
+                    "category": faq["category"]
+                }
+            )
+        
+        logger.info(f"Synced {len(faqs)} FAQs")
+```
 
 ---
 
@@ -987,13 +1399,27 @@ async def init_collections():
 
 1. **创建.env文件**：
 ```bash
+# 数据库配置
 MONGODB_URI=mongodb://localhost:27017
 CHROMA_HOST=localhost
 CHROMA_PORT=8001
 ES_HOST=localhost
 ES_PORT=9200
+
+# LLM配置
 OPENAI_API_KEY=your_openai_api_key
+
+# 联网检索配置（新增）
+TAVILY_API_KEY=your_tavily_api_key
+
+# Java平台接口配置（新增）
+JAVA_API_BASE_URL=http://java-platform:8080
+
+# 安全配置
 SECRET_KEY=your_secret_key_here
+
+# 文档评分配置（新增）
+RELEVANCE_THRESHOLD=0.6
 ```
 
 2. **安装依赖**：
