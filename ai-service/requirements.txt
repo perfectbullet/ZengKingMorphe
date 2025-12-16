@@ -14,7 +14,7 @@ langgraph==0.0.20
 openai==1.10.0
 
 # Vector database and search
-chromadb==0.5.23
+chromadb==0.6.3  # Upgraded from 0.5.23 for better stability and performance
 elasticsearch==8.11.1
 
 # Database
