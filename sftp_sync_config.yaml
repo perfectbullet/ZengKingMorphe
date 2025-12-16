@@ -1,0 +1,66 @@
+# SFTP Sync Configuration Example
+# 配置文件示例
+
+# Connection settings (连接设置)
+host: "192.168.8.230"         # Remote server IP or hostname (远程服务器IP或主机名)
+port: 22                       # SSH port (SSH端口)
+username: "user"             # SSH username (SSH用户名)
+password: "your_passphrase_here"         # SSH password (SSH密码) - Optional if using private_key
+
+# SSH key authentication (SSH密钥认证) - More secure than password
+private_key: "C:\\Users\\12153\\.ssh\\id_ed25519"  # Path to private key (私钥路径)
+# private_key_password: "key_password"   # Password for encrypted key (私钥密码，如果私钥有密码保护)
+
+# Directory settings (目录设置)
+local_dir: "D:\\zenking_work\\metahuman_work\\ZengKingMorphe"      # Local directory to sync (要同步的本地目录)
+remote_dir: "/data/metahuman_work/ZengKingMorphe"    # Remote directory (远程目录)
+
+# Include patterns (包含模式) - Which files to sync
+include_patterns:
+  # - "*"                        # Include all files by default (默认包含所有文件)
+  - "*.py"                   # Only Python files
+  #- "*.js"                   # Only JavaScript files
+  # - "src/**"                 # Only files in src directory
+  - "docker-compose.yml"     # Specific file to include
+  - "ai-service"            # Include app directory
+  - "requirements.txt"
+  - ".env"
+
+# Exclude patterns (排除模式) - Which files to skip
+exclude_patterns:
+  - "*.pyc"                    # Python bytecode (Python字节码)
+  - "*.pyo"                    # Python optimized bytecode
+  - "__pycache__"              # Python cache directory (Python缓存目录)
+  - ".git"                     # Git directory (Git目录)
+  - ".gitignore"               # Git ignore file
+  - ".DS_Store"                # macOS metadata
+  - "node_modules"             # Node.js dependencies (Node.js依赖)
+  - "venv"                     # Python virtual environment (Python虚拟环境)
+  - ".venv"                    # Python virtual environment
+  - "*.log"                    # Log files (日志文件)
+  # - ".env"                     # Environment variables (环境变量)
+  - "*.tmp"                    # Temporary files (临时文件)
+  - ".idea"                    # IDE settings (IDE设置)
+  - ".vscode"                  # VS Code settings
+  - "dist"                     # Build output (构建输出)
+  - "build"                    # Build directory (构建目录)
+  # - "docs"                     # Documentation directory (文档目录)
+  - "tests"                    # Test files (测试文件)
+  # - "models"                   # Models directory (模型目录)
+  - "sftp_sync"                # SFTP sync tool directory (SFTP同步工具目录)
+  - "sftp_sync_config.yaml"  # This config file itself (此配置文件本身)
+
+# Synchronization options (同步选项)
+delete_remote: false           # Delete remote files not in local (删除远程不存在于本地的文件)
+preserve_permissions: true     # Preserve file permissions (保持文件权限)
+follow_symlinks: false         # Follow symbolic links (跟随符号链接)
+backup_remote: false           # Backup remote files before overwriting (覆盖前备份远程文件)
+
+# Security settings (安全设置)
+auto_add_host_key: false       # Auto-accept unknown host keys (自动接受未知主机密钥)
+                               # WARNING: Set to true only for testing/development (警告：仅用于测试/开发环境)
+                               # For production, add hosts to ~/.ssh/known_hosts (生产环境请添加主机到 ~/.ssh/known_hosts)
+
+# Behavior settings (行为设置)
+dry_run: false                 # Preview changes without executing (预览更改而不执行)
+verbose: false                 # Enable verbose output (启用详细输出)

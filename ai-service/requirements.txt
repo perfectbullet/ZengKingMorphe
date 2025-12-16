@@ -23,7 +23,7 @@ motor==3.3.2
 
 # Authentication and security
 PyJWT==2.8.0
-python-jose[cryptography]==3.3.0
+python-jose[cryptography]
 passlib[bcrypt]==1.7.4
 python-dotenv==1.0.0
 
@@ -32,7 +32,7 @@ httpx==0.26.0
 aiohttp==3.9.1
 
 # Web search
-tavily-python==0.3.0
+tavily-python
 
 # Utils
 pydantic==2.5.3
