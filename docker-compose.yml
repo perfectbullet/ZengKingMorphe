@@ -1,5 +1,4 @@
-version: '3.8'
-
+name: digital-employee-platform
 services:
   # AI Service
   ai-service:
@@ -8,7 +7,7 @@ services:
       dockerfile: Dockerfile
     container_name: digital-employee-ai
     ports:
-      - "8000:8000"
+      - "8100:8000"
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_API_BASE=${OPENAI_API_BASE:-https://api.openai.com/v1}
@@ -38,7 +37,7 @@ services:
     image: mongo:7.0
     container_name: digital-employee-mongodb
     ports:
-      - "27017:27017"
+      - "27117:27017"
     volumes:
       - mongodb-data:/data/db
       - mongodb-config:/data/configdb
@@ -58,7 +57,7 @@ services:
     image: chromadb/chroma:latest
     container_name: digital-employee-chroma
     ports:
-      - "8001:8000"
+      - "8101:8000"
     volumes:
       - chroma-data:/chroma/chroma
     environment:
@@ -73,8 +72,8 @@ services:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
     container_name: digital-employee-elasticsearch
     ports:
-      - "9200:9200"
-      - "9300:9300"
+      - "9320:9200"
+      - "9330:9300"
     volumes:
       - es-data:/usr/share/elasticsearch/data
     environment:
