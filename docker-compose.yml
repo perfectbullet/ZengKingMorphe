@@ -1,0 +1,109 @@
+version: '3.8'
+
+services:
+  # AI Service
+  ai-service:
+    build:
+      context: ./ai-service
+      dockerfile: Dockerfile
+    container_name: digital-employee-ai
+    ports:
+      - "8000:8000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_API_BASE=${OPENAI_API_BASE:-https://api.openai.com/v1}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      - TAVILY_API_KEY=${TAVILY_API_KEY}
+      - MONGODB_URI=mongodb://mongodb:27017/digital_employee
+      - CHROMA_HOST=chroma
+      - CHROMA_PORT=8001
+      - ES_HOST=elasticsearch
+      - ES_PORT=9200
+      - JAVA_API_BASE_URL=${JAVA_API_BASE_URL:-http://java-platform:8080}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-your-secret-key-change-in-production}
+    volumes:
+      - ./ai-service:/app
+      - ai-chroma-data:/app/chroma_db
+      - ai-logs:/app/logs
+    depends_on:
+      - mongodb
+      - elasticsearch
+      - chroma
+    networks:
+      - digital-employee-network
+    restart: unless-stopped
+
+  # MongoDB
+  mongodb:
+    image: mongo:7.0
+    container_name: digital-employee-mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb-data:/data/db
+      - mongodb-config:/data/configdb
+    environment:
+      - MONGO_INITDB_DATABASE=digital_employee
+    networks:
+      - digital-employee-network
+    restart: unless-stopped
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/digital_employee --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Chroma Vector Database
+  chroma:
+    image: chromadb/chroma:latest
+    container_name: digital-employee-chroma
+    ports:
+      - "8001:8000"
+    volumes:
+      - chroma-data:/chroma/chroma
+    environment:
+      - IS_PERSISTENT=TRUE
+      - PERSIST_DIRECTORY=/chroma/chroma
+    networks:
+      - digital-employee-network
+    restart: unless-stopped
+
+  # ElasticSearch
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    container_name: digital-employee-elasticsearch
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    networks:
+      - digital-employee-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+volumes:
+  mongodb-data:
+    driver: local
+  mongodb-config:
+    driver: local
+  chroma-data:
+    driver: local
+  ai-chroma-data:
+    driver: local
+  es-data:
+    driver: local
+  ai-logs:
+    driver: local
+
+networks:
+  digital-employee-network:
+    driver: bridge

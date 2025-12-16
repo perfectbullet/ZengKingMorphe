@@ -1,0 +1,141 @@
+"""
+MongoDB database models.
+"""
+from datetime import datetime
+from typing import List, Optional, Dict, Any
+from pydantic import BaseModel, Field
+
+
+class ConversationModel(BaseModel):
+    """Conversation record model."""
+    conversation_id: str
+    session_id: str
+    user_id: str
+    employee_id: str
+    employee_name: str
+    user_query: str
+    ai_response: str
+    is_realtime_query: bool = False
+    realtime_category: Optional[str] = None
+    intent: Optional[str] = None
+    entities: Dict[str, Any] = Field(default_factory=dict)
+    kb_used: List[str] = Field(default_factory=list)
+    web_search_used: bool = False
+    web_search_results: List[Dict[str, Any]] = Field(default_factory=list)
+    retrieved_docs: List[Dict[str, Any]] = Field(default_factory=list)
+    relevance_score: float = 0.0
+    confidence: float = 0.0
+    response_time_ms: int = 0
+    satisfaction: Optional[str] = None
+    has_sensitive: bool = False
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: Optional[datetime] = None
+    context: Dict[str, Any] = Field(default_factory=dict)
+
+
+class SessionModel(BaseModel):
+    """Session model."""
+    session_id: str
+    user_id: str
+    employee_id: str
+    status: str = "active"  # active/ended/timeout
+    message_count: int = 0
+    context_messages: List[Dict[str, Any]] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    last_activity: datetime = Field(default_factory=datetime.utcnow)
+    ended_at: Optional[datetime] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class EmployeeConfigModel(BaseModel):
+    """Digital employee configuration model."""
+    employee_id: str
+    name: str
+    domain: str
+    role: str
+    description: str
+    personality: Dict[str, str] = Field(default_factory=dict)
+    capabilities: Dict[str, Any] = Field(default_factory=dict)
+    greeting: str = ""
+    hot_questions: List[str] = Field(default_factory=list)
+    personalization: Dict[str, bool] = Field(default_factory=dict)
+    status: str = "active"
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    synced_at: Optional[datetime] = None
+
+
+class UserProfileModel(BaseModel):
+    """User profile model."""
+    user_id: str
+    nickname: Optional[str] = None
+    preferences: Dict[str, str] = Field(default_factory=dict)
+    tags: List[str] = Field(default_factory=list)
+    conversation_count: int = 0
+    satisfaction_avg: float = 0.0
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class DocumentModel(BaseModel):
+    """Document model."""
+    doc_id: str
+    filename: str
+    kb_id: str
+    category: Optional[str] = None
+    size: int = 0
+    format: str  # PDF/Word/TXT/Markdown/HTML
+    chunks_count: int = 0
+    vectors_count: int = 0
+    status: str = "processing"  # processing/completed/failed
+    error_message: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    uploaded_at: datetime = Field(default_factory=datetime.utcnow)
+    processed_at: Optional[datetime] = None
+
+
+class DocumentChunkModel(BaseModel):
+    """Document chunk model."""
+    chunk_id: str
+    doc_id: str
+    kb_id: str
+    content: str
+    chunk_index: int
+    summary: Optional[Dict[str, Any]] = None
+    vector_id: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: Optional[datetime] = None
+
+
+class IntentLogModel(BaseModel):
+    """Intent recognition log model."""
+    log_id: str
+    conversation_id: str
+    employee_id: str
+    user_query: str
+    recognized_intent: str
+    confidence: float
+    entities: Dict[str, Any] = Field(default_factory=dict)
+    method: str  # rule-based/llm-based
+    processing_time_ms: int = 0
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class KBQualityMetricModel(BaseModel):
+    """Knowledge base quality metrics model."""
+    metric_id: str
+    kb_id: str
+    kb_name: str
+    employee_id: Optional[str] = None
+    date: str  # YYYY-MM-DD
+    hit_rate: float = 0.0
+    recall_rate: float = 0.0
+    precision_rate: float = 0.0
+    avg_response_time: float = 0.0
+    avg_confidence: float = 0.0
+    total_queries: int = 0
+    successful_queries: int = 0
+    failed_queries: int = 0
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: Optional[datetime] = None
