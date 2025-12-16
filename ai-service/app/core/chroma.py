@@ -4,9 +4,9 @@ Chroma vector database connection and operations.
 from typing import List, Dict, Any, Optional
 import chromadb
 from chromadb.config import Settings
-from chromadb.utils import embedding_functions
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.utils.embeddings import OpenAIStyleEmbeddings, SiliconFlowEmbeddings
 
 logger = get_logger(__name__)
 
@@ -29,39 +29,51 @@ class ChromaDB:
                 persist_directory=settings.chroma_persist_dir
             ))
             
-            # Create embedding function
-            openai_ef = embedding_functions.OpenAIEmbeddingFunction(
-                api_key=settings.openai_api_key,
-                model_name=settings.openai_embedding_model,
-                api_base=settings.openai_api_base
-            )
+            # Create embedding function based on configuration
+            if settings.embedding_type == "siliconflow":
+                embedding_function = SiliconFlowEmbeddings(
+                    model=settings.embedding_model,
+                    api_key=settings.embedding_api_key or settings.siliconflow_api_key or "",
+                    base_url=settings.embedding_api_url,
+                    batch_size=32
+                )
+                logger.info("Using SiliconFlow embeddings", model=settings.embedding_model)
+            else:
+                # Default to OpenAI-style embeddings
+                embedding_function = OpenAIStyleEmbeddings(
+                    model=settings.embedding_model,
+                    base_url=settings.embedding_base_url,
+                    api_key=settings.embedding_api_key,
+                    timeout=30.0
+                )
+                logger.info("Using OpenAI-style embeddings", model=settings.embedding_model)
             
             # Get or create collections
             self.faq_collection = self.client.get_or_create_collection(
                 name="faq_knowledge",
                 metadata={
                     "description": "FAQ问答库",
-                    "embedding_model": settings.openai_embedding_model
+                    "embedding_model": settings.embedding_model
                 },
-                embedding_function=openai_ef
+                embedding_function=embedding_function
             )
             
             self.doc_collection = self.client.get_or_create_collection(
                 name="rag_documents",
                 metadata={
                     "description": "RAG文档库",
-                    "embedding_model": settings.openai_embedding_model
+                    "embedding_model": settings.embedding_model
                 },
-                embedding_function=openai_ef
+                embedding_function=embedding_function
             )
             
             self.dict_collection = self.client.get_or_create_collection(
                 name="custom_dictionary",
                 metadata={
                     "description": "专业词库",
-                    "embedding_model": settings.openai_embedding_model
+                    "embedding_model": settings.embedding_model
                 },
-                embedding_function=openai_ef
+                embedding_function=embedding_function
             )
             
             logger.info("Connected to Chroma", persist_dir=settings.chroma_persist_dir)
