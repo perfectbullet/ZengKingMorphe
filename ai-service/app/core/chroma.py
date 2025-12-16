@@ -3,7 +3,6 @@ Chroma vector database connection and operations.
 """
 from typing import List, Dict, Any, Optional
 import chromadb
-from chromadb.config import Settings
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.utils.embeddings import OpenAIStyleEmbeddings, SiliconFlowEmbeddings
@@ -23,11 +22,11 @@ class ChromaDB:
     def connect(self) -> None:
         """Connect to Chroma."""
         try:
-            # Initialize Chroma client
-            self.client = chromadb.Client(Settings(
-                chroma_db_impl="duckdb+parquet",
-                persist_directory=settings.chroma_persist_dir
-            ))
+            # Initialize Chroma client (new API for remote server)
+            self.client = chromadb.HttpClient(
+                host=settings.chroma_host,
+                port=settings.chroma_port
+            )
             
             # Create embedding function based on configuration
             if settings.embedding_type == "siliconflow":
@@ -76,7 +75,7 @@ class ChromaDB:
                 embedding_function=embedding_function
             )
             
-            logger.info("Connected to Chroma", persist_dir=settings.chroma_persist_dir)
+            logger.info("Connected to Chroma", host=settings.chroma_host, port=settings.chroma_port)
             
         except Exception as e:
             logger.error("Failed to connect to Chroma", error=str(e))
