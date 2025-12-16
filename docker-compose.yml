@@ -24,6 +24,8 @@ services:
       - ./ai-service:/app
       - ai-chroma-data:/app/chroma_db
       - ai-logs:/app/logs
+    env_file:
+      - ./ai-service/.env
     depends_on:
       - mongodb
       - elasticsearch

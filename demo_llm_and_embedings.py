@@ -1,7 +1,5 @@
 import os
-from pathlib import Path
-import uuid
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 import requests
 from dotenv import load_dotenv

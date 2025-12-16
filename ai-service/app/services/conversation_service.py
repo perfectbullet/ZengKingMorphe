@@ -358,7 +358,9 @@ class ConversationWorkflow:
             
             # Generate conversation ID
             import hashlib
-            conv_id = f"conv_{hashlib.md5(f'{state['session_id']}_{datetime.utcnow().timestamp()}'.encode()).hexdigest()[:12]}"
+            session_id = state["session_id"]
+            timestamp = datetime.now().timestamp()
+            conv_id = f"conv_{hashlib.md5(f'{session_id}_{timestamp}'.encode()).hexdigest()[:12]}"
             state["conversation_id"] = conv_id
             
             # Create conversation record

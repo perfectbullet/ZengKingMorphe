@@ -2,3 +2,5 @@ ZengKingMorphe-docs-bak.zip
 docs-history
 .vscode
 .env
+error.log
+sftp_sync_config.yaml
