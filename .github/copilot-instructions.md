@@ -1,348 +1,95 @@
 # 数字员工项目 AI 代理指南
 
-## 项目概述
+> 依据 `docs/需求补充与完善文档.md`、`requirements.md` 与 `docs/数字员工项目-AI研发工作规划指南.md` 重新梳理，以下指引面向所有 AI 编程助手，确保落地实现与最新需求同步。
 
-这是一个**数字员工（Digital Employee）**产品的早期规划阶段，专注于AI研发方向。项目当前处于**需求分析和架构设计阶段**，主要包含需求文档、技术规划指南和原型截图。
+## 项目总览
+- **形态**：Vue 前端 + Python AI 引擎（FastAPI + LangGraph）；Java 侧仅提供词库管理 API，不参与对话链路。
+- **AI 引擎职责**：REST/SSE 对话接口、会话与上下文管理、知识库检索、任务编排、实时联网检索、敏感词检测、日志记录。
+- **核心指标**：回答准确性、实时性（CRAG/联网检索）、合规性（敏感词/审计）。
 
-**团队组成**：4人小团队（1前端 + 1AI研发 + 2其他）  
-**AI研发核心关注**：Agent回答的准确性（知识库召回、意图理解、答案生成质量）
-
-## 核心业务领域
-
-### 1. 对话管理系统
-- **对话设定**：知识库配置、开场白/热门问题设定、角色人设
-- **对话规则**：异常处理规则、安全规则、对话流程控制
-- **高级功能**：插件系统、专业词库集成、二元评价机制（好/不好）
-
-### 2. 意图识别引擎
-- **意图配置**：意图名称、意图描述的结构化管理
-- **调优工具**：辅助编写意图描述的智能工具
-- **高级设置**：支持直接配置意图识别提示词（Prompt Engineering）
-
-### 3. 知识库系统（双模式）
-- **RAG文档库**：文档上传、知识片段管理、向量检索
-- **FAQ问答库**：结构化问答对、语义检索、答案一致性保证
-- **关键特性**：支持多知识库、专业词库增强检索准确性
-
-### 4. 词库管理
-- **专有名称词库**：行业术语、产品名称、人名地名等实体词库
-- **敏感词库**：内容安全过滤、合规性保障
-- **管理功能**：版本管理、权限管理、导入导出
-
-### 5. 对话记录分析
-- 对话记录查看、搜索、筛选、导出
-- 对话统计分析、用户行为洞察
-
-## 技术架构方向
-
-基于文档 `docs/数字员工项目-AI研发工作规划指南.md` 的规划：
-
-### 系统架构图
+## 技术架构（简化）
 ```
-┌─────────────┐
-│  Vue前端界面 │
-└──────┬──────┘
-       │ REST API / WebSocket
-┌──────▼───────────────────────────────┐
-│      Python AI引擎服务            │
-│   (FastAPI + LangGraph)          │
-│      (AI研发负责)                │
-├──────────────────────────────────────┤
-│  业务服务层：                      │
-│  - 对话管理服务（会话/上下文）      │
-│  - 知识库管理服务（文档/向量化）    │
-│  - 任务编排服务（异步调度）        │
-└──────┬───────────────────────────────┘
-       │
-   ┌───┴────┬─────────┬──────────┐
-   │        │         │          │
-┌──▼──┐ ┌──▼──┐  ┌───▼───┐ ┌───▼────┐
-│对话 │ │任务 │  │知识库│ │外部   │
-│引擎 │ │编排 │  │检索  │ │LLM    │
-└─────┘ └─────┘  └──────┘ └────────┘
+Vue (SPA)
+  │ REST / SSE / WebSocket
+FastAPI (Auth + Rate Limit + Error Spec)
+  │
+  ├─ 对话管理服务：会话/上下文/多轮
+  ├─ 知识库管理服务：文档上传→分块→向量化→检索接口
+  ├─ 任务编排服务：异步调度、Webhook、后台作业
+  │
+LangGraph 工作流
+  │→ Intent & 实体识别 → 多知识库路由 → 检索融合 (Chroma + ES)
+  │→ CRAG/联网检索 → LLM 生成 → 敏感词审核 → SSE 推流
+  │
+存储：MongoDB（会话/文档/FAQ）、Chroma（向量）、ElasticSearch（全文）
+外部：OpenAI/Claude/DeepSeek/Qwen、Java 词库 API、联网搜索（HTTP 工具）
 ```
 
-### AI核心模块（AI研发工作重点）
-```
-FastAPI服务层
-        ↓
-业务服务层（对话管理、知识库管理、任务编排）
-        ↓
-LangGraph工作流编排
-        ↓
-对话引擎 → 知识库RAG → 意图识别
-   ↓           ↓            ↓
-上下文管理  Chroma向量库   实体提取
-多轮对话    FAQ检索        准确性优化
-流式响应    ElasticSearch  提示词工程
-```
+## API 与接口规范
+- **REST**：`POST /api/chat/message`、`POST /api/chat/stream`(SSE)、`GET/DELETE /api/chat/session/{id}`。所有接口需：
+  - JWT + API Key 双模式；签名校验；IP 白名单（可配置）。
+  - 限流：令牌桶（每用户/每会话维度）、并发会话上限。
+  - 统一错误体：`{code,message,error{type,details}}`，覆盖 400/401/403/404/429/500/503。
+- **SSE**：唯一流式通道，事件顺序 fixed（start→token→done/error），需支持客户端中断与异常重试。
 
-### 确定的技术栈（AI研发侧）
-- **编排框架**：LangGraph（状态机工作流）
-- **向量数据库**：Chroma（文档embedding存储）
-- **全文检索**：ElasticSearch（关键词精确匹配）
-- **文档数据库**：MongoDB（对话记录、知识片段）
-- **LLM集成**：OpenAI API / Claude API（支持流式响应）
-- **容器化**：Docker + Docker Compose
+## 会话与对话流程
+1. 请求校验 → 安全过滤（XSS/SQL/长度/必填）。
+2. LangGraph 工作流：
+   - 意图/实体识别（Few-shot + 关键词），判断是否实时查询。
+   - 多知识库路由：按意图、问题分类或手工优先级选择/并行查询，结果融合 + 去重 + 加权排序。
+   - 多轮上下文：MongoDB 存最近 5-10 轮，可配置窗口，超时 30min 自动结束。
+3. 检索策略：
+   - RAG：Chroma + ElasticSearch → RRF 排序 → 相关性阈值 (<0.75) 触发降级/联网。
+   - CRAG/联网：`check_realtime_query` 先行判断（时间/天气/股价等关键词），命中则跳过知识库直接联网；未命中但 RAG 低相关再二次联网。
+4. 生成阶段：LLM（OpenAI/Claude/DeepSeek/Qwen）+ 模板注入 + 引用拼接；流式推送。
+5. 敏感词/问题检测：
+   - Java 平台提供列表接口与 webhook（敏感/专业词）。
+   - AI 侧使用 AC 自动机/DFA 做输入、输出双向检测；Critical 阻断、Warning 替换、Notice 仅记录。
+6. 记录：对话、检索命中、敏感词触发、联网调用、评估指标全部写入 MongoDB，支持审计与 BI。
 
-### 数据检索策略（提升准确性的关键）
-```
-用户问题
-    ↓
-意图识别 → 选择检索策略
-    ↓
-┌────────┴────────┐
-│                 │
-向量检索          全文检索
-(Chroma)         (ElasticSearch)
-语义相似度        关键词精确匹配
-    │                 │
-    └────────┬────────┘
-             ↓
-         结果融合排序
-             ↓
-         上下文增强 → LLM生成
-             ↓
-         答案质量评估
-```
+## 数据与词库集成
+- **MongoDB**：`conversations`、`knowledge_docs`（含 chunks→vector_id）、`faqs`、`intents`、`custom_dictionaries` 等集合必须按文档 schema 写入。
+- **Chroma**：`faq_collection`、`doc_collection` 用 text-embedding-3-small；向量 ID 回写到 Mongo。
+- **ElasticSearch**：`faq_index`、`doc_index`，启用 IK 分词 + 字段权重 (`question^2`)。
+- **词库/敏感词**：
+  - 拉取：`GET /api/java/sensitive-words/list`、`GET /api/java/professional-words/list`（过滤参数见文档）。
+  - Webhook：`POST /api/ai/sensitive-words/sync-notify` / `professional-words/sync-notify`。需实现缓存、增量更新、审计日志。
+  - 专业词库用于查询扩展、实体识别、召回加权。
 
-## 代码生成约定
+## 实时检索（CRAG 强化）
+- `check_realtime_query`：规则 + 关键词库（时间/天气/股价/...）；命中后直接联网，绕过知识库。
+- 联网工具：HTTP 客户端 + JSON 模板，需缓存/限频，并记录失败重试策略。
+- 答案融合策略：
+  1. 仅联网结果、
+  2. 仅知识库、
+  3. 混合（需标注来源）。
 
-### LangGraph工作流编排模式
-```python
-from langgraph.graph import StateGraph, END
-from typing import TypedDict, Annotated
-from operator import add
+## 安全与合规
+- 输入过滤：必填字段校验、query ≤ 1000 字符、特殊字符转义、路径遍历防护。
+- 输出过滤：敏感词/敏感问题、引用合法性检查。
+- 审计：保存敏感拦截记录、阈值配置、人工复核入口。
 
-# 状态定义
-class ConversationState(TypedDict):
-    messages: Annotated[list, add]
-    user_query: str
-    intent: str
-    retrieved_docs: list
-    final_answer: str
+## 代码与实现约定
+- **LangGraph**：工作流节点至少包含：`intent_recognition → route_strategy → (rag_search|faq_search|realtime_search) → rerank → answer_generation → quality_check → sensitive_filter`，并暴露 `should_route_realtime`、`need_human` 等条件。
+- **FastAPI**：使用 `Depends` 注入鉴权、限流；SSE 用 `EventSourceResponse`；所有接口 async。
+- **检索融合**：实现 RRF，加上专业词扩展 & 置信度阈值；低于阈值的答案走转人工话术。
+- **任务编排**：长耗时任务走 Celery/Redis（可选）或 asyncio 后台任务；Webhook 通知需幂等。
 
-# 构建对话图
-def build_conversation_graph():
-    graph = StateGraph(ConversationState)
-    
-    # 添加节点
-    graph.add_node("intent_recognition", recognize_intent)
-    graph.add_node("knowledge_retrieval", retrieve_knowledge)
-    graph.add_node("answer_generation", generate_answer)
-    
-    # 添加边（工作流）
-    graph.add_edge("intent_recognition", "knowledge_retrieval")
-    graph.add_edge("knowledge_retrieval", "answer_generation")
-    graph.add_edge("answer_generation", END)
-    
-    graph.set_entry_point("intent_recognition")
-    return graph.compile()
-```
+## 开发阶段（建议）
+1. **Phase 1**：FastAPI 框架 + 会话/上下文 + LangGraph 骨架 + SSE。 
+2. **Phase 2**：知识库管理（上传/切片/入库）、FAQ/Mongo/Chroma/ES 管道 + 混合检索。 
+3. **Phase 3**：敏感/专业词集成、联网检索、质量评估、日志与监控。 
+4. **Phase 4**：性能优化、容器化、前端联调、监控告警、部署脚本。
 
-### Chroma向量库集成模式
-```python
-import chromadb
-from chromadb.config import Settings
+## 参考文件
+- `docs/需求补充与完善文档.md`（最新需求、接口、流程）
+- `requirements.md`（初版需求）
+- `docs/数字员工项目-AI研发工作规划指南.md`（架构规划）
+- `docs/关于FAQ问答库.md`、`docs/关于Agent对话风格分类.md`
 
-# 初始化Chroma客户端
-client = chromadb.Client(Settings(
-    chroma_db_impl="duckdb+parquet",
-    persist_directory="./chroma_db"
-))
-
-# 创建FAQ集合
-faq_collection = client.create_collection(
-    name="faq_knowledge",
-    metadata={"description": "FAQ问答库"}
-)
-
-# 添加文档
-faq_collection.add(
-    documents=["如何重置密码？点击忘记密码链接..."],
-    metadatas=[{"category": "账户管理", "source": "faq_001"}],
-    ids=["faq_001"]
-)
-
-# 语义检索
-results = faq_collection.query(
-    query_texts=["忘记密码怎么办"],
-    n_results=3
-)
-```
-
-### ElasticSearch关键词检索模式
-```python
-from elasticsearch import Elasticsearch
-
-es = Elasticsearch(['http://localhost:9200'])
-
-# 全文检索（提高准确性）
-def keyword_search(query: str, index: str = "knowledge_base"):
-    response = es.search(
-        index=index,
-        body={
-            "query": {
-                "multi_match": {
-                    "query": query,
-                    "fields": ["question^2", "keywords", "answer"],
-                    "type": "best_fields"
-                }
-            }
-        }
-    )
-    return response['hits']['hits']
-```
-
-### 对话风格（见 `docs/关于Agent对话风格分类.md`）
-根据场景选择合适的风格：
-- **Professional（专业型）**：企业级项目、正式汇报、技术文档
-- **Tutorial（教学型）**：新手引导、技术分享、详细解释
-- **Concise（简洁型）**：快速原型、代码审查、精炼直接
-- **Analytical（分析型）**：技术选型、方案对比、权衡利弊
-
-### FAQ知识库实现模式（见 `docs/关于FAQ问答库.md`）
-```python
-# 标准FAQ数据结构（存储在MongoDB）
-{
-    "id": "faq_001",
-    "question": "问题文本",
-    "answer": "标准答案",
-    "category": "分类",
-    "keywords": ["关键词1", "关键词2"],
-    "related_questions": ["faq_002"],  # 关联问题
-    "vector_id": "chroma_vec_001"  # Chroma向量ID
-}
-
-# 混合检索策略（向量 + 关键词）
-async def hybrid_search(query: str, top_k: int = 5):
-    # 1. Chroma语义检索
-    semantic_results = chroma_collection.query(
-        query_texts=[query],
-        n_results=top_k
-    )
-    
-    # 2. ElasticSearch关键词检索
-    keyword_results = es.search(
-        index="faq",
-        body={"query": {"match": {"question": query}}}
-    )
-    
-    # 3. 结果融合与排序（RRF算法）
-    merged = merge_and_rank(semantic_results, keyword_results)
-    return merged[:top_k]
-```
-
-### Docker容器化配置
-```yaml
-# docker-compose.yml
-version: '3.8'
-services:
-  vue-frontend:
-    build: ./frontend
-    ports:
-      - "8080:80"
-    depends_on:
-      - ai-service
-  
-  ai-service:
-    build: ./ai-service
-    ports:
-      - "8000:8000"
-    depends_on:
-      - chroma
-      - elasticsearch
-      - mongodb
-    environment:
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-  
-  chroma:
-    image: chromadb/chroma:latest
-    ports:
-      - "8001:8000"
-    volumes:
-      - ./chroma_data:/chroma/chroma
-  
-  elasticsearch:
-    image: elasticsearch:8.11.0
-    environment:
-      - discovery.type=single-node
-      - xpack.security.enabled=false
-    ports:
-      - "9200:9200"
-  
-  mongodb:
-    image: mongo:7.0
-    ports:
-      - "27017:27017"
-    volumes:
-      - ./mongo_data:/data/db
-```
-
-## 开发工作流
-
-### 阶段1：需求分析（当前阶段）
-- 上传需求文档和原型图到对话
-- 生成技术方案文档和系统架构
-- 提取AI功能点和开发优先级
-
-### 阶段2：核心模块开发
-1. **FastAPI服务**：REST API、WebSocket、鉴权中间件
-2. **对话管理服务**：会话管理、上下文维护、历史记录
-3. **知识库管理服务**：文档上传、分块处理、向量化、检索接口
-4. **任务编排服务**：异步任务队列、后台作业调度
-5. **对话引擎**：多轮对话、上下文管理、LLM集成
-6. **知识库RAG**：文档向量化、语义检索、上下文增强
-7. **意图识别**：分类模型、实体提取、提示词工程
-8. **词库管理**：专有名称、敏感词过滤
-
-### 阶段3：系统集成
-- FastAPI接口优化（鉴权、限流、错误处理）
-- 前后端联调（Vue ↔ FastAPI）
-- 性能优化、缓存策略
-- 安全加固、敏感词过滤
-
-### 阶段4：测试上线
-- 单元测试、集成测试
-- 部署方案、监控告警
-
-## 关键文件位置
-
-- **需求文档**：`requirements.md`
-- **原型截图**：`docs/prototype_screenshots/*.png`
-- **技术规划**：`docs/数字员工项目-AI研发工作规划指南.md`
-- **FAQ设计**：`docs/关于FAQ问答库.md`
-- **对话风格**：`docs/关于Agent对话风格分类.md`
-
-## AI代理工作建议
-
-### 生成代码时
-1. **优先参考**规划指南中的代码模板和架构设计
-2. **使用LangGraph**构建状态机工作流，避免传统的if-else逻辑
-3. **使用异步模式**处理LLM调用（支持流式响应）
-4. **实现会话管理**时使用MongoDB持久化对话记录
-5. **知识库检索**采用Chroma向量检索 + ElasticSearch关键词检索的混合策略
-6. **关注准确性**：添加检索结果相似度阈值、答案质量评估、专业词库增强
-
-### 回答问题时
-1. 根据用户背景选择合适的**对话风格**（见文档分类）
-2. 提供**具体代码示例**而非泛泛而谈
-3. 对比多个方案时使用**表格或对比图**
-4. 技术选型时说明**优缺点和适用场景**
-
-### 分析需求时
-1. 识别**AI能力需求**（LLM、向量检索、意图识别等）
-2. 区分**核心功能**与**辅助功能**，优先级排序
-3. 提出**技术风险**和**替代方案**
-4. 考虑**性能优化**和**成本控制**（API调用费用）
-
-## 注意事项
-
-- ⚠️ 项目当前**无代码实现**，仅处于规划阶段
-- ⚠️ 原型截图显示了UI设计方向，但未定义API接口
-- ⚠️ 技术栈选型为**建议方案**，需根据实际情况调整
-- ⚠️ **AI研发职责范围**：
-  - 完整的后端服务开发（FastAPI REST API + WebSocket）
-  - 业务服务层（对话管理、知识库管理、任务编排）
-  - AI核心引擎（LangGraph工作流 + 对话引擎 + 知识检索）
-  - 数据库集成（MongoDB + Chroma + ElasticSearch）
+## AI 代理操作提示
+- 任何实现前先查对 `docs/需求补充与完善文档.md` 的字段/接口详情。
+- 生成代码需覆盖：鉴权、限流、错误体、日志、SSE、异步/await、敏感词钩子、知识库融合等必备逻辑。
+- 回答问题时优先引用具体文件/段落，提供 JSON/HTTP 示例或 LangGraph 代码片段。
+- 容器化与部署脚本必须包含 Vue + ai-service + Mongo + Chroma + ES。
+- 若需求存在歧义，记录假设并在输出中显式说明，以便后续复核。
