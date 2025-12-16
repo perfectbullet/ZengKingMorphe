@@ -16,12 +16,28 @@ class Settings(BaseSettings):
     )
     
     # LLM Configuration
-    openai_api_key: str = Field(..., description="OpenAI API key")
-    openai_api_base: str = Field(default="https://api.openai.com/v1")
-    openai_model: str = Field(default="gpt-4o-mini")
-    openai_embedding_model: str = Field(default="text-embedding-3-small")
-    openai_temperature: float = Field(default=0.7, ge=0.0, le=2.0)
+    use_ollama: bool = Field(default=False, description="Use Ollama instead of OpenAI-style API")
+    
+    # Ollama Configuration (used when use_ollama=True)
+    ollama_base_url: str = Field(default="http://localhost:11434")
+    ollama_model: str = Field(default="qwen2.5:7b")
+    ollama_grader_model: str = Field(default="qwen2.5:7b")
+    
+    # OpenAI-style API Configuration (used when use_ollama=False)
+    openai_api_key: str = Field(default="", description="OpenAI-style API key (e.g., SiliconFlow)")
+    openai_api_base: str = Field(default="https://api.siliconflow.cn/v1")
+    openai_model: str = Field(default="deepseek-ai/DeepSeek-V3.1-Terminus")
+    openai_grader_model: str = Field(default="deepseek-ai/DeepSeek-V3")
+    openai_temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     openai_max_tokens: int = Field(default=2000, ge=1)
+    
+    # Embedding Configuration
+    embedding_type: str = Field(default="openai_style", description="Embedding type: openai_style or siliconflow")
+    embedding_model: str = Field(default="BAAI/bge-large-zh-v1.5")
+    embedding_base_url: str = Field(default="http://localhost:50009")
+    embedding_api_url: str = Field(default="http://localhost:50009")
+    embedding_api_key: Optional[str] = Field(default=None, description="Embedding API key (for SiliconFlow)")
+    siliconflow_api_key: Optional[str] = Field(default=None, description="SiliconFlow API key")
     
     # Web Search Configuration
     tavily_api_key: Optional[str] = Field(default=None)

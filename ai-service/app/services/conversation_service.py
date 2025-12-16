@@ -7,6 +7,7 @@ from datetime import datetime
 
 from langgraph.graph import StateGraph, END
 from langchain_openai import ChatOpenAI
+from langchain_community.chat_models import ChatOllama
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
 from app.core.config import settings
@@ -51,13 +52,40 @@ class ConversationWorkflow:
     """LangGraph-based conversation workflow."""
     
     def __init__(self):
-        self.llm = ChatOpenAI(
-            model=settings.openai_model,
-            temperature=settings.openai_temperature,
-            openai_api_key=settings.openai_api_key,
-            openai_api_base=settings.openai_api_base,
-            streaming=False
-        )
+        # Initialize LLM based on configuration
+        if settings.use_ollama:
+            # Use Ollama
+            self.llm = ChatOllama(
+                base_url=settings.ollama_base_url,
+                model=settings.ollama_model,
+                temperature=0,
+                streaming=True,
+            )
+            self.grader_llm = ChatOllama(
+                base_url=settings.ollama_base_url,
+                model=settings.ollama_grader_model,
+                temperature=0,
+                format="json",  # 强制 JSON
+            )
+            logger.info("Using Ollama LLM", model=settings.ollama_model)
+        else:
+            # Use OpenAI-style API (e.g., SiliconFlow)
+            self.llm = ChatOpenAI(
+                base_url=settings.openai_api_base,
+                api_key=settings.openai_api_key or settings.siliconflow_api_key or "",
+                model=settings.openai_model,
+                temperature=settings.openai_temperature,
+                streaming=True,
+            )
+            self.grader_llm = ChatOpenAI(
+                base_url=settings.openai_api_base,
+                api_key=settings.openai_api_key or settings.siliconflow_api_key or "",
+                model=settings.openai_grader_model,
+                temperature=0,
+                model_kwargs={"response_format": {"type": "json_object"}},
+            )
+            logger.info("Using OpenAI-style LLM", model=settings.openai_model)
+        
         self.workflow = self._build_workflow()
     
     def _build_workflow(self) -> StateGraph:
