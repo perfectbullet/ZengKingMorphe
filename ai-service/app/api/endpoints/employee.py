@@ -1,14 +1,12 @@
 """
 Digital Employee management API endpoints.
 """
-from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status, Path, Query
 from datetime import datetime
 
 from app.models.schemas import (
     CreateEmployeeRequest,
-    UpdateEmployeeRequest,
-    SessionResponse
+    UpdateEmployeeRequest
 )
 from app.api.middleware.auth import get_api_key
 from app.core.database import get_database
@@ -26,7 +24,7 @@ async def create_employee(
     db = Depends(get_database)
 ):
     """
-    Create a new digital employee.
+    创建一个新的数字员工。
     
     Args:
         request: Create employee request
@@ -83,7 +81,7 @@ async def update_employee(
     db = Depends(get_database)
 ):
     """
-    Update digital employee configuration.
+    更新数字员工配置。
     
     Args:
         employee_id: Employee ID
@@ -141,7 +139,7 @@ async def get_employee(
     db = Depends(get_database)
 ):
     """
-    Get digital employee configuration.
+    获取数字员工配置。
     
     Args:
         employee_id: Employee ID
@@ -192,7 +190,7 @@ async def delete_employee(
     db = Depends(get_database)
 ):
     """
-    Delete digital employee.
+    删除数字员工。
     
     Args:
         employee_id: Employee ID
@@ -238,7 +236,7 @@ async def list_employees(
     db = Depends(get_database)
 ):
     """
-    List digital employees.
+    获取数字员工列表。
     
     Args:
         domain: Filter by domain (optional)

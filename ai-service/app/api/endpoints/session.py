@@ -19,7 +19,7 @@ async def get_session(
     db = Depends(get_database)
 ):
     """
-    Get session information.
+    获取会话信息。
     
     Args:
         session_id: Session ID
@@ -71,7 +71,7 @@ async def end_session(
     db = Depends(get_database)
 ):
     """
-    End a session.
+    结束会话。
     
     Args:
         session_id: Session ID

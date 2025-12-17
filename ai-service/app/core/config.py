@@ -97,7 +97,13 @@ class Settings(BaseSettings):
     summary_max_tokens: int = Field(default=200, ge=1)
     summary_batch_size: int = Field(default=10, ge=1)
     
+    # JWT Configuration
+    jwt_secret_key: str = Field(..., description="JWT secret key for token signing")
+    jwt_algorithm: str = Field(default="HS256", description="JWT signing algorithm")
+    jwt_expiration_minutes: int = Field(default=60, ge=1, description="JWT token expiration time in minutes")
+    
     # API Key Configuration
+    api_key: str = Field(..., description="Primary API key for authentication")
     api_keys: List[str] = Field(
         default=[],
         description="List of valid API keys for authentication"

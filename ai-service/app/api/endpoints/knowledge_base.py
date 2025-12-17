@@ -31,7 +31,7 @@ async def create_knowledge_base(
     db = Depends(get_database)
 ):
     """
-    Create a new knowledge base.
+    创建知识库。
     
     Args:
         name: Knowledge base name
@@ -95,7 +95,7 @@ async def list_knowledge_bases(
     db = Depends(get_database)
 ):
     """
-    List knowledge bases.
+    获取知识库列表。
     
     Args:
         category: Filter by category
@@ -163,7 +163,7 @@ async def upload_documents(
     api_key: str = Depends(get_api_key)
 ):
     """
-    Upload and process documents.
+    上传并处理文档。
     
     Args:
         files: Files to upload
@@ -260,7 +260,7 @@ async def list_documents(
     db = Depends(get_database)
 ):
     """
-    List documents.
+    获取文档列表。
     
     Args:
         kb_id: Knowledge base ID

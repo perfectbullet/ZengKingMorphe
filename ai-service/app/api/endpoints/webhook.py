@@ -17,7 +17,7 @@ async def sync_sensitive_words(
     api_key: str = Depends(verify_api_key)
 ):
     """
-    Webhook for sensitive words synchronization.
+    敏感词同步回调接口。
     
     Args:
         request: Sync notify request
@@ -57,7 +57,7 @@ async def sync_professional_words(
     api_key: str = Depends(verify_api_key)
 ):
     """
-    Webhook for professional words synchronization.
+    专业词库同步回调接口。
     
     Args:
         request: Sync notify request
@@ -97,7 +97,7 @@ async def sync_faq(
     api_key: str = Depends(verify_api_key)
 ):
     """
-    Webhook for FAQ synchronization.
+    FAQ 同步回调接口。
     
     Args:
         request: Sync notify request

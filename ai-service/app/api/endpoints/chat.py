@@ -25,7 +25,7 @@ async def chat_message(
     api_key: str = Depends(get_api_key)
 ):
     """
-    Synchronous chat endpoint.
+    同步对话接口。
     
     Args:
         request: Chat request
@@ -147,7 +147,7 @@ async def chat_stream(
     api_key: str = Depends(get_api_key)
 ):
     """
-    Streaming chat endpoint (SSE).
+    流式对话接口 (SSE)。
     
     Args:
         request: Chat request
