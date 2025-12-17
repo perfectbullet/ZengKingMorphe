@@ -6,6 +6,16 @@ import requests
 from langchain_core.embeddings import Embeddings
 
 
+class ChromaEmbeddingWrapper:
+    """Adapter to satisfy Chroma's EmbeddingFunction.__call__ signature."""
+
+    def __init__(self, embedder: Embeddings):
+        self.embedder = embedder
+
+    def __call__(self, input: List[str]) -> List[List[float]]:  # type: ignore[override]
+        return self.embedder.embed_documents(list(input))
+
+
 class SiliconFlowEmbeddings(Embeddings):
     """SiliconFlow embedding implementation."""
     

@@ -23,9 +23,9 @@ import sys
 import time
 from typing import List, Optional
 from dotenv import load_dotenv
-
+import numpy as np  # new import
 # Load environment variables
-load_dotenv()
+load_dotenv(".env.chroma-test")
 
 # Configuration
 CHROMA_HOST = os.getenv("CHROMA_HOST", "localhost")
@@ -39,13 +39,11 @@ TEST_COLLECTION_NAME = "test_collection_standalone"
 
 
 class SimpleEmbeddings:
-    """Simple embedding function for testing (returns dummy vectors)."""
-    
-    def __call__(self, input: List[str]) -> List[List[float]]:
-        """Generate dummy embeddings for testing."""
-        # Return simple hash-based embeddings for testing
-        return [[float(hash(text) % 100) / 100.0 for _ in range(384)] for text in input]
-
+    def __call__(self, input: List[str]) -> List[np.ndarray]:
+        return [
+            np.full(384, (hash(text) % 100) / 100.0, dtype=float)
+            for text in input
+        ]
 
 class OpenAIStyleEmbeddings:
     """OpenAI-style embedding function for production use."""
@@ -80,7 +78,8 @@ class OpenAIStyleEmbeddings:
             data = result.get("data")
             if not data:
                 raise ValueError(f"Embedding service returned no data: {result}")
-            return [item["embedding"] for item in data]
+            embeddings = [np.array(item["embedding"], dtype=float) for item in data]
+            return embeddings
         except Exception as e:
             print(f"⚠️  Warning: Embedding API failed: {e}")
             print("   Falling back to dummy embeddings for testing")
