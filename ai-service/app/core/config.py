@@ -34,8 +34,8 @@ class Settings(BaseSettings):
     # Embedding Configuration
     embedding_type: str = Field(default="openai_style", description="Embedding type: openai_style or siliconflow")
     embedding_model: str = Field(default="BAAI/bge-large-zh-v1.5")
-    embedding_base_url: str = Field(default="http://localhost:50009")
-    embedding_api_url: str = Field(default="http://localhost:50009")
+    embedding_base_url: str = Field(..., description="Embedding service base URL")
+    embedding_api_url: str = Field(..., description="Embedding API URL")
     embedding_api_key: Optional[str] = Field(default=None, description="Embedding API key (for SiliconFlow)")
     siliconflow_api_key: Optional[str] = Field(default=None, description="SiliconFlow API key")
     

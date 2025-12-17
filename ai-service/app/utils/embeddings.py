@@ -4,7 +4,7 @@ Custom embedding implementations for the Digital Employee AI Service.
 from typing import List, Optional
 import requests
 from langchain_core.embeddings import Embeddings
-
+import numpy as np
 
 class ChromaEmbeddingWrapper:
     """Adapter to satisfy Chroma's EmbeddingFunction.__call__ signature."""
@@ -31,14 +31,32 @@ class SiliconFlowEmbeddings(Embeddings):
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
-        response = requests.post(self.base_url, json=payload, headers=headers)
-        result = response.json()
-        if result.get("code") not in (None, 0):
-            raise ValueError(f"Embedding request failed: {result}")
-        data = result.get("data")
-        if not data:
-            raise ValueError(f"No embedding data returned: {result}")
-        return [item["embedding"] for item in data]
+        
+        # Add debug logging
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(
+            f"SiliconFlow embedding request: url={self.base_url}, "
+            f"model={self.model}, texts_count={len(texts)}"
+        )
+        
+        try:
+            response = requests.post(self.base_url, json=payload, headers=headers)
+            result = response.json()
+            if result.get("code") not in (None, 0):
+                raise ValueError(f"Embedding request failed: {result}")
+            data = result.get("data")
+            if not data:
+                raise ValueError(f"No embedding data returned: {result}")
+            
+            logger.info(f"SiliconFlow request successful: received {len(data)} embeddings")
+            return [item["embedding"] for item in data]
+        except Exception as e:
+            logger.error(
+                f"SiliconFlow embedding failed: url={self.base_url}, error={str(e)}",
+                exc_info=True
+            )
+            raise
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
         embeddings: List[List[float]] = []
@@ -75,19 +93,41 @@ class OpenAIStyleEmbeddings(Embeddings):
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
 
-        response = requests.post(
-            f"{self.base_url}/v1/embeddings",
-            json=payload,
-            headers=headers,
-            timeout=self.timeout,
+        url = f"{self.base_url}/v1/embeddings"
+        
+        # Add debug logging
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(
+            f"Sending embedding request: url={url}, model={self.model}, "
+            f"texts_count={len(texts)}, has_api_key={bool(self.api_key)}"
         )
-        response.raise_for_status()
-        result = response.json()
+        
+        try:
+            response = requests.post(
+                url,
+                json=payload,
+                headers=headers,
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+            result = response.json()
 
-        data = result.get("data")
-        if not data:
-            raise ValueError(f"Embedding service returned no data: {result}")
-        return [item["embedding"] for item in data]
+            data = result.get("data")
+            if not data:
+                raise ValueError(f"Embedding service returned no data: {result}")
+            
+            logger.info(f"Embedding request successful: received {len(data)} embeddings")
+            embeddings = [np.array(item["embedding"], dtype=float) for item in data]
+            return embeddings
+        
+            return [item["embedding"] for item in data]
+        except Exception as e:
+            logger.error(
+                f"Embedding request failed: url={url}, error={str(e)}",
+                exc_info=True
+            )
+            raise
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
         return self._embed_batch(texts)

@@ -9,11 +9,6 @@ services:
     ports:
       - "8100:8000"
     environment:
-      - MONGODB_URI=mongodb://mongodb:27017/digital_employee
-      - CHROMA_HOST=chroma
-      - CHROMA_PORT=8000
-      - ES_HOST=elasticsearch
-      - ES_PORT=9200
       - JAVA_API_BASE_URL=${JAVA_API_BASE_URL:-http://java-platform:8080}
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:-your-secret-key-change-in-production}
     volumes:

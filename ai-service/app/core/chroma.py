@@ -28,12 +28,35 @@ class ChromaDB:
         """Connect to Chroma."""
         try:
             # Initialize Chroma client using REST API (Chroma >=0.5)
+            logger.info(
+                "Initializing Chroma client",
+                host=settings.chroma_host,
+                port=settings.chroma_port
+            )
+            
+            # Create settings with telemetry disabled to avoid signature mismatch errors
+            chroma_settings = chromadb.config.Settings(
+                chroma_api_impl="chromadb.api.fastapi.FastAPI",
+                chroma_server_host=settings.chroma_host,
+                chroma_server_http_port=settings.chroma_port,
+                anonymized_telemetry=False
+            )
+            
             self.client = chromadb.HttpClient(
                 host=settings.chroma_host, 
-                port=settings.chroma_port
+                port=settings.chroma_port,
+                settings=chroma_settings
             )
 
             # Create embedding function based on configuration
+            logger.info(
+                "Creating embedding function",
+                embedding_type=settings.embedding_type,
+                embedding_model=settings.embedding_model,
+                embedding_base_url=settings.embedding_base_url,
+                embedding_api_url=settings.embedding_api_url
+            )
+            
             if settings.embedding_type == "siliconflow":
                 embedder = SiliconFlowEmbeddings(
                     model=settings.embedding_model,
@@ -44,7 +67,9 @@ class ChromaDB:
                     batch_size=32,
                 )
                 logger.info(
-                    "Using SiliconFlow embeddings", model=settings.embedding_model
+                    "Using SiliconFlow embeddings",
+                    model=settings.embedding_model,
+                    base_url=settings.embedding_api_url
                 )
             else:
                 # Default to OpenAI-style embeddings
@@ -55,7 +80,10 @@ class ChromaDB:
                     timeout=30.0,
                 )
                 logger.info(
-                    "Using OpenAI-style embeddings", model=settings.embedding_model
+                    "Using OpenAI-style embeddings",
+                    model=settings.embedding_model,
+                    base_url=settings.embedding_base_url,
+                    has_api_key=bool(settings.embedding_api_key)
                 )
 
             embedding_function = ChromaEmbeddingWrapper(embedder)

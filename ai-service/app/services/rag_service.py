@@ -3,7 +3,6 @@ RAG retrieval service with hybrid search.
 """
 from typing import List, Dict, Any, Optional
 from app.core.logging import get_logger
-from app.core.config import settings
 from app.core.chroma import chroma_db
 from app.core.elasticsearch import es_db
 
