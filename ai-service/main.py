@@ -110,9 +110,9 @@ async def health_check():
     """Health check endpoint."""
     return {
         "status": "healthy",
-        "mongodb": "connected" if mongodb.db else "disconnected",
-        "chroma": "connected" if chroma_db.client else "disconnected",
-        "elasticsearch": "connected" if es_db.client else "disconnected"
+        "mongodb": "connected" if mongodb.db is not None else "disconnected",
+        "chroma": "connected" if chroma_db.client is not None else "disconnected",
+        "elasticsearch": "connected" if es_db.client is not None else "disconnected"
     }
 
 

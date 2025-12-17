@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.core.logging import get_logger
+from app.core.config import settings
 
 logger = get_logger(__name__)
 
@@ -124,6 +125,6 @@ async def general_exception_handler(request: Request, exc: Exception) -> JSONRes
             code=500,
             message="Internal server error",
             error_type=type(exc).__name__,
-            details=str(exc) if logger.level == "DEBUG" else None
+            details=str(exc) if settings.debug else None
         )
     )
