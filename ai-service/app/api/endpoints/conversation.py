@@ -1,7 +1,7 @@
 """
 Conversation record API endpoints.
 """
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends
 from app.api.middleware.auth import get_current_user_optional
 from app.core.logging import get_logger
 

@@ -4,7 +4,6 @@ Chroma vector database connection and operations.
 
 from typing import List, Dict, Any, Optional
 import chromadb
-from chromadb.config import Settings
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.utils.embeddings import (
