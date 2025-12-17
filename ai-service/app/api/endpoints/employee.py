@@ -10,7 +10,7 @@ from app.models.schemas import (
     UpdateEmployeeRequest,
     SessionResponse
 )
-from app.api.middleware.auth import get_current_user_optional
+from app.api.middleware.auth import get_api_key
 from app.core.database import get_database
 from app.core.logging import get_logger
 
@@ -22,7 +22,7 @@ router = APIRouter()
 @router.post("/create")
 async def create_employee(
     request: CreateEmployeeRequest,
-    current_user: dict = Depends(get_current_user_optional),
+    api_key: str = Depends(get_api_key),
     db = Depends(get_database)
 ):
     """
@@ -79,7 +79,7 @@ async def create_employee(
 async def update_employee(
     employee_id: str = Path(..., description="Employee ID"),
     request: UpdateEmployeeRequest = ...,
-    current_user: dict = Depends(get_current_user_optional),
+    api_key: str = Depends(get_api_key),
     db = Depends(get_database)
 ):
     """
@@ -137,7 +137,7 @@ async def update_employee(
 @router.get("/{employee_id}")
 async def get_employee(
     employee_id: str = Path(..., description="Employee ID"),
-    current_user: dict = Depends(get_current_user_optional),
+    api_key: str = Depends(get_api_key),
     db = Depends(get_database)
 ):
     """
@@ -188,7 +188,7 @@ async def get_employee(
 @router.delete("/{employee_id}")
 async def delete_employee(
     employee_id: str = Path(..., description="Employee ID"),
-    current_user: dict = Depends(get_current_user_optional),
+    api_key: str = Depends(get_api_key),
     db = Depends(get_database)
 ):
     """
@@ -234,7 +234,7 @@ async def list_employees(
     status: str = Query(None, description="Filter by status"),
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(20, ge=1, le=100, description="Page size"),
-    current_user: dict = Depends(get_current_user_optional),
+    api_key: str = Depends(get_api_key),
     db = Depends(get_database)
 ):
     """

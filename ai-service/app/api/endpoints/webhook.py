@@ -14,14 +14,14 @@ router = APIRouter()
 @router.post("/sensitive-words/sync-notify")
 async def sync_sensitive_words(
     request: SyncNotifyRequest,
-    api_key_valid: bool = Depends(verify_api_key)
+    api_key: str = Depends(verify_api_key)
 ):
     """
     Webhook for sensitive words synchronization.
     
     Args:
         request: Sync notify request
-        api_key_valid: API key validation result
+        api_key: Validated API key
         
     Returns:
         Success message
@@ -54,14 +54,14 @@ async def sync_sensitive_words(
 @router.post("/professional-words/sync-notify")
 async def sync_professional_words(
     request: SyncNotifyRequest,
-    api_key_valid: bool = Depends(verify_api_key)
+    api_key: str = Depends(verify_api_key)
 ):
     """
     Webhook for professional words synchronization.
     
     Args:
         request: Sync notify request
-        api_key_valid: API key validation result
+        api_key: Validated API key
         
     Returns:
         Success message
@@ -94,14 +94,14 @@ async def sync_professional_words(
 @router.post("/faq/sync-notify")
 async def sync_faq(
     request: SyncNotifyRequest,
-    api_key_valid: bool = Depends(verify_api_key)
+    api_key: str = Depends(verify_api_key)
 ):
     """
     Webhook for FAQ synchronization.
     
     Args:
         request: Sync notify request
-        api_key_valid: API key validation result
+        api_key: Validated API key
         
     Returns:
         Success message

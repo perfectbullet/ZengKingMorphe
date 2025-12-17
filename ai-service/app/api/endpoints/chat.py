@@ -9,7 +9,7 @@ from datetime import datetime
 import hashlib
 
 from app.models.schemas import ChatRequest, ChatResponse
-from app.api.middleware.auth import get_current_user_optional
+from app.api.middleware.auth import get_api_key
 from app.api.middleware.rate_limit import rate_limit_middleware
 from app.core.logging import get_logger
 from app.services.conversation_service import conversation_workflow, ConversationState
@@ -22,14 +22,14 @@ router = APIRouter()
 @router.post("/message", response_model=ChatResponse)
 async def chat_message(
     request: ChatRequest,
-    current_user: dict = Depends(get_current_user_optional)
+    api_key: str = Depends(get_api_key)
 ):
     """
     Synchronous chat endpoint.
     
     Args:
         request: Chat request
-        current_user: Current user from auth
+        api_key: API key from auth
         
     Returns:
         Chat response
@@ -144,14 +144,14 @@ async def generate_stream_response(request: ChatRequest) -> AsyncGenerator[str, 
 @router.post("/stream")
 async def chat_stream(
     request: ChatRequest,
-    current_user: dict = Depends(get_current_user_optional)
+    api_key: str = Depends(get_api_key)
 ):
     """
     Streaming chat endpoint (SSE).
     
     Args:
         request: Chat request
-        current_user: Current user from auth
+        api_key: API key from auth
         
     Returns:
         SSE stream

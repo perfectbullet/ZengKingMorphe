@@ -3,7 +3,7 @@ Session management API endpoints.
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Path
 from app.models.schemas import SessionResponse
-from app.api.middleware.auth import get_current_user_optional
+from app.api.middleware.auth import get_api_key
 from app.core.database import get_database
 from app.core.logging import get_logger
 
@@ -15,7 +15,7 @@ router = APIRouter()
 @router.get("/{session_id}", response_model=SessionResponse)
 async def get_session(
     session_id: str = Path(..., description="Session ID"),
-    current_user: dict = Depends(get_current_user_optional),
+    api_key: str = Depends(get_api_key),
     db = Depends(get_database)
 ):
     """
@@ -23,7 +23,7 @@ async def get_session(
     
     Args:
         session_id: Session ID
-        current_user: Current user from auth
+        api_key: API key from auth
         db: Database instance
         
     Returns:
@@ -67,7 +67,7 @@ async def get_session(
 @router.delete("/{session_id}")
 async def end_session(
     session_id: str = Path(..., description="Session ID"),
-    current_user: dict = Depends(get_current_user_optional),
+    api_key: str = Depends(get_api_key),
     db = Depends(get_database)
 ):
     """
@@ -75,7 +75,7 @@ async def end_session(
     
     Args:
         session_id: Session ID
-        current_user: Current user from auth
+        api_key: API key from auth
         db: Database instance
         
     Returns:

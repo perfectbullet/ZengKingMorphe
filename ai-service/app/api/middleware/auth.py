@@ -2,103 +2,18 @@
 Authentication and authorization middleware.
 """
 from typing import Optional
-from datetime import datetime, timedelta
 from fastapi import HTTPException, Security, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials, APIKeyHeader
-from jose import JWTError, jwt
+from fastapi.security import APIKeyHeader
 from app.core.config import settings
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
-# Security schemes
-bearer_scheme = HTTPBearer()
+# Security scheme
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
-    """
-    Create JWT access token.
-    
-    Args:
-        data: Token payload data
-        expires_delta: Token expiration time
-        
-    Returns:
-        Encoded JWT token
-    """
-    to_encode = data.copy()
-    if expires_delta:
-        expire = datetime.utcnow() + expires_delta
-    else:
-        expire = datetime.utcnow() + timedelta(minutes=settings.jwt_expiration_minutes)
-    to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(
-        to_encode,
-        settings.jwt_secret_key,
-        algorithm=settings.jwt_algorithm
-    )
-    return encoded_jwt
-
-
-def verify_token(token: str) -> dict:
-    """
-    Verify JWT token.
-    
-    Args:
-        token: JWT token
-        
-    Returns:
-        Token payload
-        
-    Raises:
-        HTTPException: If token is invalid
-    """
-    try:
-        payload = jwt.decode(
-            token,
-            settings.jwt_secret_key,
-            algorithms=[settings.jwt_algorithm]
-        )
-        return payload
-    except JWTError as e:
-        logger.warning("Invalid JWT token", error=str(e))
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Could not validate credentials",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-
-async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Security(bearer_scheme)
-) -> dict:
-    """
-    Get current user from JWT token.
-    
-    Args:
-        credentials: Authorization credentials
-        
-    Returns:
-        User data from token
-        
-    Raises:
-        HTTPException: If authentication fails
-    """
-    token = credentials.credentials
-    payload = verify_token(token)
-    
-    user_id = payload.get("sub")
-    if user_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Could not validate credentials",
-        )
-    
-    return payload
-
-
-async def verify_api_key(api_key: Optional[str] = Security(api_key_header)) -> bool:
+async def verify_api_key(api_key: Optional[str] = Security(api_key_header)) -> str:
     """
     Verify API key.
     
@@ -106,10 +21,10 @@ async def verify_api_key(api_key: Optional[str] = Security(api_key_header)) -> b
         api_key: API key from header
         
     Returns:
-        True if valid
+        The validated API key
         
     Raises:
-        HTTPException: If API key is invalid
+        HTTPException: If API key is invalid or missing
     """
     if not api_key:
         raise HTTPException(
@@ -117,42 +32,32 @@ async def verify_api_key(api_key: Optional[str] = Security(api_key_header)) -> b
             detail="API key missing",
         )
     
-    # In production, validate against database
-    # For now, just check if it exists
-    if not api_key:
+    # Validate against configured API keys
+    if api_key not in settings.api_keys:
+        logger.warning("Invalid API key attempt", api_key_prefix=api_key[:8] if len(api_key) >= 8 else "***")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid API key",
         )
     
-    return True
+    logger.debug("API key validated successfully")
+    return api_key
 
 
-async def get_current_user_optional(
-    credentials: Optional[HTTPAuthorizationCredentials] = Security(bearer_scheme),
-    api_key: Optional[str] = Security(api_key_header)
-) -> Optional[dict]:
+async def get_api_key(api_key: Optional[str] = Security(api_key_header)) -> Optional[str]:
     """
-    Get current user optionally (for endpoints that support both auth methods).
+    Get API key optionally (for endpoints that don't require authentication).
     
     Args:
-        credentials: JWT credentials
-        api_key: API key
+        api_key: API key from header
         
     Returns:
-        User data or None
+        API key if provided and valid, None otherwise
     """
-    if credentials:
-        try:
-            return await get_current_user(credentials)
-        except HTTPException:
-            pass
+    if not api_key:
+        return None
     
-    if api_key:
-        try:
-            await verify_api_key(api_key)
-            return {"api_key": True}
-        except HTTPException:
-            pass
-    
-    return None
+    try:
+        return await verify_api_key(api_key)
+    except HTTPException:
+        return None
