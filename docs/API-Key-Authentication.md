@@ -8,17 +8,20 @@
 
 ### 环境变量配置
 
-在 `.env` 文件中配置有效的 API keys（多个 key 使用逗号分隔）：
+在 `.env` 文件中配置有效的 API keys（使用 JSON 数组格式）：
 
 ```bash
-API_KEYS=your-api-key-1,your-api-key-2,your-api-key-3
+API_KEYS='["your-api-key-1","your-api-key-2","your-api-key-3"]'
 ```
 
 ### 示例配置
 
 ```bash
 # 生产环境建议使用强随机字符串
-API_KEYS=sk_live_abc123def456,sk_live_xyz789uvw012
+API_KEYS='["sk_live_abc123def456","sk_live_xyz789uvw012"]'
+
+# 单个 API Key
+API_KEYS='["sk_live_abc123def456"]'
 ```
 
 ## 使用 API Key
@@ -224,10 +227,10 @@ openssl rand -base64 32
 
 ### Q: 可以有多个 API Key 吗？
 
-A: 可以。在 `.env` 文件中使用逗号分隔多个 key：
+A: 可以。在 `.env` 文件中使用 JSON 数组格式：
 
 ```bash
-API_KEYS=key1,key2,key3
+API_KEYS='["key1","key2","key3"]'
 ```
 
 ### Q: API Key 有过期时间吗？
