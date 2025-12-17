@@ -53,7 +53,7 @@ services:
 
   # Chroma Vector Database
   chroma:
-    image: chromadb/chroma:latest
+    image: chromadb/chroma:0.6.3  # Using stable version instead of 'latest' for consistency
     container_name: digital-employee-chroma
     ports:
       - "8101:8000"
@@ -62,9 +62,16 @@ services:
     environment:
       - IS_PERSISTENT=TRUE
       - PERSIST_DIRECTORY=/chroma/chroma
+      - ANONYMIZED_TELEMETRY=FALSE
     networks:
       - digital-employee-network
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   # ElasticSearch
   elasticsearch:
