@@ -21,13 +21,13 @@ async def get_session(
     """
     获取会话信息。
     
-    Args:
-        session_id: Session ID
-        api_key: API key from auth
-        db: Database instance
+    \nArgs:
+        \n- session_id: Session ID
+        \n- api_key: API key from auth
+        \n- db: Database instance
         
-    Returns:
-        Session information
+    \nReturns:
+        \n- Session information
     """
     try:
         logger.info("Get session request", session_id=session_id)
@@ -73,13 +73,13 @@ async def end_session(
     """
     结束会话。
     
-    Args:
-        session_id: Session ID
-        api_key: API key from auth
-        db: Database instance
+    \nArgs:
+        \n- session_id: Session ID
+        \n- api_key: API key from auth
+        \n- db: Database instance
         
-    Returns:
-        Success message
+    \nReturns:
+        \n- Success message
     """
     try:
         logger.info("End session request", session_id=session_id)

@@ -19,12 +19,12 @@ async def sync_sensitive_words(
     """
     敏感词同步回调接口。
     
-    Args:
-        request: Sync notify request
-        api_key: Validated API key
-        
-    Returns:
-        Success message
+    \nArgs:
+        \n- request: Sync notify request
+        \n- api_key: Validated API key
+
+    \nReturns:
+        \n- Success message
     """
     try:
         logger.info(
@@ -59,12 +59,12 @@ async def sync_professional_words(
     """
     专业词库同步回调接口。
     
-    Args:
-        request: Sync notify request
-        api_key: Validated API key
-        
-    Returns:
-        Success message
+    \nArgs:
+        \n- request: Sync notify request
+        \n- api_key: Validated API key
+
+    \nReturns:
+        \n- Success message
     """
     try:
         logger.info(
@@ -99,12 +99,12 @@ async def sync_faq(
     """
     FAQ 同步回调接口。
     
-    Args:
-        request: Sync notify request
-        api_key: Validated API key
-        
-    Returns:
-        Success message
+    \nArgs:
+        \n- request: Sync notify request
+        \n- api_key: Validated API key
+
+    \nReturns:
+        \n- Success message
     """
     try:
         logger.info(

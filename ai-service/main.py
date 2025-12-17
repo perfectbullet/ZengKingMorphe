@@ -3,6 +3,7 @@ Main FastAPI application.
 """
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
+from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -65,7 +66,7 @@ async def lifespan(app: FastAPI):
 # Create FastAPI application
 app = FastAPI(
     title="Digital Employee AI Service",
-    description="AI-powered digital employee service with RAG, web search, and conversation management",
+    description="AI驱动的数字员工服务，集成RAG、网络搜索和对话管理功能。",
     version="1.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
@@ -97,12 +98,8 @@ app.include_router(webhook.router, prefix="/api/ai", tags=["Webhook"])
 
 @app.get("/")
 async def root():
-    """Root endpoint."""
-    return {
-        "service": "Digital Employee AI Service",
-        "version": "1.0.0",
-        "status": "running"
-    }
+    """重定向到文档页面。"""
+    return RedirectResponse(url="/docs")
 
 
 @app.get("/health")

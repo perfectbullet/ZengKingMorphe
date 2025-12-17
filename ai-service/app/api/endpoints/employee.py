@@ -26,13 +26,13 @@ async def create_employee(
     """
     创建一个新的数字员工。
     
-    Args:
-        request: Create employee request
-        current_user: Current user from auth
-        db: Database instance
-        
-    Returns:
-        Created employee data
+    \nArgs
+        \n- request: Create employee request
+        \n- current_user: Current user from auth
+        \n- db: Database instance
+
+    \nReturns
+        \n- Created employee data
     """
     try:
         logger.info("Create employee request", employee_id=request.employee_id)
@@ -83,14 +83,14 @@ async def update_employee(
     """
     更新数字员工配置。
     
-    Args:
-        employee_id: Employee ID
-        request: Update employee request
-        current_user: Current user from auth
-        db: Database instance
-        
+    \nArgs:
+        \n- employee_id: Employee ID
+        \n- request: Update employee request
+        \n- current_user: Current user from auth
+        \n- db: Database instance
     Returns:
-        Updated employee data
+    \nReturns:
+        \n- Updated employee data
     """
     try:
         logger.info("Update employee request", employee_id=employee_id)
@@ -141,13 +141,13 @@ async def get_employee(
     """
     获取数字员工配置。
     
-    Args:
-        employee_id: Employee ID
-        current_user: Current user from auth
-        db: Database instance
-        
-    Returns:
-        Employee configuration
+    \nArgs
+        \n- employee_id: Employee ID
+        \n- current_user: Current user from auth
+        \n- db: Database instance
+
+    \nReturns
+        \n- Employee configuration
     """
     try:
         logger.info("Get employee request", employee_id=employee_id)
@@ -192,13 +192,13 @@ async def delete_employee(
     """
     删除数字员工。
     
-    Args:
-        employee_id: Employee ID
-        current_user: Current user from auth
-        db: Database instance
-        
-    Returns:
-        Success message
+    \nArgs:
+        \n- employee_id: Employee ID
+        \n- current_user: Current user from auth
+        \n- db: Database instance
+
+    \nReturns:
+        \n- Success message
     """
     try:
         logger.info("Delete employee request", employee_id=employee_id)
@@ -238,16 +238,16 @@ async def list_employees(
     """
     获取数字员工列表。
     
-    Args:
-        domain: Filter by domain (optional)
-        status: Filter by status (optional)
-        page: Page number
-        page_size: Page size
-        current_user: Current user from auth
-        db: Database instance
-        
-    Returns:
-        List of employees
+    \nArgs:
+        \n- domain: Filter by domain (optional)
+        \n- status: Filter by status (optional)
+        \n- page: Page number
+        \n- page_size: Page size
+        \n- current_user: Current user from auth
+        \n- db: Database instance
+
+    \nReturns:
+        \n- List of employees
     """
     try:
         logger.info("List employees request", domain=domain, status=status)

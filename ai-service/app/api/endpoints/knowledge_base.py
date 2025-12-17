@@ -11,7 +11,7 @@ from app.api.middleware.auth import get_api_key
 from app.core.logging import get_logger
 from app.core.database import get_database
 from app.services.document_service import document_processor
-from app.services.rag_service import rag_retrieval
+
 
 logger = get_logger(__name__)
 
@@ -33,15 +33,15 @@ async def create_knowledge_base(
     """
     创建知识库。
     
-    Args:
-        name: Knowledge base name
-        description: Description
-        category: Category
-        current_user: Current user
-        db: Database instance
-        
-    Returns:
-        Created knowledge base data
+    \nArgs:
+        \n- name: Knowledge base name
+        \n- description: Description
+        \n- category: Category
+        \n- current_user: Current user
+        \n- db: Database instance
+
+    \nReturns:
+        \n- Created knowledge base data
     """
     try:
         logger.info("Create knowledge base request", name=name, category=category)
@@ -97,16 +97,16 @@ async def list_knowledge_bases(
     """
     获取知识库列表。
     
-    Args:
-        category: Filter by category
-        status_filter: Filter by status
-        page: Page number
-        page_size: Page size
-        current_user: Current user
-        db: Database instance
-        
-    Returns:
-        List of knowledge bases
+    \nArgs:
+        \n- category: Filter by category
+        \n- status_filter: Filter by status
+        \n- page: Page number
+        \n- page_size: Page size
+        \n- current_user: Current user
+        \n- db: Database instance
+
+    \nReturns:
+        \n- List of knowledge bases
     """
     try:
         # Build query
@@ -165,14 +165,13 @@ async def upload_documents(
     """
     上传并处理文档。
     
-    Args:
-        files: Files to upload
-        kb_id: Knowledge base ID
-        category: Document category
-        current_user: Current user
-        
-    Returns:
-        Upload results
+    \nArgs:
+        \n- files: Files to upload
+        \n- kb_id: Knowledge base ID
+        \n- category: Document category
+        \n- current_user: Current user
+    \nReturns:
+        \n- Upload results
     """
     try:
         if len(files) > 50:
@@ -262,17 +261,17 @@ async def list_documents(
     """
     获取文档列表。
     
-    Args:
-        kb_id: Knowledge base ID
-        category: Document category
-        status_filter: Processing status
-        page: Page number
-        page_size: Page size
-        current_user: Current user
-        db: Database instance
-        
-    Returns:
-        List of documents
+    \nArgs:
+        \n- kb_id: Knowledge base ID
+        \n- category: Document category
+        \n- status_filter: Processing status
+        \n- page: Page number
+        \n- page_size: Page size
+        \n- current_user: Current user
+        \n- db: Database instance
+
+    \nReturns:
+        \n- List of documents
     """
     try:
         # Build query

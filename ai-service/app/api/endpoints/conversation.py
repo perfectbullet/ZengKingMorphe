@@ -14,7 +14,13 @@ router = APIRouter()
 async def get_conversation_records(
     api_key: str = Depends(get_api_key)
 ):
-    """获取对话记录 - Phase 4 实现。"""
+    """获取对话记录 - Phase 4 实现。
+    \nArgs:
+        \n- api_key: API key for authentication
+
+    \nReturns:
+        \n- dict: Response containing code and message
+    """
     return {
         "code": 501,
         "message": "To be implemented in Phase 4"
@@ -25,7 +31,14 @@ async def get_conversation_records(
 async def get_conversation_statistics(
     api_key: str = Depends(get_api_key)
 ):
-    """获取对话统计数据 - Phase 4 实现。"""
+    """获取对话统计数据 - Phase 4 实现。
+
+    \nArgs:
+        \n- api_key: API key for authentication
+
+    \nReturns:
+        \n- dict: Response containing code and message
+    """
     return {
         "code": 501,
         "message": "To be implemented in Phase 4"

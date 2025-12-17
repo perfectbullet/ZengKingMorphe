@@ -27,12 +27,12 @@ async def chat_message(
     """
     同步对话接口。
     
-    Args:
-        request: Chat request
-        api_key: API key from auth
+        Args:
+            - request: Chat request
+            - api_key: API key from auth
         
-    Returns:
-        Chat response
+        Returns:
+            - Chat response
     """
     try:
         # Rate limiting
