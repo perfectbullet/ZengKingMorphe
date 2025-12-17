@@ -11,6 +11,7 @@ from app.api.middleware.auth import get_api_key
 from app.core.logging import get_logger
 from app.core.database import get_database
 from app.services.document_service import document_processor
+from app.models.schemas import CreateKnowledgeBaseRequest
 
 
 logger = get_logger(__name__)
@@ -24,9 +25,7 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 @router.post("/create")
 async def create_knowledge_base(
-    name: str = Form(...),
-    description: str = Form(...),
-    category: str = Form(...),
+    request: CreateKnowledgeBaseRequest,
     api_key: str = Depends(get_api_key),
     db = Depends(get_database)
 ):
@@ -34,28 +33,29 @@ async def create_knowledge_base(
     创建知识库。
     
     \nArgs:
-        \n- name: Knowledge base name
-        \n- description: Description
-        \n- category: Category
-        \n- current_user: Current user
+        \n- request: Create knowledge base request
+        \n- api_key: API key from auth
         \n- db: Database instance
 
     \nReturns:
         \n- Created knowledge base data
     """
     try:
-        logger.info("Create knowledge base request", name=name, category=category)
+        logger.info("Create knowledge base request", name=request.name, category=request.category)
         
         # Generate KB ID
         import hashlib
-        kb_id = f"kb_{hashlib.md5(f'{name}_{datetime.utcnow().timestamp()}'.encode()).hexdigest()[:12]}"
+        kb_id = f"kb_{hashlib.md5(f'{request.name}_{datetime.utcnow().timestamp()}'.encode()).hexdigest()[:12]}"
         
-        # Create KB document (placeholder - full schema not in database.py yet)
+        # Create KB document
         kb_doc = {
             "kb_id": kb_id,
-            "name": name,
-            "description": description,
-            "category": category,
+            "name": request.name,
+            "description": request.description,
+            "category": request.category,
+            "priority": request.priority,
+            "tags": request.tags,
+            "config": request.config.model_dump(),
             "status": "active",
             "doc_count": 0,
             "chunk_count": 0,
@@ -63,7 +63,7 @@ async def create_knowledge_base(
             "updated_at": datetime.utcnow()
         }
         
-        # Insert into a knowledge_bases collection
+        # Insert into knowledge_bases collection
         await db.knowledge_bases.insert_one(kb_doc)
         
         return {
@@ -71,7 +71,7 @@ async def create_knowledge_base(
             "message": "success",
             "data": {
                 "kb_id": kb_id,
-                "name": name,
+                "name": request.name,
                 "status": "active",
                 "created_at": kb_doc["created_at"].isoformat() + "Z"
             }
@@ -102,7 +102,7 @@ async def list_knowledge_bases(
         \n- status_filter: Filter by status
         \n- page: Page number
         \n- page_size: Page size
-        \n- current_user: Current user
+        \n- api_key: API key from auth
         \n- db: Database instance
 
     \nReturns:
@@ -169,7 +169,8 @@ async def upload_documents(
         \n- files: Files to upload
         \n- kb_id: Knowledge base ID
         \n- category: Document category
-        \n- current_user: Current user
+        \n- api_key: API key from auth
+
     \nReturns:
         \n- Upload results
     """
@@ -267,7 +268,7 @@ async def list_documents(
         \n- status_filter: Processing status
         \n- page: Page number
         \n- page_size: Page size
-        \n- current_user: Current user
+        \n- api_key: API key from auth
         \n- db: Database instance
 
     \nReturns:
