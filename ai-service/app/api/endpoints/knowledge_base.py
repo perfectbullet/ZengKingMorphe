@@ -7,7 +7,7 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile, Form, Query
 from datetime import datetime
 
-from app.api.middleware.auth import get_current_user_optional
+from app.api.middleware.auth import get_api_key
 from app.core.logging import get_logger
 from app.core.database import get_database
 from app.services.document_service import document_processor
@@ -27,7 +27,7 @@ async def create_knowledge_base(
     name: str = Form(...),
     description: str = Form(...),
     category: str = Form(...),
-    current_user: dict = Depends(get_current_user_optional),
+    api_key: str = Depends(get_api_key),
     db = Depends(get_database)
 ):
     """
@@ -91,7 +91,7 @@ async def list_knowledge_bases(
     status_filter: str = Query(None, alias="status", description="Filter by status"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    current_user: dict = Depends(get_current_user_optional),
+    api_key: str = Depends(get_api_key),
     db = Depends(get_database)
 ):
     """
@@ -160,7 +160,7 @@ async def upload_documents(
     files: List[UploadFile] = File(..., description="Files to upload (max 50)"),
     kb_id: str = Form(..., description="Knowledge base ID"),
     category: str = Form(None, description="Document category"),
-    current_user: dict = Depends(get_current_user_optional)
+    api_key: str = Depends(get_api_key)
 ):
     """
     Upload and process documents.
@@ -256,7 +256,7 @@ async def list_documents(
     status_filter: str = Query(None, alias="status", description="Processing status"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    current_user: dict = Depends(get_current_user_optional),
+    api_key: str = Depends(get_api_key),
     db = Depends(get_database)
 ):
     """

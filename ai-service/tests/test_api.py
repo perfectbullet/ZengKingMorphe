@@ -38,7 +38,7 @@ async def test_chat_message_validation():
         )
         assert response.status_code == 400  # Validation error
         
-        # Valid request (will need proper setup to work fully)
+        # Missing API key
         response = await client.post(
             "/api/chat/message",
             json={
@@ -47,6 +47,24 @@ async def test_chat_message_validation():
                 "query": "测试问题"
             }
         )
-        # May fail due to missing database connection in tests
-        # but at least validates the schema
-        assert response.status_code in [200, 500]
+        # Should fail with 401 (missing API key)
+        assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_api_key_authentication():
+    """Test API key authentication."""
+    async with AsyncClient(app=app, base_url="http://test") as client:
+        # Invalid API key
+        response = await client.post(
+            "/api/chat/message",
+            json={
+                "user_id": "test_user",
+                "employee_id": "DE001",
+                "query": "测试问题"
+            },
+            headers={"X-API-Key": "invalid-key"}
+        )
+        # Should fail with 401 (invalid API key)
+        assert response.status_code == 401
+
