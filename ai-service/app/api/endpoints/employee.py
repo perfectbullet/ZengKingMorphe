@@ -26,12 +26,12 @@ async def create_employee(
     """
     创建一个新的数字员工。
     
-    \nArgs
+    \nArgs:
         \n- request: Create employee request
-        \n- current_user: Current user from auth
+        \n- api_key: API key from auth
         \n- db: Database instance
 
-    \nReturns
+    \nReturns:
         \n- Created employee data
     """
     try:
@@ -73,159 +73,6 @@ async def create_employee(
         )
 
 
-@router.put("/{employee_id}")
-async def update_employee(
-    employee_id: str = Path(..., description="Employee ID"),
-    request: UpdateEmployeeRequest = ...,
-    api_key: str = Depends(get_api_key),
-    db = Depends(get_database)
-):
-    """
-    更新数字员工配置。
-    
-    \nArgs:
-        \n- employee_id: Employee ID
-        \n- request: Update employee request
-        \n- current_user: Current user from auth
-        \n- db: Database instance
-    Returns:
-    \nReturns:
-        \n- Updated employee data
-    """
-    try:
-        logger.info("Update employee request", employee_id=employee_id)
-        
-        # Build update document
-        update_doc = {
-            k: v for k, v in request.model_dump(exclude_unset=True).items()
-            if v is not None
-        }
-        update_doc["updated_at"] = datetime.utcnow()
-        
-        result = await db.employee_configs.update_one(
-            {"employee_id": employee_id},
-            {"$set": update_doc}
-        )
-        
-        if result.matched_count == 0:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Employee not found"
-            )
-        
-        return {
-            "code": 200,
-            "message": "success",
-            "data": {
-                "employee_id": employee_id,
-                "updated_at": update_doc["updated_at"].isoformat() + "Z"
-            }
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error("Update employee error", employee_id=employee_id, error=str(e), exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to update employee"
-        )
-
-
-@router.get("/{employee_id}")
-async def get_employee(
-    employee_id: str = Path(..., description="Employee ID"),
-    api_key: str = Depends(get_api_key),
-    db = Depends(get_database)
-):
-    """
-    获取数字员工配置。
-    
-    \nArgs
-        \n- employee_id: Employee ID
-        \n- current_user: Current user from auth
-        \n- db: Database instance
-
-    \nReturns
-        \n- Employee configuration
-    """
-    try:
-        logger.info("Get employee request", employee_id=employee_id)
-        
-        employee = await db.employee_configs.find_one({"employee_id": employee_id})
-        
-        if not employee:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Employee not found"
-            )
-        
-        # Convert MongoDB document to dict
-        employee.pop("_id", None)
-        employee["created_at"] = employee["created_at"].isoformat() + "Z"
-        employee["updated_at"] = employee["updated_at"].isoformat() + "Z"
-        if employee.get("synced_at"):
-            employee["synced_at"] = employee["synced_at"].isoformat() + "Z"
-        
-        return {
-            "code": 200,
-            "message": "success",
-            "data": employee
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error("Get employee error", employee_id=employee_id, error=str(e), exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to get employee"
-        )
-
-
-@router.delete("/{employee_id}")
-async def delete_employee(
-    employee_id: str = Path(..., description="Employee ID"),
-    api_key: str = Depends(get_api_key),
-    db = Depends(get_database)
-):
-    """
-    删除数字员工。
-    
-    \nArgs:
-        \n- employee_id: Employee ID
-        \n- current_user: Current user from auth
-        \n- db: Database instance
-
-    \nReturns:
-        \n- Success message
-    """
-    try:
-        logger.info("Delete employee request", employee_id=employee_id)
-        
-        result = await db.employee_configs.delete_one({"employee_id": employee_id})
-        
-        if result.deleted_count == 0:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Employee not found"
-            )
-        
-        return {
-            "code": 200,
-            "message": "Digital employee deleted successfully"
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error("Delete employee error", employee_id=employee_id, error=str(e), exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to delete employee"
-        )
-
-
 @router.get("/list")
 async def list_employees(
     domain: str = Query(None, description="Filter by domain"),
@@ -243,7 +90,7 @@ async def list_employees(
         \n- status: Filter by status (optional)
         \n- page: Page number
         \n- page_size: Page size
-        \n- current_user: Current user from auth
+        \n- api_key: API key from auth
         \n- db: Database instance
 
     \nReturns:
@@ -294,4 +141,157 @@ async def list_employees(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to list employees"
+        )
+
+
+@router.get("/detail/{employee_id}")
+async def get_employee(
+    employee_id: str = Path(..., description="Employee ID"),
+    api_key: str = Depends(get_api_key),
+    db = Depends(get_database)
+):
+    """
+    获取数字员工配置。
+    
+    \nArgs:
+        \n- employee_id: Employee ID
+        \n- api_key: API key from auth
+        \n- db: Database instance
+
+    \nReturns:
+        \n- Employee configuration
+    """
+    try:
+        logger.info("Get employee request", employee_id=employee_id)
+        
+        employee = await db.employee_configs.find_one({"employee_id": employee_id})
+        
+        if not employee:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Employee not found"
+            )
+        
+        # Convert MongoDB document to dict
+        employee.pop("_id", None)
+        employee["created_at"] = employee["created_at"].isoformat() + "Z"
+        employee["updated_at"] = employee["updated_at"].isoformat() + "Z"
+        if employee.get("synced_at"):
+            employee["synced_at"] = employee["synced_at"].isoformat() + "Z"
+        
+        return {
+            "code": 200,
+            "message": "success",
+            "data": employee
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Get employee error", employee_id=employee_id, error=str(e), exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get employee"
+        )
+
+
+@router.put("/update/{employee_id}")
+async def update_employee(
+    employee_id: str = Path(..., description="Employee ID"),
+    request: UpdateEmployeeRequest = ...,
+    api_key: str = Depends(get_api_key),
+    db = Depends(get_database)
+):
+    """
+    更新数字员工配置。
+    
+    \nArgs:
+        \n- employee_id: Employee ID
+        \n- request: Update employee request
+        \n- api_key: API key from auth
+        \n- db: Database instance
+
+    \nReturns:
+        \n- Updated employee data
+    """
+    try:
+        logger.info("Update employee request", employee_id=employee_id)
+        
+        # Build update document
+        update_doc = {
+            k: v for k, v in request.model_dump(exclude_unset=True).items()
+            if v is not None
+        }
+        update_doc["updated_at"] = datetime.utcnow()
+        
+        result = await db.employee_configs.update_one(
+            {"employee_id": employee_id},
+            {"$set": update_doc}
+        )
+        
+        if result.matched_count == 0:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Employee not found"
+            )
+        
+        return {
+            "code": 200,
+            "message": "success",
+            "data": {
+                "employee_id": employee_id,
+                "updated_at": update_doc["updated_at"].isoformat() + "Z"
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Update employee error", employee_id=employee_id, error=str(e), exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update employee"
+        )
+
+
+@router.delete("/delete/{employee_id}")
+async def delete_employee(
+    employee_id: str = Path(..., description="Employee ID"),
+    api_key: str = Depends(get_api_key),
+    db = Depends(get_database)
+):
+    """
+    删除数字员工。
+    
+    \nArgs:
+        \n- employee_id: Employee ID
+        \n- api_key: API key from auth
+        \n- db: Database instance
+
+    \nReturns:
+        \n- Success message
+    """
+    try:
+        logger.info("Delete employee request", employee_id=employee_id)
+        
+        result = await db.employee_configs.delete_one({"employee_id": employee_id})
+        
+        if result.deleted_count == 0:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Employee not found"
+            )
+        
+        return {
+            "code": 200,
+            "message": "Digital employee deleted successfully"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Delete employee error", employee_id=employee_id, error=str(e), exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete employee"
         )
