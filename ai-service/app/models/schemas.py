@@ -1,7 +1,6 @@
 """
 API request and response schemas.
 """
-from datetime import datetime
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
 

@@ -139,3 +139,22 @@ class KBQualityMetricModel(BaseModel):
     failed_queries: int = 0
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: Optional[datetime] = None
+
+
+class DocumentTaskModel(BaseModel):
+    """Document processing task model."""
+    task_id: str
+    kb_id: str
+    filename: str
+    file_path: str
+    category: Optional[str] = None
+    status: str = "pending"  # pending/running/completed/failed/cancelled
+    doc_id: Optional[str] = None
+    total_chunks: int = 0
+    processed_chunks: int = 0
+    progress: float = 0.0  # 0-100
+    error_message: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)

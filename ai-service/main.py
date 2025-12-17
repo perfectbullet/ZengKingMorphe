@@ -13,6 +13,7 @@ from app.core.logging import setup_logging, get_logger
 from app.core.database import mongodb
 from app.core.chroma import chroma_db
 from app.core.elasticsearch import es_db
+from app.services.task_processor import task_processor
 from app.api.middleware.error_handler import (
     http_exception_handler,
     validation_exception_handler,
@@ -41,7 +42,10 @@ async def lifespan(app: FastAPI):
         chroma_db.connect()
         await es_db.connect()
         
-        logger.info("All databases connected successfully")
+        # Start task processor
+        await task_processor.start()
+        
+        logger.info("All databases connected and task processor started successfully")
         
     except Exception as e:
         logger.error("Failed to start application", error=str(e))
@@ -53,11 +57,14 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down Digital Employee AI Service...")
     
     try:
+        # Stop task processor
+        await task_processor.stop()
+        
         await mongodb.disconnect()
         chroma_db.disconnect()
         await es_db.disconnect()
         
-        logger.info("All databases disconnected successfully")
+        logger.info("Task processor stopped and all databases disconnected successfully")
         
     except Exception as e:
         logger.error("Error during shutdown", error=str(e))

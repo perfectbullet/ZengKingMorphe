@@ -39,7 +39,8 @@ class DocumentProcessor:
         filename: str,
         kb_id: str,
         category: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict[str, Any]] = None,
+        task_id: Optional[str] = None  # Add task_id for progress tracking
     ) -> str:
         """
         Process a document: extract text, chunk, vectorize, and store.
@@ -50,6 +51,7 @@ class DocumentProcessor:
             kb_id: Knowledge base ID
             category: Document category (optional)
             metadata: Additional metadata (optional)
+            task_id: Task ID for progress tracking (optional)
             
         Returns:
             Document ID
@@ -90,8 +92,20 @@ class DocumentProcessor:
             # Chunk document
             chunks = self._chunk_text(text_content, doc_id, kb_id)
             
+            # Update total_chunks if task_id provided
+            if task_id:
+                await db.document_tasks.update_one(
+                    {"task_id": task_id},
+                    {
+                        "$set": {
+                            "total_chunks": len(chunks),
+                            "processed_chunks": 0
+                        }
+                    }
+                )
+            
             # Process chunks (vectorize and store)
-            await self._process_chunks(chunks, doc_id, kb_id)
+            await self._process_chunks(chunks, doc_id, kb_id, task_id=task_id)
             
             # Update document status
             await db.documents.update_one(
@@ -134,7 +148,7 @@ class DocumentProcessor:
                         }
                     }
                 )
-            except:
+            except Exception:
                 pass
             
             raise
@@ -301,15 +315,17 @@ class DocumentProcessor:
         self,
         chunks: List[DocumentChunkModel],
         doc_id: str,
-        kb_id: str
+        kb_id: str,
+        task_id: Optional[str] = None  # Add task_id for progress tracking
     ) -> None:
         """
-        Process chunks: vectorize and store.
+        Process chunks: vectorize and store in vector DB and ElasticSearch.
         
         Args:
             chunks: List of document chunks
             doc_id: Document ID
             kb_id: Knowledge base ID
+            task_id: Task ID for progress tracking (optional)
         """
         db = await get_database()
         
@@ -347,6 +363,21 @@ class DocumentProcessor:
                     "created_at": datetime.utcnow().isoformat()
                 }
             )
+            
+            # Update progress if task_id provided
+            if task_id:
+                processed = i + 1
+                progress = (processed / len(chunks)) * 100.0
+                
+                await db.document_tasks.update_one(
+                    {"task_id": task_id},
+                    {
+                        "$set": {
+                            "processed_chunks": processed,
+                            "progress": round(progress, 2)
+                        }
+                    }
+                )
             
             # Update chunk with vector_id
             chunks[i].vector_id = chunk.chunk_id
