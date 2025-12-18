@@ -8,7 +8,7 @@ import json
 from datetime import datetime
 import hashlib
 
-from app.models.schemas import ChatRequest, ChatResponse
+from app.models.schemas import ChatRequest, ChatResponse, OpenAIChatRequest
 from app.api.middleware.auth import get_api_key
 from app.api.middleware.rate_limit import rate_limit_middleware
 from app.core.logging import get_logger
@@ -235,4 +235,262 @@ async def chat_stream(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to start chat stream"
+        )
+
+
+async def generate_openai_stream_response(request: OpenAIChatRequest) -> AsyncGenerator[str, None]:
+    """
+    Generate OpenAI-style streaming response.
+    
+    Args:
+        request: OpenAI chat request
+        
+    Yields:
+        OpenAI-formatted SSE messages
+    """
+    try:
+        import time
+        
+        # Generate IDs
+        session_id = request.session_id or f"sess_{hashlib.md5(f'{request.user_id}_{datetime.utcnow().timestamp()}'.encode()).hexdigest()[:12]}"
+        chat_id = f"chatcmpl-{hashlib.md5(f'{session_id}_{time.time()}'.encode()).hexdigest()[:12]}"
+        created = int(time.time())
+        
+        # Extract user query from messages
+        user_query = ""
+        for msg in reversed(request.messages):
+            if msg.role == "user":
+                user_query = msg.content
+                break
+        
+        if not user_query:
+            user_query = request.messages[-1].content if request.messages else ""
+        
+        # Build initial state
+        initial_state = {
+            "messages": [],
+            "user_query": user_query,
+            "user_id": request.user_id,
+            "session_id": session_id,
+            "employee_id": request.employee_id,
+            "employee_config": {},
+            "is_realtime_query": False,
+            "realtime_category": "",
+            "realtime_detect_reason": "",
+            "intent": "",
+            "entities": {},
+            "retrieved_docs": [],
+            "relevance_score": 0.0,
+            "web_search_results": [],
+            "final_answer": "",
+            "confidence": 0.0,
+            "context": {},
+            "has_sensitive": False,
+            "error": None,
+            "faq_matched": None,
+            "kb_used": [],
+            "web_search_used": False,
+            "conversation_id": "",
+            "response_time_ms": 0
+        }
+        
+        # Send initial role chunk
+        yield json.dumps({
+            "id": chat_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": request.model,
+            "choices": [{
+                "index": 0,
+                "delta": {"role": "assistant", "content": ""},
+                "finish_reason": None
+            }]
+        })
+        
+        # Stream workflow execution
+        content_sent = False
+        async for event in conversation_workflow.workflow.astream(initial_state):
+            node_name = list(event.keys())[0]
+            state_update = event[node_name]
+            
+            # Stream answer tokens when available
+            if node_name == "generate_answer" and state_update.get("final_answer"):
+                answer = state_update["final_answer"]
+                
+                # Stream by characters or small chunks for smoother output
+                chunk_size = 10  # Characters per chunk
+                for i in range(0, len(answer), chunk_size):
+                    chunk = answer[i:i+chunk_size]
+                    yield json.dumps({
+                        "id": chat_id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": request.model,
+                        "choices": [{
+                            "index": 0,
+                            "delta": {"content": chunk},
+                            "finish_reason": None
+                        }]
+                    })
+                    content_sent = True
+        
+        # Get final state
+        final_state = state_update
+        
+        # Send finish chunk
+        yield json.dumps({
+            "id": chat_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": request.model,
+            "choices": [{
+                "index": 0,
+                "delta": {},
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": len(user_query),
+                "completion_tokens": len(final_state.get("final_answer", "")),
+                "total_tokens": len(user_query) + len(final_state.get("final_answer", ""))
+            },
+            "metadata": {
+                "conversation_id": final_state.get("conversation_id", ""),
+                "confidence": final_state.get("confidence", 0.0),
+                "kb_used": final_state.get("kb_used", []),
+                "web_search_used": final_state.get("web_search_used", False)
+            }
+        })
+        
+        # Send [DONE] marker
+        yield "[DONE]"
+        
+    except Exception as e:
+        logger.error("OpenAI stream generation error", error=str(e), exc_info=True)
+        # Send error in OpenAI format
+        yield json.dumps({
+            "error": {
+                "message": str(e),
+                "type": "server_error",
+                "code": "internal_error"
+            }
+        })
+
+
+@router.post("/openai/chat/completions")
+async def openai_chat_completions(
+    request: OpenAIChatRequest,
+    api_key: str = Depends(get_api_key)
+):
+    """
+    OpenAI-compatible chat completions endpoint.
+    
+    Supports both streaming and non-streaming modes.
+    Compatible with OpenAI SDK and API format.
+    
+    Args:
+        request: OpenAI-style chat request
+        api_key: API key from auth
+        
+    Returns:
+        OpenAI-formatted response or SSE stream
+    """
+    try:
+        # Rate limiting
+        await rate_limit_middleware(
+            request=None,
+            user_id=request.user_id,
+            session_id=request.session_id
+        )
+        
+        logger.info(
+            "OpenAI chat completion request",
+            user_id=request.user_id,
+            employee_id=request.employee_id,
+            stream=request.stream,
+            model=request.model
+        )
+        
+        if request.stream:
+            # Return streaming response
+            return EventSourceResponse(generate_openai_stream_response(request))
+        else:
+            # Non-streaming response
+            import time
+            
+            # Extract user query
+            user_query = ""
+            for msg in reversed(request.messages):
+                if msg.role == "user":
+                    user_query = msg.content
+                    break
+            
+            session_id = request.session_id or f"sess_{hashlib.md5(f'{request.user_id}_{datetime.utcnow().timestamp()}'.encode()).hexdigest()[:12]}"
+            chat_id = f"chatcmpl-{hashlib.md5(f'{session_id}_{time.time()}'.encode()).hexdigest()[:12]}"
+            created = int(time.time())
+            
+            # Build initial state
+            initial_state: ConversationState = {
+                "messages": [],
+                "user_query": user_query,
+                "user_id": request.user_id,
+                "session_id": session_id,
+                "employee_id": request.employee_id,
+                "employee_config": {},
+                "is_realtime_query": False,
+                "realtime_category": "",
+                "realtime_detect_reason": "",
+                "intent": "",
+                "entities": {},
+                "retrieved_docs": [],
+                "relevance_score": 0.0,
+                "web_search_results": [],
+                "final_answer": "",
+                "confidence": 0.0,
+                "context": {},
+                "has_sensitive": False,
+                "error": None,
+                "faq_matched": None,
+                "kb_used": [],
+                "web_search_used": False,
+                "conversation_id": "",
+                "response_time_ms": 0
+            }
+            
+            # Run workflow
+            result = await conversation_workflow.run(initial_state)
+            
+            # Return OpenAI-formatted response
+            return {
+                "id": chat_id,
+                "object": "chat.completion",
+                "created": created,
+                "model": request.model,
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": result["final_answer"]
+                    },
+                    "finish_reason": "stop"
+                }],
+                "usage": {
+                    "prompt_tokens": len(user_query),
+                    "completion_tokens": len(result["final_answer"]),
+                    "total_tokens": len(user_query) + len(result["final_answer"])
+                },
+                "metadata": {
+                    "conversation_id": result["conversation_id"],
+                    "confidence": result.get("confidence", 0.0),
+                    "kb_used": result.get("kb_used", []),
+                    "web_search_used": result.get("web_search_used", False)
+                }
+            }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("OpenAI chat completion error", error=str(e), exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to process chat completion"
         )

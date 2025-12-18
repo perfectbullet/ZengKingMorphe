@@ -34,6 +34,40 @@ class ChatResponse(BaseModel):
     data: Dict[str, Any]
 
 
+# OpenAI-style API Schemas
+class OpenAIMessage(BaseModel):
+    """OpenAI message format."""
+    role: str = Field(..., description="Message role: system/user/assistant")
+    content: str = Field(..., description="Message content")
+
+
+class OpenAIChatRequest(BaseModel):
+    """OpenAI-style chat completion request."""
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "model": "gpt-3.5-turbo",
+                "messages": [
+                    {"role": "user", "content": "今天天气怎么样？"}
+                ],
+                "stream": True,
+                "employee_id": "hutao",
+                "user_id": "user_123456"
+            }
+        }
+    )
+    
+    model: str = Field(default="gpt-3.5-turbo", description="Model name")
+    messages: List[OpenAIMessage] = Field(..., description="Conversation messages")
+    stream: bool = Field(default=False, description="Enable streaming")
+    temperature: Optional[float] = Field(default=0.7, ge=0.0, le=2.0)
+    max_tokens: Optional[int] = Field(default=None, ge=1)
+    # Custom fields for our system
+    employee_id: str = Field(default="default", description="Digital employee ID")
+    user_id: str = Field(..., description="User ID")
+    session_id: Optional[str] = Field(None, description="Session ID")
+
+
 # Session API Schemas
 class SessionResponse(BaseModel):
     """Session response schema."""
