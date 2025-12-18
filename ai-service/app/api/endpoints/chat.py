@@ -129,7 +129,7 @@ async def generate_stream_response(request: ChatRequest) -> AsyncGenerator[str, 
         session_id = request.session_id or f"sess_{hashlib.md5(f'{request.user_id}_{datetime.utcnow().timestamp()}'.encode()).hexdigest()[:12]}"
         
         # Send start event
-        yield f"data: {json.dumps({'type': 'start', 'session_id': session_id})}\n\n"
+        yield json.dumps({'type': 'start', 'session_id': session_id})
         
         # Build initial state
         initial_state = {
@@ -167,7 +167,7 @@ async def generate_stream_response(request: ChatRequest) -> AsyncGenerator[str, 
             node_count += 1
             
             # Send node progress
-            yield f"data: {json.dumps({'type': 'progress', 'node': node_name, 'step': node_count})}\n\n"
+            yield json.dumps({'type': 'progress', 'node': node_name, 'step': node_count})
             
             # If generate_answer node and has answer, stream tokens
             if node_name == "generate_answer" and state_update.get("final_answer"):
@@ -176,17 +176,24 @@ async def generate_stream_response(request: ChatRequest) -> AsyncGenerator[str, 
                 sentences = answer.replace('。', '。\n').replace('！', '！\n').replace('？', '？\n').split('\n')
                 for sentence in sentences:
                     if sentence.strip():
-                        yield f"data: {json.dumps({'type': 'token', 'content': sentence})}\n\n"
+                        yield json.dumps({'type': 'token', 'content': sentence})
         
         # Get final state
         final_state = state_update
         
         # Send done event
-        yield f"data: {json.dumps({'type': 'done', 'conversation_id': final_state.get('conversation_id', ''), 'confidence': final_state.get('confidence', 0.0), 'kb_used': final_state.get('kb_used', []), 'web_search_used': final_state.get('web_search_used', False), 'faq_matched': final_state.get('faq_matched')})}\n\n"
+        yield json.dumps({
+            'type': 'done',
+            'conversation_id': final_state.get('conversation_id', ''),
+            'confidence': final_state.get('confidence', 0.0),
+            'kb_used': final_state.get('kb_used', []),
+            'web_search_used': final_state.get('web_search_used', False),
+            'faq_matched': final_state.get('faq_matched')
+        })
         
     except Exception as e:
         logger.error("Stream generation error", error=str(e), exc_info=True)
-        yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+        yield json.dumps({'type': 'error', 'message': str(e)})
 
 
 @router.post("/stream")

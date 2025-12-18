@@ -10,7 +10,7 @@ from langchain_openai import ChatOpenAI
 from langchain_community.chat_models import ChatOllama
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langchain_community.tools.tavily_search import TavilySearchResults
-from langchain_community.tools.bing_search import BingSearchResults
+# from langchain_community.tools.bing_search import BingSearchResults
 
 from app.core.config import settings
 from app.core.logging import get_logger
