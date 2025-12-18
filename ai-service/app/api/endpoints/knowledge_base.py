@@ -159,8 +159,8 @@ async def list_knowledge_bases(
 @router.post("/documents/upload")
 async def upload_documents(
     files: List[UploadFile] = File(..., description="Files to upload (max 50)"),
-    kb_id: str = Form(..., description="Knowledge base ID"),
-    category: str = Form(None, description="Document category"),
+    kb_id: str = Form('kb_316a7dbc75d0', description="Knowledge base ID"),
+    category: str = Form('首饰雕蜡工艺课程', description="Document category"),
     api_key: str = Depends(get_api_key)
 ):
     """
@@ -218,7 +218,7 @@ async def upload_documents(
 
 @router.get("/documents/list")
 async def list_documents(
-    kb_id: str = Query(None, description="Knowledge base ID"),
+    kb_id: str = Query('kb_316a7dbc75d0', description="Knowledge base ID"),
     category: str = Query(None, description="Document category"),
     status_filter: str = Query(None, alias="status", description="Processing status"),
     page: int = Query(1, ge=1),

@@ -178,7 +178,7 @@ class ConversationWorkflow:
                 # Update last activity
                 await db.sessions.update_one(
                     {"session_id": state["session_id"]},
-                    {"$set": {"last_activity": datetime.utcnow()}}
+                    {"$set": {"last_activity": datetime.now()}}
                 )
             else:
                 # Create new session
@@ -419,13 +419,13 @@ class ConversationWorkflow:
     
     async def run(self, state: ConversationState) -> ConversationState:
         """Run the workflow."""
-        start_time = datetime.utcnow()
+        start_time = datetime.now()
         
         try:
             result = await self.workflow.ainvoke(state)
             
             # Calculate response time
-            end_time = datetime.utcnow()
+            end_time = datetime.now()
             response_time_ms = int((end_time - start_time).total_seconds() * 1000)
             result["response_time_ms"] = response_time_ms
             

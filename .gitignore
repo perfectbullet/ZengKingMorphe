@@ -4,3 +4,4 @@ docs-history
 .env
 error.log
 sftp_sync_config.yaml
+info.log

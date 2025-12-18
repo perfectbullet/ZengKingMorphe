@@ -2,12 +2,24 @@
 API request and response schemas.
 """
 from typing import List, Optional, Dict, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 
 # Chat API Schemas
 class ChatRequest(BaseModel):
     """Chat request schema."""
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "user_id": "user_123456",
+                "employee_id": "hutao",
+                "session_id": "sess_20251218_abc123",
+                "query": "分别介绍雕蜡与铸造工艺基本原理",
+                "context": {"platform": "web", "version": "1.0"}
+            }
+        }
+    )
+    
     user_id: str = Field(..., description="User ID")
     employee_id: str = Field(..., description="Digital employee ID")
     session_id: Optional[str] = Field(None, description="Session ID")
@@ -56,6 +68,41 @@ class EmployeePersonalization(BaseModel):
 
 class CreateEmployeeRequest(BaseModel):
     """Create employee request schema."""
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "employee_id": "emp_customer_service",
+                "name": "客服小助手",
+                "domain": "客户服务",
+                "role": "客服专员",
+                "description": "专业的客户服务数字员工，擅长解答产品问题和售后咨询",
+                "personality": {
+                    "tone": "professional",
+                    "style": "friendly",
+                    "language": "zh-CN",
+                    "formality": "moderate"
+                },
+                "capabilities": {
+                    "kb_ids": ["kb_product_manual", "kb_faq"],
+                    "web_search_enabled": True,
+                    "max_context_turns": 10,
+                    "multimodal_enabled": False
+                },
+                "greeting": "您好！我是客服小助手，很高兴为您服务。有什么我可以帮到您的吗？",
+                "hot_questions": [
+                    "如何申请退款？",
+                    "产品保修期是多久？",
+                    "如何联系人工客服？"
+                ],
+                "personalization": {
+                    "user_profiling_enabled": True,
+                    "personalized_recommendations": True,
+                    "adaptive_tone": True
+                }
+            }
+        }
+    )
+    
     employee_id: str
     name: str
     domain: str
@@ -91,6 +138,23 @@ class KnowledgeBaseConfig(BaseModel):
 
 class CreateKnowledgeBaseRequest(BaseModel):
     """Create knowledge base request schema."""
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "name": "产品使用手册",
+                "description": "包含所有产品的详细使用说明和常见问题解答",
+                "category": "产品文档",
+                "priority": "high",
+                "tags": ["产品", "教程", "FAQ"],
+                "config": {
+                    "chunk_size": 512,
+                    "chunk_overlap": 50,
+                    "embedding_model": "text-embedding-3-small"
+                }
+            }
+        }
+    )
+    
     name: str
     description: str
     category: str
@@ -126,6 +190,20 @@ class SyncNotifyRequest(BaseModel):
 # Conversation Record Schemas
 class ConversationRecordQuery(BaseModel):
     """Conversation record query parameters."""
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "start_date": "2025-12-01",
+                "end_date": "2025-12-18",
+                "user_id": "user_123456",
+                "employee_id": "emp_customer_service",
+                "keyword": "退款",
+                "page": 1,
+                "page_size": 20
+            }
+        }
+    )
+    
     start_date: Optional[str] = None
     end_date: Optional[str] = None
     user_id: Optional[str] = None

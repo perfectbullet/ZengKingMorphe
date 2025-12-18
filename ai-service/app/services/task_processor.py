@@ -119,6 +119,7 @@ class DocumentTaskProcessor:
                         self.task_queue.get(),
                         timeout=1.0
                     )
+                    logger.info("Fetched task from queue", task_id=task_data["task_id"])
                 except asyncio.TimeoutError:
                     continue
                 

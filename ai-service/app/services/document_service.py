@@ -9,7 +9,7 @@ import aiofiles
 from pypdf import PdfReader
 from docx import Document
 from bs4 import BeautifulSoup
-import markdown
+from langchain_text_splitters import RecursiveCharacterTextSplitter, Language
 
 from app.core.logging import get_logger
 from app.core.config import settings
@@ -90,7 +90,7 @@ class DocumentProcessor:
             text_content = await self._extract_text(file_path, file_ext)
             
             # Chunk document
-            chunks = self._chunk_text(text_content, doc_id, kb_id)
+            chunks = self._chunk_text(text_content, doc_id, kb_id, file_ext=file_ext)
             
             # Update total_chunks if task_id provided
             if task_id:
@@ -209,9 +209,9 @@ class DocumentProcessor:
             async with aiofiles.open(file_path, 'r', encoding='utf-8') as f:
                 md_content = await f.read()
             # Convert to HTML then extract text
-            html = markdown.markdown(md_content)
-            soup = BeautifulSoup(html, 'html.parser')
-            return soup.get_text()
+            # html = markdown.markdown(md_content)
+            # soup = BeautifulSoup(html, 'html.parser')
+            return md_content
         except Exception as e:
             logger.error("Failed to extract Markdown", file=file_path, error=str(e))
             raise
@@ -231,66 +231,65 @@ class DocumentProcessor:
         self,
         text: str,
         doc_id: str,
-        kb_id: str
+        kb_id: str,
+        file_ext: Optional[str] = None
     ) -> List[DocumentChunkModel]:
         """
-        Split text into chunks.
+        Split text into chunks using RecursiveCharacterTextSplitter.
+        Uses language-specific separators for markdown/html, custom for txt.
         
         Args:
             text: Text content
             doc_id: Document ID
             kb_id: Knowledge base ID
+            file_ext: File extension (e.g., '.md', '.html', '.txt', '.pdf')
             
         Returns:
             List of document chunks
         """
-        chunks = []
         chunk_size = settings.chunk_size
         chunk_overlap = settings.chunk_overlap
         
-        # Simple paragraph-based chunking with overlap
-        paragraphs = text.split('\n\n')
-        current_chunk = []
-        current_length = 0
-        chunk_index = 0
+        # Determine separators based on file type
+        if file_ext in ['.md', '.pdf']:  # PDF converted to markdown
+            # Use LangChain's markdown separators
+            separators = RecursiveCharacterTextSplitter.get_separators_for_language(Language.MARKDOWN)
+        elif file_ext == '.html':
+            # Use LangChain's HTML separators
+            separators = RecursiveCharacterTextSplitter.get_separators_for_language(Language.HTML)
+        else:
+            # Default separators for plain text (.txt, .docx, etc.)
+            # Priority: paragraph -> sentence -> punctuation -> space -> character
+            separators = [
+                "\n\n",  # Paragraph boundary
+                "\n",    # Line break
+                "。",    # Chinese period
+                "！",    # Chinese exclamation
+                "？",    # Chinese question
+                ".",     # English period
+                "!",     # English exclamation
+                "?",     # English question
+                ";",     # Semicolon
+                ":",     # Colon
+                " ",     # Space
+                "",      # Character-level split (fallback)
+            ]
         
-        for para in paragraphs:
-            para = para.strip()
-            if not para:
-                continue
-            
-            para_length = len(para)
-            
-            # If adding this paragraph exceeds chunk size, save current chunk
-            if current_length + para_length > chunk_size and current_chunk:
-                chunk_text = "\n\n".join(current_chunk)
-                chunk_id = f"{doc_id}_chunk_{chunk_index}"
-                
-                chunk_model = DocumentChunkModel(
-                    chunk_id=chunk_id,
-                    doc_id=doc_id,
-                    kb_id=kb_id,
-                    content=chunk_text,
-                    chunk_index=chunk_index
-                )
-                chunks.append(chunk_model)
-                
-                chunk_index += 1
-                
-                # Keep last paragraph for overlap
-                if chunk_overlap > 0:
-                    current_chunk = [current_chunk[-1]]
-                    current_length = len(current_chunk[0])
-                else:
-                    current_chunk = []
-                    current_length = 0
-            
-            current_chunk.append(para)
-            current_length += para_length
+        # Create text splitter with appropriate separators
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            separators=separators,
+            length_function=len,
+            is_separator_regex=False,
+        )
         
-        # Add remaining chunk
-        if current_chunk:
-            chunk_text = "\n\n".join(current_chunk)
+        # Split text into chunks
+        chunk_texts = text_splitter.split_text(text)
+        
+        # Convert to DocumentChunkModel objects
+        chunks = []
+        for chunk_index, chunk_text in enumerate(chunk_texts):
             chunk_id = f"{doc_id}_chunk_{chunk_index}"
             
             chunk_model = DocumentChunkModel(
@@ -303,8 +302,9 @@ class DocumentProcessor:
             chunks.append(chunk_model)
         
         logger.info(
-            "Chunked document",
+            "Chunked document with RecursiveCharacterTextSplitter",
             doc_id=doc_id,
+            file_ext=file_ext,
             chunks_count=len(chunks),
             avg_chunk_size=sum(len(c.content) for c in chunks) / len(chunks) if chunks else 0
         )
