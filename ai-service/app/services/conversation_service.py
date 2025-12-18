@@ -91,7 +91,7 @@ class ConversationWorkflow:
             logger.info("Using OpenAI-style LLM", model=settings.openai_model)
         # 初始化 Web 搜索工具
         self.web_search_tool = TavilySearchResults(k=3)
-        self.bing_search_tool = BingSearchResults(k=3)
+        # self.bing_search_tool = BingSearchResults(k=3)
 
         self.workflow = self._build_workflow()
     
