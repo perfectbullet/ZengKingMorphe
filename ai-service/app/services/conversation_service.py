@@ -9,6 +9,8 @@ from langgraph.graph import StateGraph, END
 from langchain_openai import ChatOpenAI
 from langchain_community.chat_models import ChatOllama
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+from langchain_community.tools.tavily_search import TavilySearchResults
+from langchain_community.tools.bing_search import BingSearchResults
 
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -41,6 +43,8 @@ class ConversationState(TypedDict):
     context: Dict[str, Any]
     has_sensitive: bool
     error: Optional[Dict[str, Any]]
+    # FAQ matching
+    faq_matched: Optional[Dict[str, Any]]
     # Tracking
     kb_used: List[str]
     web_search_used: bool
@@ -85,7 +89,10 @@ class ConversationWorkflow:
                 model_kwargs={"response_format": {"type": "json_object"}},
             )
             logger.info("Using OpenAI-style LLM", model=settings.openai_model)
-        
+        # 初始化 Web 搜索工具
+        self.web_search_tool = TavilySearchResults(k=3)
+        self.bing_search_tool = BingSearchResults(k=3)
+
         self.workflow = self._build_workflow()
     
     def _build_workflow(self) -> StateGraph:
@@ -96,6 +103,7 @@ class ConversationWorkflow:
         graph.add_node("load_employee_config", self.load_employee_config)
         graph.add_node("load_session_context", self.load_session_context)
         graph.add_node("input_validation", self.validate_input)
+        graph.add_node("match_faq", self.match_faq)
         graph.add_node("check_realtime_query", self.check_realtime_query)
         graph.add_node("intent_recognition", self.recognize_intent)
         graph.add_node("knowledge_retrieval", self.knowledge_retrieval)
@@ -110,7 +118,17 @@ class ConversationWorkflow:
         # Add edges
         graph.add_edge("load_employee_config", "load_session_context")
         graph.add_edge("load_session_context", "input_validation")
-        graph.add_edge("input_validation", "check_realtime_query")
+        graph.add_edge("input_validation", "match_faq")
+        
+        # Conditional: FAQ matched -> generate answer, else -> check realtime
+        graph.add_conditional_edges(
+            "match_faq",
+            lambda state: "generate" if state.get("faq_matched") else "check_realtime",
+            {
+                "generate": "generate_answer",
+                "check_realtime": "check_realtime_query"
+            }
+        )
         
         # Conditional: realtime query -> web search, else -> intent recognition
         graph.add_conditional_edges(
@@ -142,19 +160,42 @@ class ConversationWorkflow:
         return graph.compile()
     
     async def load_employee_config(self, state: ConversationState) -> ConversationState:
-        """Load employee configuration."""
+        """Load employee configuration (enhanced with full config)."""
         try:
             db = await get_database()
             employee = await db.employee_configs.find_one({"employee_id": state["employee_id"]})
             
             if not employee:
-                logger.warning("Employee config not found", employee_id=state["employee_id"])
-                state["employee_config"] = {}
+                logger.warning("Employee config not found, using defaults", employee_id=state["employee_id"])
+                # Default configuration
+                state["employee_config"] = {
+                    "name": "AI助手",
+                    "role": "通用助理",
+                    "description": "专业的AI助手",
+                    "personality": {
+                        "tone": "professional",
+                        "style": "friendly",
+                        "language": "zh-CN",
+                        "formality": "moderate"
+                    },
+                    "capabilities": {
+                        "kb_ids": [],
+                        "web_search_enabled": True,
+                        "max_context_turns": 10
+                    },
+                    "greeting": "您好，我是AI助手，很高兴为您服务。",
+                    "faqs": []
+                }
             else:
                 employee.pop("_id", None)
                 state["employee_config"] = employee
             
-            logger.info("Loaded employee config", employee_id=state["employee_id"])
+            logger.info(
+                "Employee config loaded",
+                employee_id=state["employee_id"],
+                kb_count=len(state["employee_config"].get("capabilities", {}).get("kb_ids", [])),
+                faq_count=len(state["employee_config"].get("faqs", []))
+            )
             return state
             
         except Exception as e:
@@ -204,6 +245,56 @@ class ConversationWorkflow:
         """Validate input."""
         # Simple validation - already done at API level
         state["has_sensitive"] = False
+        return state
+    
+    async def match_faq(self, state: ConversationState) -> ConversationState:
+        """Match FAQ using keyword and similarity matching."""
+        try:
+            query = state["user_query"]
+            faqs = state["employee_config"].get("faqs", [])
+            
+            if not faqs:
+                logger.info("No FAQs configured, skipping FAQ matching")
+                state["faq_matched"] = None
+                return state
+            
+            # Strategy 1: Keyword matching (fast filter)
+            keyword_matches = []
+            for faq in faqs:
+                keywords = faq.get("keywords", [])
+                question = faq.get("question", "")
+                
+                # Check if query contains FAQ keywords
+                if any(kw in query for kw in keywords):
+                    keyword_matches.append(faq)
+                # Or query is very similar to FAQ question
+                elif query in question or question in query:
+                    keyword_matches.append(faq)
+            
+            # If matched, use the first match
+            if keyword_matches:
+                best_faq = keyword_matches[0]
+                state["final_answer"] = best_faq["answer"]
+                state["confidence"] = 0.95
+                state["intent"] = "faq_match"
+                state["faq_matched"] = {
+                    "faq_id": best_faq.get("faq_id"),
+                    "question": best_faq.get("question"),
+                    "category": best_faq.get("category")
+                }
+                
+                logger.info(
+                    "FAQ matched",
+                    faq_id=best_faq.get("faq_id"),
+                    question=best_faq.get("question")
+                )
+            else:
+                state["faq_matched"] = None
+            
+        except Exception as e:
+            logger.error("FAQ matching failed", error=str(e), exc_info=True)
+            state["faq_matched"] = None
+        
         return state
     
     async def check_realtime_query(self, state: ConversationState) -> ConversationState:
@@ -290,63 +381,210 @@ class ConversationWorkflow:
         return state
     
     async def web_search(self, state: ConversationState) -> ConversationState:
-        """Perform web search (placeholder)."""
-        # TODO: Implement Tavily integration in Phase 3
-        state["web_search_results"] = []
-        state["web_search_used"] = False
+        """Perform web search using Tavily."""
+        try:
+            # Check if web search is enabled
+            if not settings.web_search_enabled:
+                logger.info("Web search disabled in settings")
+                state["web_search_results"] = []
+                state["web_search_used"] = False
+                return state
+            
+            # Check if Tavily API key is configured
+            if not settings.tavily_api_key:
+                logger.warning("Tavily API key not configured, skipping web search")
+                state["web_search_results"] = []
+                state["web_search_used"] = False
+                return state
+            
+            # Check employee config for web search permission
+            employee_config = state.get("employee_config", {})
+            capabilities = employee_config.get("capabilities", {})
+            web_search_enabled = capabilities.get("web_search_enabled", True)
+            
+            if not web_search_enabled:
+                logger.info(
+                    "Web search disabled for employee",
+                    employee_id=state.get("employee_id")
+                )
+                state["web_search_results"] = []
+                state["web_search_used"] = False
+                return state
+            
+            query = state["user_query"]
+            
+            # Perform web search
+            logger.info(
+                "Performing web search",
+                query=query[:100],
+                is_realtime=state.get("is_realtime_query", False),
+                realtime_category=state.get("realtime_category")
+            )
+            
+            # Call Tavily search tool
+            search_results = await self.web_search_tool.ainvoke({"query": query})
+            
+            # Format results
+            formatted_results = []
+            if search_results:
+                for i, result in enumerate(search_results[:settings.web_search_max_results], 1):
+                    formatted_result = {
+                        "rank": i,
+                        "title": result.get("title", ""),
+                        "url": result.get("url", ""),
+                        "content": result.get("content", "")[:500],  # Truncate to 500 chars
+                        "score": result.get("score", 0.0)
+                    }
+                    formatted_results.append(formatted_result)
+            
+            state["web_search_results"] = formatted_results
+            state["web_search_used"] = len(formatted_results) > 0
+            
+            logger.info(
+                "Web search completed",
+                results_count=len(formatted_results),
+                has_results=state["web_search_used"]
+            )
+            
+        except Exception as e:
+            logger.error(
+                "Web search failed",
+                error=str(e),
+                query=state.get("user_query", "")[:100],
+                exc_info=True
+            )
+            # Don't fail the entire workflow, just continue without web results
+            state["web_search_results"] = []
+            state["web_search_used"] = False
         
-        logger.info("Web search skipped (not implemented yet)")
         return state
     
     async def generate_answer(self, state: ConversationState) -> ConversationState:
-        """Generate answer using LLM."""
+        """Generate answer using LLM with personality-based system prompt."""
         try:
+            employee_config = state.get("employee_config", {})
+            personality = employee_config.get("personality", {})
+            role = employee_config.get("role", "AI助手")
+            greeting = employee_config.get("greeting", "您好")
+            
             # Build context from retrieved docs
             context_parts = []
             for i, doc in enumerate(state.get("retrieved_docs", [])[:3], 1):
-                context_parts.append(f"参考{i}: {doc.get('content', '')[:500]}")
-            context_text = "\n\n".join(context_parts) if context_parts else "无相关参考资料"
+                context_parts.append(f"[知识库参考{i}] {doc.get('content', '')[:500]}")
+            
+            # Add web search results if available
+            web_results = state.get("web_search_results", [])
+            if web_results and state.get("web_search_used", False):
+                for i, web_result in enumerate(web_results[:3], 1):
+                    web_context = f"[网络资料{i}] {web_result.get('title', '')}\n{web_result.get('content', '')[:400]}\n来源: {web_result.get('url', '')}"
+                    context_parts.append(web_context)
+            
+            context_text = "\n\n".join(context_parts) if context_parts else "（暂无相关参考资料）"
+            
+            # Add information source indicator
+            source_indicator = ""
+            if state.get("web_search_used", False):
+                source_indicator = "（包含最新网络信息）"
+            elif state.get("retrieved_docs"):
+                source_indicator = "（基于知识库）"
+            
+            # Build personality-based system prompt
+            tone_desc = {
+                "professional": "专业严谨",
+                "friendly": "友好亲切",
+                "formal": "正式庄重",
+                "casual": "轻松随意"
+            }.get(personality.get("tone", "professional"), "专业")
+            
+            style_desc = {
+                "concise": "简明扼要",
+                "detailed": "详细周到",
+                "conversational": "对话式",
+                "instructional": "指导式"
+            }.get(personality.get("style", "friendly"), "友好")
+            
+            formality_desc = {
+                "high": "高度正式（使用敬语）",
+                "moderate": "适度正式",
+                "low": "轻松口语化"
+            }.get(personality.get("formality", "moderate"), "适度")
+            
+            system_prompt = f"""你是 {employee_config.get('name', 'AI助手')}，{role}。
+
+角色定位：
+{employee_config.get('description', '专业的AI助手')}
+
+个性特征：
+- 语气风格：{tone_desc}
+- 沟通方式：{style_desc}
+- 正式程度：{formality_desc}
+
+开场白：
+{greeting}
+
+回答要求：
+1. 严格基于提供的上下文信息回答，不编造内容
+2. 如果上下文不足，诚实告知并建议联系人工客服
+3. 保持{tone_desc}的语气风格
+4. 回答简洁明了，重点突出
+5. 如有多个信息源，优先使用最相关的内容
+6. 如果使用了网络资料，可在回答末尾注明信息来源
+7. 对于实时性问题（天气、新闻等），优先使用网络资料
+
+上下文信息{source_indicator}：
+{context_text}
+
+用户问题：
+{state['user_query']}
+
+请提供专业、准确的回答。"""
             
             # Build messages
-            messages = []
+            messages = [SystemMessage(content=system_prompt)]
             
-            # System message with employee persona
-            employee_config = state.get("employee_config", {})
-            personality = employee_config.get("personality", {})
-            
-            system_msg = f"""你是{employee_config.get('name', '助手')}，{employee_config.get('role', '智能助手')}。
-{employee_config.get('description', '')}
-请用{personality.get('tone', 'professional')}的语气，{personality.get('style', 'friendly')}的风格回答用户问题。"""
-            
-            messages.append(SystemMessage(content=system_msg))
-            
-            # Add conversation history
+            # Add conversation history (last 5 turns)
             for msg in state.get("context", {}).get("messages", [])[-5:]:
                 if msg.get("role") == "user":
                     messages.append(HumanMessage(content=msg.get("content", "")))
                 elif msg.get("role") == "assistant":
                     messages.append(AIMessage(content=msg.get("content", "")))
             
-            # Current query with context
-            user_msg = f"""用户问题：{state['user_query']}
-
-参考知识：
-{context_text}
-
-请基于上述参考知识回答用户问题。如果参考知识不足以回答问题，请诚实说明。"""
-            
-            messages.append(HumanMessage(content=user_msg))
+            # Current query
+            messages.append(HumanMessage(content=state["user_query"]))
             
             # Generate response
             response = await self.llm.ainvoke(messages)
             state["final_answer"] = response.content
-            state["confidence"] = 0.8  # Placeholder
             
-            logger.info("Answer generated", answer_length=len(state["final_answer"]))
+            # Calculate confidence based on available information sources
+            confidence = 0.5  # Base confidence
+            if state.get("faq_matched"):
+                confidence = 0.95  # High confidence for FAQ matches
+            elif state.get("web_search_used", False):
+                # Web search results available
+                web_results = state.get("web_search_results", [])
+                if web_results:
+                    avg_web_score = sum(r.get("score", 0.5) for r in web_results) / len(web_results)
+                    confidence = max(0.75, avg_web_score)  # At least 0.75 for web results
+            elif state.get("retrieved_docs"):
+                # Use RAG relevance score
+                confidence = max(0.6, state.get("relevance_score", 0.7))
+            
+            state["confidence"] = confidence
+            
+            logger.info(
+                "Answer generated",
+                tone=personality.get('tone'),
+                style=personality.get('style'),
+                answer_length=len(state["final_answer"]),
+                confidence=confidence,
+                web_search_used=state.get("web_search_used", False),
+                kb_docs_count=len(state.get("retrieved_docs", []))
+            )
             
         except Exception as e:
             logger.error("Answer generation failed", error=str(e), exc_info=True)
-            state["final_answer"] = "抱歉，我暂时无法回答这个问题。请稍后再试。"
+            state["final_answer"] = "抱歉，我暂时无法回答这个问题。请稍后再试或联系人工客服。"
             state["confidence"] = 0.0
         
         return state
@@ -378,6 +616,15 @@ class ConversationWorkflow:
                 intent=state.get("intent"),
                 kb_used=state.get("kb_used", []),
                 web_search_used=state.get("web_search_used", False),
+                web_search_results=[
+                    {
+                        "rank": result.get("rank"),
+                        "title": result.get("title"),
+                        "url": result.get("url"),
+                        "score": result.get("score", 0.0)
+                    }
+                    for result in state.get("web_search_results", [])[:5]
+                ],
                 retrieved_docs=[
                     {
                         "doc_id": doc.get("doc_id"),

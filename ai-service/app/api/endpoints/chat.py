@@ -76,7 +76,7 @@ async def chat_message(
             "has_sensitive": False,
             "error": None,
             "kb_used": [],
-            "web_search_used": False,
+            "web_search_used": True,
             "conversation_id": "",
             "response_time_ms": 0
         }
@@ -93,7 +93,7 @@ async def chat_message(
             "confidence": result.get("confidence", 0.0),
             "kb_used": result.get("kb_used", []),
             "web_search_used": result.get("web_search_used", False),
-            "timestamp": datetime.utcnow().isoformat() + "Z"
+            "timestamp": datetime.now().isoformat() + "Z"
         }
         
         return ChatResponse(
@@ -114,7 +114,7 @@ async def chat_message(
 
 async def generate_stream_response(request: ChatRequest) -> AsyncGenerator[str, None]:
     """
-    Generate streaming response.
+    Generate streaming response integrated with LangGraph workflow.
     
     Args:
         request: Chat request
@@ -123,22 +123,70 @@ async def generate_stream_response(request: ChatRequest) -> AsyncGenerator[str, 
         SSE formatted messages
     """
     try:
-        # Start event
-        yield f"data: {json.dumps({'type': 'start', 'session_id': request.session_id})}\n\n"
+        import hashlib
         
-        # TODO: Implement streaming chat logic with LangGraph workflow
-        # This is a placeholder
-        placeholder_text = "This is a placeholder streaming response. The full implementation will be completed in Phase 3."
+        # Generate session_id
+        session_id = request.session_id or f"sess_{hashlib.md5(f'{request.user_id}_{datetime.utcnow().timestamp()}'.encode()).hexdigest()[:12]}"
         
-        for char in placeholder_text.split():
-            yield f"data: {json.dumps({'type': 'token', 'content': char + ' '})}\n\n"
+        # Send start event
+        yield f"data: {json.dumps({'type': 'start', 'session_id': session_id})}\n\n"
         
-        # Done event
-        yield f"data: {json.dumps({'type': 'done', 'conversation_id': f'conv_{datetime.utcnow().timestamp()}'})}\n\n"
+        # Build initial state
+        initial_state = {
+            "messages": [],
+            "user_query": request.query,
+            "user_id": request.user_id,
+            "session_id": session_id,
+            "employee_id": request.employee_id,
+            "employee_config": {},
+            "is_realtime_query": False,
+            "realtime_category": "",
+            "realtime_detect_reason": "",
+            "intent": "",
+            "entities": {},
+            "retrieved_docs": [],
+            "relevance_score": 0.0,
+            "web_search_results": [],
+            "final_answer": "",
+            "confidence": 0.0,
+            "context": request.context or {},
+            "has_sensitive": False,
+            "error": None,
+            "faq_matched": None,
+            "kb_used": [],
+            "web_search_used": False,
+            "conversation_id": "",
+            "response_time_ms": 0
+        }
+        
+        # Stream workflow execution (node by node)
+        node_count = 0
+        async for event in conversation_workflow.workflow.astream(initial_state):
+            node_name = list(event.keys())[0]
+            state_update = event[node_name]
+            node_count += 1
+            
+            # Send node progress
+            yield f"data: {json.dumps({'type': 'progress', 'node': node_name, 'step': node_count})}\n\n"
+            
+            # If generate_answer node and has answer, stream tokens
+            if node_name == "generate_answer" and state_update.get("final_answer"):
+                answer = state_update["final_answer"]
+                # Stream by sentences
+                sentences = answer.replace('。', '。\n').replace('！', '！\n').replace('？', '？\n').split('\n')
+                for sentence in sentences:
+                    if sentence.strip():
+                        yield f"data: {json.dumps({'type': 'token', 'content': sentence})}\n\n"
+        
+        # Get final state
+        final_state = state_update
+        
+        # Send done event
+        yield f"data: {json.dumps({'type': 'done', 'conversation_id': final_state.get('conversation_id', ''), 'confidence': final_state.get('confidence', 0.0), 'kb_used': final_state.get('kb_used', []), 'web_search_used': final_state.get('web_search_used', False), 'faq_matched': final_state.get('faq_matched')})}\n\n"
         
     except Exception as e:
         logger.error("Stream generation error", error=str(e), exc_info=True)
-        yield f"data: {json.dumps({'type': 'error', 'message': 'Stream generation failed'})}\n\n"
+        yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
 
 
 @router.post("/stream")
