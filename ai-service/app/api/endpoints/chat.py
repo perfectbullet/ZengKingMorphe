@@ -19,6 +19,56 @@ logger = get_logger(__name__)
 router = APIRouter()
 
 
+def format_sources(retrieved_docs: list, web_search_results: list, max_content_length: int = 200) -> dict:
+    """
+    Format RAG documents and web search results for source attribution.
+    
+    Args:
+        retrieved_docs: List of retrieved document chunks from RAG
+        web_search_results: List of web search results from Tavily
+        max_content_length: Maximum content snippet length (default: 200 chars)
+        
+    Returns:
+        Dict with rag_sources and web_sources lists
+    """
+    sources = {
+        "rag_sources": [],
+        "web_sources": []
+    }
+    
+    # Format RAG document sources (top 3)
+    for idx, doc in enumerate(retrieved_docs[:3], 1):
+        content_snippet = doc.get("content", "")[:max_content_length]
+        if len(doc.get("content", "")) > max_content_length:
+            content_snippet += "..."
+        
+        rag_source = {
+            "rank": idx,
+            "doc_id": doc.get("doc_id", ""),
+            "kb_id": doc.get("kb_id", ""),
+            "content_snippet": content_snippet,
+            "score": round(doc.get("rrf_score", doc.get("score", 0.0)), 4)
+        }
+        
+        # Add chunk_index if available
+        if "chunk_index" in doc:
+            rag_source["chunk_index"] = doc["chunk_index"]
+        
+        sources["rag_sources"].append(rag_source)
+    
+    # Format web search sources (top 5)
+    for result in web_search_results[:5]:
+        web_source = {
+            "rank": result.get("rank", 0),
+            "title": result.get("title", ""),
+            "url": result.get("url", ""),
+            "score": round(result.get("score", 0.0), 4)
+        }
+        sources["web_sources"].append(web_source)
+    
+    return sources
+
+
 @router.post("/message", response_model=ChatResponse)
 async def chat_message(
     request: ChatRequest,
@@ -84,6 +134,12 @@ async def chat_message(
         # Run workflow
         result = await conversation_workflow.run(initial_state)
         
+        # Format source attribution
+        sources = format_sources(
+            retrieved_docs=result.get("retrieved_docs", []),
+            web_search_results=result.get("web_search_results", [])
+        )
+        
         # Build response
         response_data = {
             "conversation_id": result["conversation_id"],
@@ -93,6 +149,7 @@ async def chat_message(
             "confidence": result.get("confidence", 0.0),
             "kb_used": result.get("kb_used", []),
             "web_search_used": result.get("web_search_used", False),
+            "sources": sources,
             "timestamp": datetime.now().isoformat() + "Z"
         }
         
@@ -181,6 +238,12 @@ async def generate_stream_response(request: ChatRequest) -> AsyncGenerator[str, 
         # Get final state
         final_state = state_update
         
+        # Format source attribution
+        sources = format_sources(
+            retrieved_docs=final_state.get('retrieved_docs', []),
+            web_search_results=final_state.get('web_search_results', [])
+        )
+        
         # Send done event
         yield json.dumps({
             'type': 'done',
@@ -188,7 +251,8 @@ async def generate_stream_response(request: ChatRequest) -> AsyncGenerator[str, 
             'confidence': final_state.get('confidence', 0.0),
             'kb_used': final_state.get('kb_used', []),
             'web_search_used': final_state.get('web_search_used', False),
-            'faq_matched': final_state.get('faq_matched')
+            'faq_matched': final_state.get('faq_matched'),
+            'sources': sources
         })
         
     except Exception as e:
@@ -337,6 +401,12 @@ async def generate_openai_stream_response(request: OpenAIChatRequest) -> AsyncGe
         # Get final state
         final_state = state_update
         
+        # Format source attribution
+        sources = format_sources(
+            retrieved_docs=final_state.get('retrieved_docs', []),
+            web_search_results=final_state.get('web_search_results', [])
+        )
+        
         # Send finish chunk
         yield json.dumps({
             "id": chat_id,
@@ -357,7 +427,8 @@ async def generate_openai_stream_response(request: OpenAIChatRequest) -> AsyncGe
                 "conversation_id": final_state.get("conversation_id", ""),
                 "confidence": final_state.get("confidence", 0.0),
                 "kb_used": final_state.get("kb_used", []),
-                "web_search_used": final_state.get("web_search_used", False)
+                "web_search_used": final_state.get("web_search_used", False),
+                "sources": sources
             }
         })
         
@@ -459,6 +530,12 @@ async def openai_chat_completions(
             # Run workflow
             result = await conversation_workflow.run(initial_state)
             
+            # Format source attribution
+            sources = format_sources(
+                retrieved_docs=result.get("retrieved_docs", []),
+                web_search_results=result.get("web_search_results", [])
+            )
+            
             # Return OpenAI-formatted response
             return {
                 "id": chat_id,
@@ -482,7 +559,8 @@ async def openai_chat_completions(
                     "conversation_id": result["conversation_id"],
                     "confidence": result.get("confidence", 0.0),
                     "kb_used": result.get("kb_used", []),
-                    "web_search_used": result.get("web_search_used", False)
+                    "web_search_used": result.get("web_search_used", False),
+                    "sources": sources
                 }
             }
         

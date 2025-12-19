@@ -27,11 +27,80 @@ class ChatRequest(BaseModel):
     context: Dict[str, Any] = Field(default_factory=dict, description="Additional context")
 
 
+class RAGSource(BaseModel):
+    """RAG document source reference."""
+    rank: int = Field(..., description="Ranking position")
+    doc_id: str = Field(..., description="Document ID")
+    kb_id: str = Field(..., description="Knowledge base ID")
+    content_snippet: str = Field(..., description="Content snippet (max 200 chars)")
+    score: float = Field(..., description="Relevance score (RRF or similarity)")
+    chunk_index: Optional[int] = Field(None, description="Chunk index within document")
+
+
+class WebSource(BaseModel):
+    """Web search source reference."""
+    rank: int = Field(..., description="Ranking position")
+    title: str = Field(..., description="Page title")
+    url: str = Field(..., description="Source URL")
+    score: float = Field(..., description="Relevance score from search API")
+
+
+class SourceAttribution(BaseModel):
+    """Source attribution for answer generation."""
+    rag_sources: List[RAGSource] = Field(default_factory=list, description="RAG document sources (top 3)")
+    web_sources: List[WebSource] = Field(default_factory=list, description="Web search sources (top 5)")
+
+
+class ChatResponseData(BaseModel):
+    """Chat response data schema."""
+    conversation_id: str = Field(..., description="Conversation ID")
+    session_id: str = Field(..., description="Session ID")
+    answer: str = Field(..., description="AI-generated answer")
+    intent: str = Field(default="general_query", description="Detected user intent")
+    confidence: float = Field(..., description="Answer confidence score")
+    kb_used: List[str] = Field(default_factory=list, description="Knowledge base IDs used")
+    web_search_used: bool = Field(default=False, description="Whether web search was triggered")
+    sources: SourceAttribution = Field(..., description="Source attribution for answer")
+    timestamp: str = Field(..., description="Response timestamp (ISO 8601)")
+
+
 class ChatResponse(BaseModel):
     """Chat response schema."""
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "code": 200,
+                "message": "success",
+                "data": {
+                    "conversation_id": "conv_abc123def456",
+                    "session_id": "sess_xyz789",
+                    "answer": "根据知识库资料，雕蜡工艺是通过雕刻蜡模来制作首饰原型...",
+                    "intent": "knowledge_query",
+                    "confidence": 0.92,
+                    "kb_used": ["kb_jewelry_tech"],
+                    "web_search_used": False,
+                    "sources": {
+                        "rag_sources": [
+                            {
+                                "rank": 1,
+                                "doc_id": "doc_12345",
+                                "kb_id": "kb_jewelry_tech",
+                                "content_snippet": "雕蜡工艺是传统首饰制作中的重要环节，通过精密雕刻蜡材形成首饰雏形...",
+                                "score": 0.8756,
+                                "chunk_index": 3
+                            }
+                        ],
+                        "web_sources": []
+                    },
+                    "timestamp": "2025-12-19T10:30:00Z"
+                }
+            }
+        }
+    )
+    
     code: int = 200
     message: str = "success"
-    data: Dict[str, Any]
+    data: Dict[str, Any]  # Flexible dict to support both structured and legacy formats
 
 
 # OpenAI-style API Schemas
