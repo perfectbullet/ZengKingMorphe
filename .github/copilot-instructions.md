@@ -62,7 +62,7 @@ docker-compose up -d mongodb elasticsearch chroma
 
 # Run AI service locally (Windows)
 cd ai-service
-..\.venv\Scripts\activate
+D:/zenking_work/metahuman_work/ZengKingMorphe/.venv/Scripts/Activate.ps1
 pip install -r requirements.txt
 uvicorn main:app --reload --port 8000
 ```
@@ -71,10 +71,10 @@ uvicorn main:app --reload --port 8000
 
 **Important - Virtual Environment Usage**:
 - **Always use the virtual environment** when running Python scripts in `ai-service/`
-- Windows PowerShell: `..\.venv\Scripts\Activate.ps1` or directly use `..\.venv\Scripts\python.exe script.py`
-- Git Bash/WSL: `source venv/Scripts/activate` or `venv/Scripts/python script.py`
+- Windows PowerShell: `D:/zenking_work/metahuman_work/ZengKingMorphe/.venv/Scripts/Activate.ps1` or directly use `D:/zenking_work/metahuman_work/ZengKingMorphe/.venv/Scripts/python.exe script.py`
+- Git Bash/WSL: `source D:/zenking_work/metahuman_work/ZengKingMorphe/.venv/Scripts/activate` or `D:/zenking_work/metahuman_work/ZengKingMorphe/.venv/Scripts/python script.py`
 - **Never run Python commands without activating venv first** - dependencies are installed in the virtual environment, not globally
-- Example correct command: `cd ai-service; ..\.venv\Scripts\python.exe test_web_search.py`
+- Example correct command: `cd ai-service; D:/zenking_work/metahuman_work/ZengKingMorphe/.venv/Scripts/python.exe test_web_search.py`
 
 ### Full Stack Deployment
 ```powershell
@@ -92,7 +92,7 @@ docker-compose logs -f ai-service  # Watch logs
 - **Unit tests**: Basic pytest setup in [tests/conftest.py](ai-service/tests/conftest.py) with `anyio_backend` fixture
 - **Standalone ChromaDB testing**: [test_chroma_standalone.py](ai-service/test_chroma_standalone.py) validates ChromaDB connection without full app context
 - **Web search testing**: [test_web_search.py](ai-service/test_web_search.py) validates Tavily API integration
-- **Run tests**: Always use venv - `cd ai-service; ..\.venv\Scripts\python.exe test_web_search.py`
+- **Run tests**: Always use venv - `cd ai-service; D:/zenking_work/metahuman_work/ZengKingMorphe/.venv/Scripts/python.exe test_web_search.py`
 
 **Note**: Test coverage is minimal - only basic conftest + standalone chroma test + web search test exist.
 

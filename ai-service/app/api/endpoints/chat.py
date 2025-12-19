@@ -52,7 +52,7 @@ async def chat_message(
         # Generate session ID if not provided
         session_id = request.session_id
         if not session_id:
-            session_id = f"sess_{hashlib.md5(f'{request.user_id}_{datetime.utcnow().timestamp()}'.encode()).hexdigest()[:12]}"
+            session_id = f"sess_{hashlib.md5(f'{request.user_id}_{datetime.now().timestamp()}'.encode()).hexdigest()[:12]}"
         
         # Build initial state
         initial_state: ConversationState = {
@@ -126,7 +126,7 @@ async def generate_stream_response(request: ChatRequest) -> AsyncGenerator[str, 
         import hashlib
         
         # Generate session_id
-        session_id = request.session_id or f"sess_{hashlib.md5(f'{request.user_id}_{datetime.utcnow().timestamp()}'.encode()).hexdigest()[:12]}"
+        session_id = request.session_id or f"sess_{hashlib.md5(f'{request.user_id}_{datetime.now().timestamp()}'.encode()).hexdigest()[:12]}"
         
         # Send start event
         yield json.dumps({'type': 'start', 'session_id': session_id})
@@ -252,7 +252,7 @@ async def generate_openai_stream_response(request: OpenAIChatRequest) -> AsyncGe
         import time
         
         # Generate IDs
-        session_id = request.session_id or f"sess_{hashlib.md5(f'{request.user_id}_{datetime.utcnow().timestamp()}'.encode()).hexdigest()[:12]}"
+        session_id = request.session_id or f"sess_{hashlib.md5(f'{request.user_id}_{datetime.now().timestamp()}'.encode()).hexdigest()[:12]}"
         chat_id = f"chatcmpl-{hashlib.md5(f'{session_id}_{time.time()}'.encode()).hexdigest()[:12]}"
         created = int(time.time())
         
@@ -424,7 +424,7 @@ async def openai_chat_completions(
                     user_query = msg.content
                     break
             
-            session_id = request.session_id or f"sess_{hashlib.md5(f'{request.user_id}_{datetime.utcnow().timestamp()}'.encode()).hexdigest()[:12]}"
+            session_id = request.session_id or f"sess_{hashlib.md5(f'{request.user_id}_{datetime.now().timestamp()}'.encode()).hexdigest()[:12]}"
             chat_id = f"chatcmpl-{hashlib.md5(f'{session_id}_{time.time()}'.encode()).hexdigest()[:12]}"
             created = int(time.time())
             

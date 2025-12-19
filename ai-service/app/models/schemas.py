@@ -46,18 +46,19 @@ class OpenAIChatRequest(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "model": "gpt-3.5-turbo",
+                "model": "qwen3:32b",
                 "messages": [
                     {"role": "user", "content": "今天天气怎么样？"}
                 ],
                 "stream": True,
                 "employee_id": "hutao",
-                "user_id": "user_123456"
+                "user_id": "user_123456",
+                "session_id": "sess_20251218_abc123"
             }
         }
     )
     
-    model: str = Field(default="gpt-3.5-turbo", description="Model name")
+    model: str = Field(default="qwen3:32b", description="Model name")
     messages: List[OpenAIMessage] = Field(..., description="Conversation messages")
     stream: bool = Field(default=False, description="Enable streaming")
     temperature: Optional[float] = Field(default=0.7, ge=0.0, le=2.0)
