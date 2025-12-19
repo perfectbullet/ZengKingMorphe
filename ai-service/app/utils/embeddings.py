@@ -19,14 +19,27 @@ class ChromaEmbeddingWrapper:
 class SiliconFlowEmbeddings(Embeddings):
     """SiliconFlow embedding implementation."""
     
-    def __init__(self, model: str, api_key: str, base_url: str, batch_size: int = 32):
+    def __init__(self, model: str, api_key: str, base_url: str, batch_size: int = 32, max_tokens: int = 512):
         self.model = model
         self.api_key = api_key
         self.base_url = base_url
         self.batch_size = batch_size
+        self.max_tokens = max_tokens
+        # Conservative character limit: assume 1 char = 2 tokens for safety
+        self.max_chars = max_tokens // 2
+    
+    def _truncate_text(self, text: str) -> str:
+        """Truncate text to fit within token limit."""
+        if len(text) <= self.max_chars:
+            return text
+        # Truncate and add ellipsis
+        return text[:self.max_chars - 3] + "..."
 
     def _embed_batch(self, texts: List[str]) -> List[List[float]]:
-        payload = {"model": self.model, "input": texts}
+        # Truncate texts to fit token limit
+        truncated_texts = [self._truncate_text(text) for text in texts]
+        
+        payload = {"model": self.model, "input": truncated_texts}
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -35,9 +48,17 @@ class SiliconFlowEmbeddings(Embeddings):
         # Add debug logging
         import logging
         logger = logging.getLogger(__name__)
+        
+        # Log truncation stats
+        truncated_count = sum(1 for orig, trunc in zip(texts, truncated_texts) if len(orig) > len(trunc))
+        if truncated_count > 0:
+            logger.warning(
+                f"Truncated {truncated_count}/{len(texts)} texts to fit {self.max_tokens} token limit"
+            )
+        
         logger.info(
             f"SiliconFlow embedding request: url={self.base_url}, "
-            f"model={self.model}, texts_count={len(texts)}"
+            f"model={self.model}, texts_count={len(truncated_texts)}"
         )
         
         try:

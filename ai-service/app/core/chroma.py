@@ -60,16 +60,15 @@ class ChromaDB:
             if settings.embedding_type == "siliconflow":
                 embedder = SiliconFlowEmbeddings(
                     model=settings.embedding_model,
-                    api_key=settings.embedding_api_key
-                    or settings.siliconflow_api_key
-                    or "",
-                    base_url=settings.embedding_api_url,
-                    batch_size=32,
+                    api_key=settings.siliconflow_api_key,
+                    base_url=settings.siliconflow_embedding_api_url,
+                    max_tokens=512  # BGE model limit
                 )
                 logger.info(
                     "Using SiliconFlow embeddings",
                     model=settings.embedding_model,
-                    base_url=settings.embedding_api_url
+                    base_url=settings.siliconflow_embedding_api_url,
+                    has_api_key=bool(settings.siliconflow_api_key or settings.embedding_api_key)
                 )
             else:
                 # Default to OpenAI-style embeddings

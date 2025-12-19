@@ -34,11 +34,14 @@ class Settings(BaseSettings):
     # Embedding Configuration
     embedding_type: str = Field(default="openai_style", description="Embedding type: openai_style or siliconflow")
     embedding_model: str = Field(default="BAAI/bge-large-zh-v1.5")
-    embedding_base_url: str = Field(..., description="Embedding service base URL")
-    embedding_api_url: str = Field(..., description="Embedding API URL")
+    embedding_base_url: str = Field(default="http://localhost:50009", description="Embedding service base URL")
+    embedding_api_url: str = Field(default="http://localhost:50009", description="Embedding API URL")
     embedding_api_key: Optional[str] = Field(default=None, description="Embedding API key (for SiliconFlow)")
     siliconflow_api_key: Optional[str] = Field(default=None, description="SiliconFlow API key")
-    
+    siliconflow_embedding_api_url: str = Field(default="https://api.siliconflow.cn/v1/embeddings", description="SiliconFlow Embedding API URL")
+    siliconflow_embedding_model: str = Field(default="BAAI/bge-large-zh-v1.5", description="SiliconFlow Embedding Model")
+
+
     # Web Search Configuration
     tavily_api_key: Optional[str] = Field(default=None)
     web_search_enabled: bool = Field(default=True)
@@ -90,7 +93,7 @@ class Settings(BaseSettings):
     confidence_threshold: float = Field(default=0.7, ge=0.0, le=1.0)
     
     # Document Processing Configuration
-    chunk_size: int = Field(default=512, ge=128)
+    chunk_size: int = Field(default=256, ge=128, description="Chunk size in characters (use 256 for 512-token models)")
     chunk_overlap: int = Field(default=50, ge=0)
     enable_chunk_summary: bool = Field(default=True)
     summary_model: str = Field(default="gpt-4o-mini")
