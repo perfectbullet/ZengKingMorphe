@@ -5,6 +5,9 @@ from typing import List, Optional
 import requests
 from langchain_core.embeddings import Embeddings
 import numpy as np
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 class ChromaEmbeddingWrapper:
     """Adapter to satisfy Chroma's EmbeddingFunction.__call__ signature."""
@@ -14,6 +17,79 @@ class ChromaEmbeddingWrapper:
 
     def __call__(self, input: List[str]) -> List[List[float]]:  # type: ignore[override]
         return self.embedder.embed_documents(list(input))
+
+
+class OllamaEmbeddings(Embeddings):
+    """Ollama embedding implementation using /api/embeddings endpoint."""
+    
+    def __init__(self, model: str, base_url: str, batch_size: int = 32, max_tokens: int = 512):
+        self.model = model
+        self.base_url = base_url.rstrip("/")
+        self.batch_size = batch_size
+        self.max_tokens = max_tokens
+        # Conservative character limit for safety
+        self.max_chars = max_tokens // 2
+    
+    def _truncate_text(self, text: str) -> str:
+        """Truncate text to fit within token limit."""
+        if len(text) <= self.max_chars:
+            return text
+        return text[:self.max_chars - 3] + "..."
+    
+    def _embed_single(self, text: str) -> List[float]:
+        """Embed a single text using Ollama API."""
+          
+        # Truncate if needed
+        truncated_text = self._truncate_text(text)
+        
+        url = f"{self.base_url}/api/embeddings"
+        payload = {
+            "model": self.model,
+            "prompt": truncated_text
+        }
+        
+        try:
+            response = requests.post(url, json=payload, timeout=30.0)
+            response.raise_for_status()
+            result = response.json()
+            
+            if "embedding" not in result:
+                raise ValueError(f"No embedding in response: {result}")
+            
+            return result["embedding"]
+        except Exception as e:
+            logger.error(
+                f"Ollama embedding failed: url={url}, model={self.model}, error={str(e)}",
+                exc_info=True
+            )
+            raise
+    
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        """Embed multiple documents."""
+        # Check for truncation
+        truncated_count = sum(1 for text in texts if len(text) > self.max_chars)
+        if truncated_count > 0:
+            logger.warning(
+                f"Ollama: Truncating {truncated_count}/{len(texts)} texts to fit {self.max_tokens} token limit"
+            )
+        
+        logger.info(
+            f"Ollama embedding request: url={self.base_url}, "
+            f"model={self.model}, texts_count={len(texts)}"
+        )
+        
+        embeddings = []
+        for text in texts:
+            embedding = self._embed_single(text)
+            # Convert to numpy array for ChromaDB compatibility
+            embeddings.append(np.array(embedding, dtype=float))
+        
+        logger.info(f"Ollama request successful: received {len(embeddings)} embeddings")
+        return embeddings
+    
+    def embed_query(self, text: str) -> List[float]:
+        """Embed a single query."""
+        return self.embed_documents([text])[0]
 
 
 class SiliconFlowEmbeddings(Embeddings):
@@ -71,10 +147,11 @@ class SiliconFlowEmbeddings(Embeddings):
                 raise ValueError(f"No embedding data returned: {result}")
             
             logger.info(f"SiliconFlow request successful: received {len(data)} embeddings")
-            return [item["embedding"] for item in data]
+            embeddings = [np.array(item["embedding"], dtype=float) for item in data]
+            return embeddings
         except Exception as e:
             logger.error(
-                f"SiliconFlow embedding failed: url={self.base_url}, error={str(e)}",
+                f"SiliconFlow embedding failed: url={self.base_url}, result={result},error={str(e)}",
                 exc_info=True
             )
             raise
@@ -117,8 +194,6 @@ class OpenAIStyleEmbeddings(Embeddings):
         url = f"{self.base_url}/v1/embeddings"
         
         # Add debug logging
-        import logging
-        logger = logging.getLogger(__name__)
         logger.info(
             f"Sending embedding request: url={url}, model={self.model}, "
             f"texts_count={len(texts)}, has_api_key={bool(self.api_key)}"
@@ -141,8 +216,6 @@ class OpenAIStyleEmbeddings(Embeddings):
             logger.info(f"Embedding request successful: received {len(data)} embeddings")
             embeddings = [np.array(item["embedding"], dtype=float) for item in data]
             return embeddings
-        
-            return [item["embedding"] for item in data]
         except Exception as e:
             logger.error(
                 f"Embedding request failed: url={url}, error={str(e)}",

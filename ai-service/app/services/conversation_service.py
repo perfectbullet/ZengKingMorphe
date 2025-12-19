@@ -76,19 +76,20 @@ class ConversationWorkflow:
             # Use OpenAI-style API (e.g., SiliconFlow)
             self.llm = ChatOpenAI(
                 base_url=settings.openai_api_base,
-                api_key=settings.openai_api_key or settings.siliconflow_api_key or "",
+                api_key=settings.siliconflow_api_key,
                 model=settings.openai_model,
                 temperature=settings.openai_temperature,
                 streaming=True,
             )
             self.grader_llm = ChatOpenAI(
                 base_url=settings.openai_api_base,
-                api_key=settings.openai_api_key or settings.siliconflow_api_key or "",
+                api_key=settings.siliconflow_api_key,
                 model=settings.openai_grader_model,
                 temperature=0,
                 model_kwargs={"response_format": {"type": "json_object"}},
             )
             logger.info("Using OpenAI-style LLM", model=settings.openai_model)
+        
         # 初始化 Web 搜索工具
         self.web_search_tool = TavilySearchResults(k=3)
         # self.bing_search_tool = BingSearchResults(k=3)

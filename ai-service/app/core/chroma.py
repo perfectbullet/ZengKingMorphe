@@ -10,6 +10,7 @@ from app.utils.embeddings import (
     OpenAIStyleEmbeddings,
     SiliconFlowEmbeddings,
     ChromaEmbeddingWrapper,
+    OllamaEmbeddings,
 )
 
 logger = get_logger(__name__)
@@ -60,7 +61,7 @@ class ChromaDB:
             if settings.embedding_type == "siliconflow":
                 embedder = SiliconFlowEmbeddings(
                     model=settings.embedding_model,
-                    api_key=settings.siliconflow_api_key,
+                    api_key=settings.embedding_api_key,
                     base_url=settings.siliconflow_embedding_api_url,
                     max_tokens=512  # BGE model limit
                 )
@@ -69,6 +70,17 @@ class ChromaDB:
                     model=settings.embedding_model,
                     base_url=settings.siliconflow_embedding_api_url,
                     has_api_key=bool(settings.siliconflow_api_key or settings.embedding_api_key)
+                )
+            elif settings.embedding_type == "ollama":
+                embedder = OllamaEmbeddings(
+                    model=settings.embedding_ollama_model,
+                    base_url=settings.ollama_base_url,
+                    max_tokens=512  # BGE model limit
+                )
+                logger.info(
+                    "Using Ollama embeddings",
+                    model=settings.embedding_ollama_model,
+                    base_url=settings.ollama_base_url
                 )
             else:
                 # Default to OpenAI-style embeddings
@@ -200,6 +212,7 @@ class ChromaDB:
                 collection=collection_name,
                 error=str(e),
             )
+            logger.exception(e)
             raise
 
     async def delete_documents(self, collection_name: str, ids: List[str]) -> None:

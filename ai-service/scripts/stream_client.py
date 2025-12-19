@@ -87,15 +87,18 @@ def handle_stream_payloads(payload_iter: Iterator[str]) -> int:
 
             # 流式 chunk
             if obj.get("object") == "chat.completion.chunk":
+                print(obj)
                 choices = obj.get("choices", []) or []
                 for choice in choices:
                     # 输出增量内容（delta.content）
                     delta = choice.get("delta", {}) or {}
+                    
                     content = delta.get("content")
-                    if content:
-                        # 不换行，直接 flush
-                        sys.stdout.write(content)
-                        sys.stdout.flush()
+                    # print(delta)
+                    # if content:
+                    #     # 不换行，直接 flush
+                    #     sys.stdout.write(content)
+                    #     sys.stdout.flush()
                     # 检查 finish_reason
                     finish = choice.get("finish_reason")
                     if finish == "stop":
@@ -204,7 +207,7 @@ def main():
     parser.add_argument("--employee_id", default="hutao", help="Employee ID")
     parser.add_argument("--user_id", default="user_123456", help="User ID")
     parser.add_argument("--session_id", default=None, help="Session ID")
-    parser.add_argument("--model", default="gpt-3.5-turbo", help="Model name")
+    parser.add_argument("--model", default="qwen2.5:7b", help="Model name")
     parser.add_argument("--stream", action="store_true", help="Enable streaming (SSE)")
     parser.add_argument("--query", required=True, help="User query text")
     parser.add_argument("--timeout", type=int, default=60, help="Stream timeout seconds")

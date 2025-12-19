@@ -32,14 +32,19 @@ class Settings(BaseSettings):
     openai_max_tokens: int = Field(default=2000, ge=1)
     
     # Embedding Configuration
-    embedding_type: str = Field(default="openai_style", description="Embedding type: openai_style or siliconflow")
+    embedding_type: str = Field(default="openai_style", description="Embedding type: openai_style, siliconflow, or ollama")
     embedding_model: str = Field(default="BAAI/bge-large-zh-v1.5")
     embedding_base_url: str = Field(default="http://localhost:50009", description="Embedding service base URL")
     embedding_api_url: str = Field(default="http://localhost:50009", description="Embedding API URL")
     embedding_api_key: Optional[str] = Field(default=None, description="Embedding API key (for SiliconFlow)")
+    
+    # SiliconFlow Configuration
     siliconflow_api_key: Optional[str] = Field(default=None, description="SiliconFlow API key")
     siliconflow_embedding_api_url: str = Field(default="https://api.siliconflow.cn/v1/embeddings", description="SiliconFlow Embedding API URL")
     siliconflow_embedding_model: str = Field(default="BAAI/bge-large-zh-v1.5", description="SiliconFlow Embedding Model")
+    
+    # Ollama Embedding Configuration
+    embedding_ollama_model: str = Field(default="smartcreation/bge-large-zh-v1.5:latest", description="Ollama embedding model name")
 
 
     # Web Search Configuration
