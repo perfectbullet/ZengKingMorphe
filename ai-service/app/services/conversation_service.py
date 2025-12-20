@@ -1,16 +1,23 @@
 """
 LangGraph conversation workflow.
 """
+import os
+from pathlib import Path
 from typing import TypedDict, Annotated, List, Dict, Any, Optional
 from operator import add
 from datetime import datetime
+
+# Load environment variables before importing settings
+from dotenv import load_dotenv
+load_dotenv()
 
 from langgraph.graph import StateGraph, END
 from langchain_openai import ChatOpenAI
 from langchain_community.chat_models import ChatOllama
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+
 from langchain_community.tools.tavily_search import TavilySearchResults
-# from langchain_community.tools.bing_search import BingSearchResults
+
 
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -19,6 +26,7 @@ from app.services.rag_service import rag_retrieval
 from app.models.database import ConversationModel, SessionModel
 
 logger = get_logger(__name__)
+
 
 
 # Define conversation state
@@ -92,7 +100,7 @@ class ConversationWorkflow:
         
         # 初始化 Web 搜索工具
         self.web_search_tool = TavilySearchResults(k=3)
-        # self.bing_search_tool = BingSearchResults(k=3)
+        # self.web_search_tool = BingSearchResults(k=3)
 
         self.workflow = self._build_workflow()
     
@@ -157,9 +165,84 @@ class ConversationWorkflow:
         graph.add_edge("web_search", "generate_answer")
         graph.add_edge("generate_answer", "save_conversation")
         graph.add_edge("save_conversation", END)
+        compiled_stateGraph = graph.compile()
+        self._dump_graph_debug(compiled_stateGraph)
+        return compiled_stateGraph
         
-        return graph.compile()
-    
+    def _dump_graph_debug(self, compiled_stateGraph) -> None:
+        """保存图结构用于调试"""
+        dump_flag = os.getenv("CRAG_DUMP_GRAPH", "1").lower()
+        if dump_flag in {"0", "false", "no"}:
+            return
+
+        use_remote = os.getenv("CRAG_RENDER_REMOTE", "0").lower() not in {"0", "false", "no"}
+
+        try:
+            graph_view = compiled_stateGraph.get_graph(xray=True)
+            output_dir = Path(os.getenv("CRAG_GRAPH_DIR", "./graph_debug"))
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+            # ✅ 正确的 mermaid 提取方式
+            mermaid_src = None
+            try:
+                mermaid_src = graph_view.draw_mermaid()  # 返回 mermaid 字符串
+                logger.info("Mermaid source extracted successfully")
+            except Exception as src_exc:
+                logger.warning(f"Failed to extract mermaid source: {src_exc}")
+                (output_dir / "crag_graph_mermaid_extract_error.txt").write_text(
+                    str(src_exc), encoding="utf-8"
+                )
+
+            # 保存 mermaid 源文件
+            mermaid_path = output_dir / "crag_graph.mmd"
+            if mermaid_src:
+                mermaid_path.write_text(mermaid_src, encoding="utf-8")
+                print(f"✓ Mermaid source saved at {mermaid_path}")
+            else:
+                # 回退：保存 repr 以便调试
+                repr_text = repr(graph_view)
+                (output_dir / "crag_graph_view_repr.txt").write_text(repr_text, encoding="utf-8")
+                print(f"⚠️ Mermaid source unavailable, saved repr to crag_graph_view_repr.txt")
+
+            # 尝试远程渲染（如果启用）
+            if use_remote and mermaid_src:
+                try:
+                    from langgraph.graph.graph import MermaidDrawMethod
+                    png_bytes = graph_view.draw_mermaid_png(
+                        draw_method=MermaidDrawMethod.API,  # 使用远程 API
+                        max_retries=3,
+                        retry_delay=1.0
+                    )
+                    (output_dir / "crag_graph.png").write_bytes(png_bytes)
+                    print(f"✓ Graph PNG rendered at {output_dir / 'crag_graph.png'}")
+                except Exception as remote_exc:
+                    logger.warning(f"Remote PNG rendering failed: {remote_exc}")
+                    (output_dir / "crag_graph_render_error.txt").write_text(
+                        str(remote_exc), encoding="utf-8"
+                    )
+                    print(f"⚠️ Remote rendering failed (see crag_graph_render_error.txt)")
+                    print(f"💡 Use local rendering: Set CRAG_RENDER_REMOTE=0 or install pyppeteer")
+
+            # 本地渲染建议（如果远程失败）
+            if not use_remote and mermaid_src:
+                print(f"ℹ️ Mermaid source available at {mermaid_path}")
+                print(f"💡 To render locally:")
+                print(f"   1. Install mermaid-cli: npm install -g @mermaid-js/mermaid-cli")
+                print(f"   2. Run: mmdc -i {mermaid_path} -o {output_dir / 'crag_graph.png'}")
+                print(f"   OR set CRAG_RENDER_REMOTE=1 to use remote API")
+
+        except Exception as exc:
+            logger.error(f"Graph debug dump failed: {exc}", exc_info=True)
+            try:
+                output_dir = Path(os.getenv("CRAG_GRAPH_DIR", "./graph_debug"))
+                output_dir.mkdir(parents=True, exist_ok=True)
+                (output_dir / "crag_graph_dump_exception.txt").write_text(
+                    str(exc), encoding="utf-8"
+                )
+            except Exception:
+                pass
+            print(f"⚠️ Unable to dump graph: {exc}")
+
     async def load_employee_config(self, state: ConversationState) -> ConversationState:
         """Load employee configuration (enhanced with full config)."""
         try:
@@ -461,56 +544,84 @@ class ConversationWorkflow:
         return state
     
     async def generate_answer(self, state: ConversationState) -> ConversationState:
-        """Generate answer using LLM with personality-based system prompt."""
-        try:
-            employee_config = state.get("employee_config", {})
-            personality = employee_config.get("personality", {})
-            role = employee_config.get("role", "AI助手")
-            greeting = employee_config.get("greeting", "您好")
-            
-            # Build context from retrieved docs
-            context_parts = []
-            for i, doc in enumerate(state.get("retrieved_docs", [])[:3], 1):
-                context_parts.append(f"[知识库参考{i}] {doc.get('content', '')[:500]}")
-            
-            # Add web search results if available
+        """Prepare for answer generation (placeholder for streaming)."""
+        # This node only prepares metadata, no actual LLM call
+        # Real generation happens in streaming methods for token-level streaming
+        
+        # Calculate confidence based on available information sources
+        confidence = 0.5  # Base confidence
+        if state.get("faq_matched"):
+            confidence = 0.95
+        elif state.get("web_search_used", False):
             web_results = state.get("web_search_results", [])
-            if web_results and state.get("web_search_used", False):
-                for i, web_result in enumerate(web_results[:3], 1):
-                    web_context = f"[网络资料{i}] {web_result.get('title', '')}\n{web_result.get('content', '')[:400]}\n来源: {web_result.get('url', '')}"
-                    context_parts.append(web_context)
-            
-            context_text = "\n\n".join(context_parts) if context_parts else "（暂无相关参考资料）"
-            
-            # Add information source indicator
-            source_indicator = ""
-            if state.get("web_search_used", False):
-                source_indicator = "（包含最新网络信息）"
-            elif state.get("retrieved_docs"):
-                source_indicator = "（基于知识库）"
-            
-            # Build personality-based system prompt
-            tone_desc = {
-                "professional": "专业严谨",
-                "friendly": "友好亲切",
-                "formal": "正式庄重",
-                "casual": "轻松随意"
-            }.get(personality.get("tone", "professional"), "专业")
-            
-            style_desc = {
-                "concise": "简明扼要",
-                "detailed": "详细周到",
-                "conversational": "对话式",
-                "instructional": "指导式"
-            }.get(personality.get("style", "friendly"), "友好")
-            
-            formality_desc = {
-                "high": "高度正式（使用敬语）",
-                "moderate": "适度正式",
-                "low": "轻松口语化"
-            }.get(personality.get("formality", "moderate"), "适度")
-            
-            system_prompt = f"""你是 {employee_config.get('name', 'AI助手')}，{role}。
+            if web_results:
+                avg_web_score = sum(r.get("score", 0.5) for r in web_results) / len(web_results)
+                confidence = max(0.75, avg_web_score)
+        elif state.get("retrieved_docs"):
+            confidence = max(0.6, state.get("relevance_score", 0.7))
+        
+        state["confidence"] = confidence
+        state["final_answer"] = ""  # Placeholder
+        
+        logger.info(
+            "Ready for answer generation",
+            confidence=confidence,
+            web_search_used=state.get("web_search_used", False),
+            kb_docs_count=len(state.get("retrieved_docs", []))
+        )
+        
+        return state
+    
+    def build_generation_messages(self, state: ConversationState) -> List:
+        """Build messages for LLM generation (used by streaming methods)."""
+        employee_config = state.get("employee_config", {})
+        personality = employee_config.get("personality", {})
+        role = employee_config.get("role", "AI助手")
+        greeting = employee_config.get("greeting", "您好")
+        
+        # Build context from retrieved docs
+        context_parts = []
+        for i, doc in enumerate(state.get("retrieved_docs", [])[:3], 1):
+            context_parts.append(f"[知识库参考{i}]\n{doc.get('content', '')[:500]}")
+        
+        # Add web search results if available
+        web_results = state.get("web_search_results", [])
+        if web_results and state.get("web_search_used", False):
+            for i, web_result in enumerate(web_results[:3], 1):
+                web_context = f"[网络资料{i}]\n标题: {web_result.get('title', '')}\n内容: {web_result.get('content', '')[:400]}\n来源: {web_result.get('url', '')}"
+                context_parts.append(web_context)
+        
+        context_text = "\n\n".join(context_parts) if context_parts else "（暂无相关参考资料）"
+        
+        # Add information source indicator
+        source_indicator = ""
+        if state.get("web_search_used", False):
+            source_indicator = "（包含最新网络信息）"
+        elif state.get("retrieved_docs"):
+            source_indicator = "（基于知识库）"
+        
+        # Build personality-based system prompt
+        tone_desc = {
+            "professional": "专业严谨",
+            "friendly": "友好亲切",
+            "formal": "正式庄重",
+            "casual": "轻松随意"
+        }.get(personality.get("tone", "professional"), "专业")
+        
+        style_desc = {
+            "concise": "简明扼要",
+            "detailed": "详细周到",
+            "conversational": "对话式",
+            "instructional": "指导式"
+        }.get(personality.get("style", "friendly"), "友好")
+        
+        formality_desc = {
+            "high": "高度正式（使用敬语）",
+            "moderate": "适度正式",
+            "low": "轻松口语化"
+        }.get(personality.get("formality", "moderate"), "适度")
+        
+        system_prompt = f"""你是 {employee_config.get('name', 'AI助手')}，{role}。
 
 角色定位：
 {employee_config.get('description', '专业的AI助手')}
@@ -539,56 +650,21 @@ class ConversationWorkflow:
 {state['user_query']}
 
 请提供专业、准确的回答。"""
-            
-            # Build messages
-            messages = [SystemMessage(content=system_prompt)]
-            
-            # Add conversation history (last 5 turns)
-            for msg in state.get("context", {}).get("messages", [])[-5:]:
-                if msg.get("role") == "user":
-                    messages.append(HumanMessage(content=msg.get("content", "")))
-                elif msg.get("role") == "assistant":
-                    messages.append(AIMessage(content=msg.get("content", "")))
-            
-            # Current query
-            messages.append(HumanMessage(content=state["user_query"]))
-            
-            # Generate response
-            response = await self.llm.ainvoke(messages)
-            state["final_answer"] = response.content
-            
-            # Calculate confidence based on available information sources
-            confidence = 0.5  # Base confidence
-            if state.get("faq_matched"):
-                confidence = 0.95  # High confidence for FAQ matches
-            elif state.get("web_search_used", False):
-                # Web search results available
-                web_results = state.get("web_search_results", [])
-                if web_results:
-                    avg_web_score = sum(r.get("score", 0.5) for r in web_results) / len(web_results)
-                    confidence = max(0.75, avg_web_score)  # At least 0.75 for web results
-            elif state.get("retrieved_docs"):
-                # Use RAG relevance score
-                confidence = max(0.6, state.get("relevance_score", 0.7))
-            
-            state["confidence"] = confidence
-            
-            logger.info(
-                "Answer generated",
-                tone=personality.get('tone'),
-                style=personality.get('style'),
-                answer_length=len(state["final_answer"]),
-                confidence=confidence,
-                web_search_used=state.get("web_search_used", False),
-                kb_docs_count=len(state.get("retrieved_docs", []))
-            )
-            
-        except Exception as e:
-            logger.error("Answer generation failed", error=str(e), exc_info=True)
-            state["final_answer"] = "抱歉，我暂时无法回答这个问题。请稍后再试或联系人工客服。"
-            state["confidence"] = 0.0
         
-        return state
+        # Build messages
+        messages = [SystemMessage(content=system_prompt)]
+        
+        # Add conversation history (last 5 turns)
+        for msg in state.get("context", {}).get("messages", [])[-5:]:
+            if msg.get("role") == "user":
+                messages.append(HumanMessage(content=msg.get("content", "")))
+            elif msg.get("role") == "assistant":
+                messages.append(AIMessage(content=msg.get("content", "")))
+        
+        # Current query
+        messages.append(HumanMessage(content=state["user_query"]))
+        
+        return messages
     
     async def save_conversation(self, state: ConversationState) -> ConversationState:
         """Save conversation to database."""
@@ -671,6 +747,18 @@ class ConversationWorkflow:
         
         try:
             result = await self.workflow.ainvoke(state)
+            
+            # For non-streaming mode, actually generate the answer
+            if not result.get("final_answer") and not result.get("error"):
+                messages = self.build_generation_messages(result)
+                response = await self.llm.ainvoke(messages)
+                result["final_answer"] = response.content
+                
+                logger.info(
+                    "Answer generated (non-streaming)",
+                    answer_length=len(result["final_answer"]),
+                    confidence=result.get("confidence", 0.0)
+                )
             
             # Calculate response time
             end_time = datetime.now()

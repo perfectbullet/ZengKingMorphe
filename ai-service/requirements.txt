@@ -27,7 +27,7 @@ motor==3.3.2
 python-dotenv==1.0.0
 
 # HTTP client
-aiohttp==3.9.1
+# aiohttp==3.9.1
 
 # Web search
 tavily-python

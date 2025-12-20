@@ -371,35 +371,47 @@ async def generate_openai_stream_response(request: OpenAIChatRequest) -> AsyncGe
             }]
         })
         
-        # Stream workflow execution
-        content_sent = False
-        async for event in conversation_workflow.workflow.astream(initial_state):
-            node_name = list(event.keys())[0]
-            state_update = event[node_name]
-            
-            # Stream answer tokens when available
-            if node_name == "generate_answer" and state_update.get("final_answer"):
-                answer = state_update["final_answer"]
-                
-                # Stream by characters or small chunks for smoother output
-                chunk_size = 10  # Characters per chunk
-                for i in range(0, len(answer), chunk_size):
-                    chunk = answer[i:i+chunk_size]
-                    yield json.dumps({
-                        "id": chat_id,
-                        "object": "chat.completion.chunk",
-                        "created": created,
-                        "model": request.model,
-                        "choices": [{
-                            "index": 0,
-                            "delta": {"content": chunk},
-                            "finish_reason": None
-                        }]
-                    })
-                    content_sent = True
+        # Stream workflow execution and monitor for generate stage
+        should_generate = False
+        final_state = None
+        full_answer = ""
         
-        # Get final state
-        final_state = state_update
+        async for event in conversation_workflow.workflow.astream(initial_state, stream_mode="values"):
+            # Check if we've reached generation stage
+            if "confidence" in event and event.get("confidence", 0) > 0 and not should_generate:
+                should_generate = True
+                final_state = event
+            
+            # When ready to generate, do REAL streaming
+            if should_generate and final_state:
+                should_generate = False  # Only generate once
+                
+                # Build messages for LLM
+                messages = conversation_workflow.build_generation_messages(final_state)
+                
+                # TRUE token-level streaming from LLM
+                async for chunk in conversation_workflow.llm.astream(messages):
+                    token = chunk.content
+                    if token:
+                        full_answer += token
+                        yield json.dumps({
+                            "id": chat_id,
+                            "object": "chat.completion.chunk",
+                            "created": created,
+                            "model": request.model,
+                            "choices": [{
+                                "index": 0,
+                                "delta": {"content": token},
+                                "finish_reason": None
+                            }]
+                        })
+                
+                # Update state with generated answer
+                final_state["final_answer"] = full_answer
+        
+        # If no final_state yet, use last event
+        if final_state is None:
+            final_state = event
         
         # Format source attribution
         sources = format_sources(
