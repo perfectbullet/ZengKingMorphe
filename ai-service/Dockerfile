@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.6
+# syntax=docker/dockerfile:latest
 
 ########################################
 # 基础镜像：统一系统依赖

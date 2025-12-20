@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.db
+*.sqlite3
+*.egg-info/
+*.log
+
+# Jupyter
+.ipynb_checkpoints/
+
+# VSCode
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.git
+.gitignore
+
+# Docker
+Dockerfile*
+!Dockerfile
+!Dockerfile-template
+
+docs/
+docs-history/
+
+# Env
+.env
+.env.*
+
+# Test outputs
+htmlcov/
+.coverage
+.cache/
+
+# Node/npm
+node_modules/
+
+# Others
+*.bak
+*.swp
+*.tmp
+
+# Ignore local data
+sftp_sync_config.yaml
