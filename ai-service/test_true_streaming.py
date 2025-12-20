@@ -67,28 +67,29 @@ async def test_streaming_endpoint(url: str, query: str, name: str):
                             continue
                         
                         data = json.loads(data_str)
-                        
+                        print(f"\n--- 接收到数据块 ---\n{data}\n")
+
                         # 处理不同格式的token
-                        token = None
-                        if data.get("type") == "token":
-                            token = data.get("content", "")
-                        elif "choices" in data:
-                            delta = data["choices"][0].get("delta", {})
-                            token = delta.get("content", "")
+                        # token = None
+                        # if data.get("type") == "token":
+                        #     token = data.get("content", "")
+                        # elif "choices" in data:
+                        #     delta = data["choices"][0].get("delta", {})
+                        #     token = delta.get("content", "")
                         
-                        if token:
-                            token_count += 1
-                            interval = current_time - last_token_time
-                            token_times.append(interval)
-                            last_token_time = current_time
+                        # if token:
+                        #     token_count += 1
+                        #     interval = current_time - last_token_time
+                        #     token_times.append(interval)
+                        #     last_token_time = current_time
                             
-                            # 实时显示token
-                            print(token, end="", flush=True)
-                            full_response += token
+                        #     # 实时显示token
+                        #     print(token, end="", flush=True)
+                        #     full_response += token
                             
-                            # 显示token间隔（前10个）
-                            if token_count <= 10:
-                                print(f"  [{interval:.3f}s]", end="", flush=True)
+                        #     # 显示token间隔（前10个）
+                        #     if token_count <= 10:
+                        #         print(f"  [{interval:.3f}s]", end="", flush=True)
                     
                     except json.JSONDecodeError:
                         continue

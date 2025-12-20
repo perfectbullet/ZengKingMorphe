@@ -746,6 +746,7 @@ class ConversationWorkflow:
         start_time = datetime.now()
         
         try:
+            # Execute the workflow， get the final state
             result = await self.workflow.ainvoke(state)
             
             # For non-streaming mode, actually generate the answer
