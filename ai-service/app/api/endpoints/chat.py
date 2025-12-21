@@ -480,6 +480,13 @@ async def generate_openai_stream_response(
             }
         )
 
+@router.get("/v1")
+async def chat_v1_health_check():
+    """
+    用于API Key验证或健康检查的占位接口。
+    """
+    return {"status": "ok", "message": "API Key valid (mocked)"}
+
 
 @router.post("/v1/chat/completions")
 async def openai_chat_completions(
