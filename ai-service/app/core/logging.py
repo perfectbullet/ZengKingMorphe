@@ -30,7 +30,7 @@ def setup_logging() -> None:
             (
                 structlog.dev.ConsoleRenderer()
                 if settings.debug
-                else structlog.processors.JSONRenderer()
+                else structlog.processors.JSONRenderer(ensure_ascii=False)
             ),
         ],
         wrapper_class=structlog.make_filtering_bound_logger(
