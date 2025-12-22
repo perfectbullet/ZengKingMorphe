@@ -24,13 +24,13 @@ import requests
 from typing import Iterator, Optional
 
 
-def build_body(model: str, query: str, stream: bool, employee_id: Optional[str],
+def build_body(model: str, query: str, employee_id: Optional[str],
                user_id: Optional[str], session_id: Optional[str]) -> dict:
     messages = [{"role": "user", "content": query}]
     body = {
         "model": model,
         "messages": messages,
-        "stream": stream,
+        "stream": True,
         "employee_id": employee_id or "default",
         "user_id": user_id or "anonymous",
         "session_id": session_id,
@@ -87,7 +87,7 @@ def handle_stream_payloads(payload_iter: Iterator[str]) -> int:
 
             # 流式 chunk
             if obj.get("object") == "chat.completion.chunk":
-                print(obj)
+                # print(obj)
                 choices = obj.get("choices", []) or []
                 for choice in choices:
                     # 输出增量内容（delta.content）
@@ -95,10 +95,10 @@ def handle_stream_payloads(payload_iter: Iterator[str]) -> int:
                     
                     content = delta.get("content")
                     # print(delta)
-                    # if content:
-                    #     # 不换行，直接 flush
-                    #     sys.stdout.write(content)
-                    #     sys.stdout.flush()
+                    if content:
+                        # 不换行，直接 flush
+                        sys.stdout.write(content)
+                        sys.stdout.flush()
                     # 检查 finish_reason
                     finish = choice.get("finish_reason")
                     if finish == "stop":
@@ -139,7 +139,7 @@ def handle_stream_payloads(payload_iter: Iterator[str]) -> int:
 
 
 def run_stream(host: str, body: dict, api_key: Optional[str], timeout: int = 60) -> int:
-    url = host.rstrip("/") + "/api/chat/openai/chat/completions"
+    url = host.rstrip("/") + "/api/chat/v1/chat/completions"
     headers = {
         "Content-Type": "application/json",
         "Accept": "text/event-stream",
@@ -157,70 +157,29 @@ def run_stream(host: str, body: dict, api_key: Optional[str], timeout: int = 60)
             payload_iter = iter_sse_payloads(resp)
             return handle_stream_payloads(payload_iter)
     except requests.RequestException as e:
-        print("Request error:", str(e), file=sys.stderr)
+        print(f"Request error: url is {url}", str(e), file=sys.stderr)
         return 2
 
 
-def run_non_stream(host: str, body: dict, api_key: Optional[str], timeout: int = 30) -> int:
-    url = host.rstrip("/") + "/api/chat/openai/chat/completions"
-    headers = {"Content-Type": "application/json", "Accept": "application/json"}
-    if api_key:
-        headers["X-API-Key"] = api_key
-
-    try:
-        resp = requests.post(url, json=body, headers=headers, timeout=timeout)
-        try:
-            resp.raise_for_status()
-        except requests.HTTPError:
-            print(f"HTTP error {resp.status_code}:", resp.text, file=sys.stderr)
-            return 2
-        # 处理最终 JSON
-        try:
-            data = resp.json()
-        except Exception as e:
-            print("Failed to parse JSON:", e, file=sys.stderr)
-            print(resp.text, file=sys.stderr)
-            return 2
-        # 复用流式处理的非流式分支打印
-        if data.get("object") == "chat.completion":
-            choices = data.get("choices", []) or []
-            if choices:
-                first = choices[0]
-                message = first.get("message") or {}
-                content = message.get("content")
-                if content:
-                    print(content)
-            print("\n--- metadata ---")
-            print(json.dumps(data, ensure_ascii=False, indent=2))
-            return 0
-        else:
-            print(json.dumps(data, ensure_ascii=False, indent=2))
-            return 0
-    except requests.RequestException as e:
-        print("Request failed:", str(e), file=sys.stderr)
-        return 2
-
+ 
 
 def main():
     parser = argparse.ArgumentParser(description="OpenAI-style streaming test client")
-    parser.add_argument("--host", default="http://127.0.0.1:8100", help="Base host (including port)")
+    parser.add_argument("--host", default="http://192.168.8.230:8100", help="Base host (including port)")
     parser.add_argument("--employee_id", default="hutao", help="Employee ID")
     parser.add_argument("--user_id", default="user_123456", help="User ID")
-    parser.add_argument("--session_id", default=None, help="Session ID")
+    parser.add_argument("--session_id", default='sess_20251222_abc123', help="Session ID")
     parser.add_argument("--model", default="qwen2.5:7b", help="Model name")
-    parser.add_argument("--stream", action="store_true", help="Enable streaming (SSE)")
+    
     parser.add_argument("--query", required=True, help="User query text")
     parser.add_argument("--timeout", type=int, default=60, help="Stream timeout seconds")
     args = parser.parse_args()
 
     api_key = os.environ.get("API_KEY")
-    body = build_body(args.model, args.query, args.stream, args.employee_id, args.user_id, args.session_id)
+    body = build_body(args.model, args.query, args.employee_id, args.user_id, args.session_id)
 
-    if args.stream:
-        rc = run_stream(args.host, body, api_key, timeout=args.timeout)
-    else:
-        rc = run_non_stream(args.host, body, api_key, timeout=args.timeout)
-
+    rc = run_stream(args.host, body, api_key, timeout=args.timeout)
+ 
     sys.exit(rc)
 
 

@@ -104,6 +104,16 @@ class MongoDB:
                 IndexModel([("date", DESCENDING)]),
             ])
             
+            # Stream chunks collection indexes
+            await self.db.stream_chunks.create_indexes([
+                IndexModel([("chunk_id", ASCENDING)], unique=True),
+                IndexModel([("session_id", ASCENDING), ("sequence", ASCENDING)]),
+                IndexModel([("user_id", ASCENDING), ("created_at", DESCENDING)]),
+                IndexModel([("employee_id", ASCENDING), ("created_at", DESCENDING)]),
+                IndexModel([("chat_id", ASCENDING), ("sequence", ASCENDING)]),
+                IndexModel([("created_at", DESCENDING)]),
+            ])
+            
             logger.info("Created MongoDB indexes")
             
         except Exception as e:

@@ -158,3 +158,18 @@ class DocumentTaskModel(BaseModel):
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class StreamChunkModel(BaseModel):
+    """Streaming chunk model for OpenAI-style chat completions."""
+    chunk_id: str
+    conversation_id: Optional[str] = None
+    session_id: str
+    user_id: str
+    employee_id: str
+    chat_id: str  # OpenAI-style chat completion ID
+    chunk_type: str  # start/role/token/progress/done/error
+    chunk_data: Dict[str, Any] = Field(default_factory=dict)  # Full chunk payload
+    sequence: int = 0  # Chunk sequence number
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=datetime.utcnow)

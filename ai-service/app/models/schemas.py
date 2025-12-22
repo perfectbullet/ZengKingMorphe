@@ -136,7 +136,7 @@ class OpenAIChatRequest(BaseModel):
     employee_id: str = Field(default="hutao", description="Digital employee ID")
     user_id: str = Field('user_123456', description="User ID")
     session_id: Optional[str] = Field('sess_20251218_abc123', description="Session ID")
-
+    session_id2: Optional[str] = Field('session_id2_default', description="Secondary Session ID")
 
 # Session API Schemas
 class SessionResponse(BaseModel):
@@ -324,6 +324,41 @@ class ConversationStatisticsQuery(BaseModel):
     end_date: str = Field(..., description="End date")
     dimension: Optional[str] = Field(None, description="Dimension: time/user/employee/intent/kb")
     employee_id: Optional[str] = None
+
+
+class StreamChunkQuery(BaseModel):
+    """Stream chunk query parameters."""
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "user_id": "user_123456",
+                "employee_id": "hutao",
+                "session_id": "sess_20251218_abc123",
+                "chat_id": "chatcmpl-abc123",
+                "start_date": "2025-12-01",
+                "end_date": "2025-12-22",
+                "page": 1,
+                "page_size": 50
+            }
+        }
+    )
+    
+    user_id: Optional[str] = Field(None, description="User ID")
+    employee_id: Optional[str] = Field(None, description="Employee ID")
+    session_id: Optional[str] = Field(None, description="Session ID")
+    chat_id: Optional[str] = Field(None, description="Chat completion ID")
+    chunk_type: Optional[str] = Field(None, description="Chunk type filter")
+    start_date: Optional[str] = Field(None, description="Start date (YYYY-MM-DD)")
+    end_date: Optional[str] = Field(None, description="End date (YYYY-MM-DD)")
+    page: int = Field(default=1, ge=1, description="Page number")
+    page_size: int = Field(default=50, ge=1, le=200, description="Page size")
+
+
+class StreamChunkResponse(BaseModel):
+    """Stream chunk response schema."""
+    code: int = 200
+    message: str = "success"
+    data: Dict[str, Any]
 
 
 # Error Response Schema

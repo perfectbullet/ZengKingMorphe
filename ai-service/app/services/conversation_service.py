@@ -202,7 +202,7 @@ class ConversationWorkflow:
                 # 回退：保存 repr 以便调试
                 repr_text = repr(graph_view)
                 (output_dir / "crag_graph_view_repr.txt").write_text(repr_text, encoding="utf-8")
-                print(f"⚠️ Mermaid source unavailable, saved repr to crag_graph_view_repr.txt")
+                print("⚠️ Mermaid source unavailable, saved repr to crag_graph_view_repr.txt")
 
             # 尝试远程渲染（如果启用）
             if use_remote and mermaid_src:
@@ -220,16 +220,16 @@ class ConversationWorkflow:
                     (output_dir / "crag_graph_render_error.txt").write_text(
                         str(remote_exc), encoding="utf-8"
                     )
-                    print(f"⚠️ Remote rendering failed (see crag_graph_render_error.txt)")
-                    print(f"💡 Use local rendering: Set CRAG_RENDER_REMOTE=0 or install pyppeteer")
+                    print("⚠️ Remote rendering failed (see crag_graph_render_error.txt)")
+                    print("💡 Use local rendering: Set CRAG_RENDER_REMOTE=0 or install pyppeteer")
 
             # 本地渲染建议（如果远程失败）
             if not use_remote and mermaid_src:
-                print(f"ℹ️ Mermaid source available at {mermaid_path}")
-                print(f"💡 To render locally:")
-                print(f"   1. Install mermaid-cli: npm install -g @mermaid-js/mermaid-cli")
-                print(f"   2. Run: mmdc -i {mermaid_path} -o {output_dir / 'crag_graph.png'}")
-                print(f"   OR set CRAG_RENDER_REMOTE=1 to use remote API")
+                print("ℹ️ Mermaid source available at {mermaid_path}")
+                print("💡 To render locally:")
+                print("   1. Install mermaid-cli: npm install -g @mermaid-js/mermaid-cli")
+                print("   2. Run: mmdc -i {mermaid_path} -o {output_dir / 'crag_graph.png'}")
+                print("   OR set CRAG_RENDER_REMOTE=1 to use remote API")
 
         except Exception as exc:
             logger.error(f"Graph debug dump failed: {exc}", exc_info=True)
