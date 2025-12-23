@@ -5,7 +5,7 @@ OpenAI-style streaming client for /api/chat/openai/chat/completions.
 
 依赖: requests
 用法示例:
-  python ai-service/scripts/stream_client.py --host http://192.168.8.230:8100 --employee_id hutao --user_id user_123456 --session_id sess_20251218_abc123 --query "我刚刚问了什么问题" --stream
+  python ai-service/scripts/stream_client.py --host http://192.168.8.230:8100 --employee_id hutao --user_id user_123456 --session_id sess_20251218_abc123 --query "我刚刚问了什么问题"
 
 脚本特点:
 - 支持参数化 host/employee_id/user_id/session_id/model/stream/query
@@ -20,6 +20,7 @@ import argparse
 import json
 import os
 import sys
+import time
 import requests
 from typing import Iterator, Optional
 
@@ -62,11 +63,12 @@ def iter_sse_payloads(resp: requests.Response) -> Iterator[str]:
         yield payload
 
 
-def handle_stream_payloads(payload_iter: Iterator[str]) -> int:
+def handle_stream_payloads(payload_iter: Iterator[str], start_time: float) -> int:
     """
     处理 SSE payload 迭代器。
     返回 0 表示正常结束，非 0 表示出错。
     """
+    first_token_latency = None
     try:
         for payload in payload_iter:
             if payload == "[DONE]":
@@ -96,6 +98,10 @@ def handle_stream_payloads(payload_iter: Iterator[str]) -> int:
                     content = delta.get("content")
                     # print(delta)
                     if content:
+                        # 计算并打印首 token 延迟
+                        if first_token_latency is None:
+                            first_token_latency = time.perf_counter() - start_time
+                            print(f"⏱️ First token latency: {first_token_latency*1000:.2f}ms\n", file=sys.stderr)
                         # 不换行，直接 flush
                         sys.stdout.write(content)
                         sys.stdout.flush()
@@ -148,14 +154,17 @@ def run_stream(host: str, body: dict, api_key: Optional[str], timeout: int = 60)
         headers["X-API-Key"] = api_key
 
     try:
+        start_time = time.perf_counter()
         with requests.post(url, json=body, headers=headers, stream=True, timeout=(5, timeout)) as resp:
             try:
                 resp.raise_for_status()
             except requests.HTTPError:
                 print(f"HTTP error {resp.status_code}:", resp.text, file=sys.stderr)
                 return 2
+            ttfb = time.perf_counter() - start_time
+            print(f"✅ Connection established (status: {resp.status_code}) - TTFB: {ttfb*1000:.2f}ms", file=sys.stderr)
             payload_iter = iter_sse_payloads(resp)
-            return handle_stream_payloads(payload_iter)
+            return handle_stream_payloads(payload_iter, start_time)
     except requests.RequestException as e:
         print(f"Request error: url is {url}", str(e), file=sys.stderr)
         return 2

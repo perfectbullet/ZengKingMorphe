@@ -40,7 +40,7 @@ async def test_streaming_chat():
     payload = {
         "model": "qwen3:32b",
         "messages": [
-            {"role": "user", "content": "原神里面的巴巴托斯是谁？"}
+            {"role": "user", "content": "失蜡铸造原理"}
         ],
         "stream": True,
         "employee_id": TEST_EMPLOYEE_ID,
