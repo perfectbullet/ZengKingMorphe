@@ -12,10 +12,11 @@ Usage:
 import asyncio
 import aiohttp
 import json
+import time
 from datetime import datetime
 
 # API Configuration
-BASE_URL = "http://localhost:8100"  # Change to 8000 if running locally
+BASE_URL = "http://192.168.8.230:8100"  # Change to 8000 if running locally
 API_KEY = "test-key"  # Add your API key if auth is enabled
 
 # Test data
@@ -39,7 +40,7 @@ async def test_streaming_chat():
     payload = {
         "model": "qwen3:32b",
         "messages": [
-            {"role": "user", "content": "介绍一下首饰制作的雕蜡工艺"}
+            {"role": "user", "content": "原神里面的巴巴托斯是谁？"}
         ],
         "stream": True,
         "employee_id": TEST_EMPLOYEE_ID,
@@ -49,13 +50,15 @@ async def test_streaming_chat():
     
     try:
         async with aiohttp.ClientSession() as session:
+            start_time = time.perf_counter()
             async with session.post(url, headers=headers, json=payload) as response:
                 if response.status != 200:
                     error_text = await response.text()
                     print(f"❌ Error: {response.status} - {error_text}")
                     return None
                 
-                print(f"✅ Connection established (status: {response.status})")
+                ttfb = time.perf_counter() - start_time
+                print(f"✅ Connection established (status: {response.status}) in {ttfb*1000:.2f}ms")
                 print(f"📝 Session ID: {TEST_SESSION_ID}")
                 print(f"👤 User ID: {TEST_USER_ID}")
                 print(f"🤖 Employee ID: {TEST_EMPLOYEE_ID}")
@@ -64,6 +67,7 @@ async def test_streaming_chat():
                 chat_id = None
                 chunk_count = 0
                 full_content = ""
+                first_token_latency = None
                 
                 # Read SSE stream
                 async for line in response.content:
@@ -97,6 +101,10 @@ async def test_streaming_chat():
                                 print(f"[Chunk {chunk_count}] Role: {delta['role']}")
                             
                             if "content" in delta:
+                                if first_token_latency is None and delta["content"]:
+                                    first_token_latency = time.perf_counter() - start_time
+                                    print(f"⏱️ First token latency: {first_token_latency*1000:.2f}ms\n")
+                                
                                 content = delta["content"]
                                 full_content += content
                                 print(content, end="", flush=True)
@@ -108,7 +116,7 @@ async def test_streaming_chat():
                                 # Print metadata if available
                                 if "metadata" in chunk_data:
                                     metadata = chunk_data["metadata"]
-                                    print(f"\n📊 Metadata:")
+                                    print("\n📊 Metadata:")
                                     print(f"  - Conversation ID: {metadata.get('conversation_id')}")
                                     print(f"  - Confidence: {metadata.get('confidence')}")
                                     print(f"  - KB Used: {metadata.get('kb_used')}")
@@ -122,9 +130,10 @@ async def test_streaming_chat():
                         print(f"\n⚠️ Failed to parse chunk: {line_text[:100]}")
                         continue
                 
-                print(f"\n\n📊 Summary:")
+                print("\n\n📊 Summary:")
                 print(f"  - Total chunks received: {chunk_count}")
                 print(f"  - Content length: {len(full_content)} chars")
+                print(f"  - First token latency: {f'{first_token_latency*1000:.2f}ms' if first_token_latency else 'N/A'}")
                 print(f"  - Chat ID: {chat_id}")
                 
                 return chat_id
@@ -186,7 +195,7 @@ async def test_query_chunks(chat_id=None):
         "user_id": TEST_USER_ID,
         "employee_id": TEST_EMPLOYEE_ID,
         "page": 1,
-        "page_size": 50
+        "page_size": 200
     }
     
     try:
@@ -231,7 +240,7 @@ async def test_query_chunks(chat_id=None):
                             chunk_type = chunk.get("chunk_type")
                             sequence = chunk.get("sequence")
                             timestamp = chunk.get("timestamp", "N/A")
-                            print(f"  [{i}] Seq: {sequence}, Type: {chunk_type}, Time: {timestamp}")
+                            # print(f"  [{i}] Seq: {sequence}, Type: {chunk_type}, Time: {timestamp}")
                     else:
                         error_text = await response.text()
                         print(f"❌ Error: {response.status} - {error_text}")
@@ -239,7 +248,7 @@ async def test_query_chunks(chat_id=None):
             print(f"❌ Exception: {e}")
     
     # Test Case 4: Query only 'token' chunks
-    print(f"\n📋 Test Case 4: Query only 'token' type chunks")
+    print("\n📋 Test Case 4: Query only 'token' type chunks")
     params = {
         "session_id": TEST_SESSION_ID,
         "chunk_type": "token",
