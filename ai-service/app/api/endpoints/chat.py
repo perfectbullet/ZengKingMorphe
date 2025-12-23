@@ -456,7 +456,7 @@ async def generate_openai_stream_response(
                 messages = conversation_workflow.build_generation_messages(final_state)
 
                 # TRUE token-level streaming from LLM
-                # 这里是用 conversation_workflow.llm.astream 的流式输出
+                # 这里是用 conversation_workflow.llm.astream 的流式输出，
                 async for chunk in conversation_workflow.llm.astream(messages):
                     token = chunk.content
                     if token:
