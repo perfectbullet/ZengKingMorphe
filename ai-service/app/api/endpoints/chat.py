@@ -456,6 +456,7 @@ async def generate_openai_stream_response(
                 messages = conversation_workflow.build_generation_messages(final_state)
 
                 # TRUE token-level streaming from LLM
+                # 这里是用 conversation_workflow.llm.astream 的流式输出
                 async for chunk in conversation_workflow.llm.astream(messages):
                     token = chunk.content
                     if token:
@@ -639,89 +640,11 @@ async def openai_chat_completions(
             # Return streaming response
             return EventSourceResponse(generate_openai_stream_response(request))
         else:
-            # Non-streaming response
-            import time
-
-            # Extract user query
-            user_query = ""
-            for msg in reversed(request.messages):
-                if msg.role == "user":
-                    user_query = msg.content
-                    break
-
-            session_id = (
-                request.session_id
-                or f"sess_{hashlib.md5(f'{request.user_id}_{datetime.now().timestamp()}'.encode()).hexdigest()[:12]}"
+            # Non-streaming response (not implemented in this snippet)
+            raise HTTPException(
+                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                detail="没有实现非流式响应",
             )
-            chat_id = f"chatcmpl-{hashlib.md5(f'{session_id}_{time.time()}'.encode()).hexdigest()[:12]}"
-            created = int(time.time())
-
-            # Build initial state
-            initial_state: ConversationState = {
-                "messages": [],
-                "user_query": user_query,
-                "user_id": request.user_id,
-                "session_id": session_id,
-                "employee_id": request.employee_id,
-                "employee_config": {},
-                "is_realtime_query": False,
-                "realtime_category": "",
-                "realtime_detect_reason": "",
-                "intent": "",
-                "entities": {},
-                "retrieved_docs": [],
-                "relevance_score": 0.0,
-                "web_search_results": [],
-                "final_answer": "",
-                "confidence": 0.0,
-                "context": {},
-                "has_sensitive": False,
-                "error": None,
-                "faq_matched": None,
-                "kb_used": [],
-                "web_search_used": False,
-                "conversation_id": "",
-                "response_time_ms": 0,
-            }
-
-            # Run workflow
-            result = await conversation_workflow.run(initial_state)
-
-            # Format source attribution
-            sources = format_sources(
-                retrieved_docs=result.get("retrieved_docs", []),
-                web_search_results=result.get("web_search_results", []),
-            )
-
-            # Return OpenAI-formatted response
-            return {
-                "id": chat_id,
-                "object": "chat.completion",
-                "created": created,
-                "model": request.model,
-                "choices": [
-                    {
-                        "index": 0,
-                        "message": {
-                            "role": "assistant",
-                            "content": result["final_answer"],
-                        },
-                        "finish_reason": "stop",
-                    }
-                ],
-                "usage": {
-                    "prompt_tokens": len(user_query),
-                    "completion_tokens": len(result["final_answer"]),
-                    "total_tokens": len(user_query) + len(result["final_answer"]),
-                },
-                "metadata": {
-                    "conversation_id": result["conversation_id"],
-                    "confidence": result.get("confidence", 0.0),
-                    "kb_used": result.get("kb_used", []),
-                    "web_search_used": result.get("web_search_used", False),
-                    "sources": sources,
-                },
-            }
 
     except HTTPException:
         raise
