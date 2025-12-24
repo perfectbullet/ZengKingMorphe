@@ -432,22 +432,94 @@ async def generate_openai_stream_response(
         full_answer = ""
 
         async for event in conversation_workflow.workflow.astream(
-            initial_state, stream_mode="values"
+            initial_state, stream_mode="updates"
         ):
-            # 通过 async for event in conversation_workflow.workflow.astream(
-            # initial_state, stream_mode="values")，逐步异步执行 LangGraph 的每个节点
-            # （如 config/session/FAQ/RAG/web_search/grade/generate）。
-            # 每到一个节点，event 就是当前节点执行后的最新 state，可以随时中断、分支或提前生成。
+            # 使用 stream_mode="updates" 来获取节点级别的更新
+            # event 格式: {node_name: state_update}
+            node_name = list(event.keys())[0] if event else None
+            state_update = event.get(node_name, {}) if node_name else {}
+            
+            # 检测 knowledge_retrieval 节点并发送状态提示
+            if node_name == "knowledge_retrieval":
+                status_token = "正在查询知识库\n"
+                status_chunk_data = {
+                    "id": chat_id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": "knowledge_retrieval",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"content": status_token},
+                            "finish_reason": None,
+                        }
+                    ],
+                }
+                
+                # 保存状态 chunk 到数据库
+                chunk_sequence += 1
+                status_chunk_record = StreamChunkModel(
+                    chunk_id=f"{chat_id}_chunk_{chunk_sequence}",
+                    conversation_id=None,
+                    session_id=session_id,
+                    user_id=request.user_id,
+                    employee_id=request.employee_id,
+                    chat_id=chat_id,
+                    chunk_type="token",
+                    chunk_data=status_chunk_data,
+                    sequence=chunk_sequence,
+                    timestamp=datetime.utcnow(),
+                    created_at=datetime.utcnow()
+                )
+                await db.stream_chunks.insert_one(status_chunk_record.model_dump())
+                
+                yield json.dumps(status_chunk_data)
+                
+            # 检测 web_search 节点并发送状态提示
+            elif node_name == "web_search":
+                status_token = "正在网络搜索\n"
+                status_chunk_data = {
+                    "id": chat_id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": "web_search",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"content": status_token},
+                            "finish_reason": None,
+                        }
+                    ],
+                }
+                
+                # 保存状态 chunk 到数据库
+                chunk_sequence += 1
+                status_chunk_record = StreamChunkModel(
+                    chunk_id=f"{chat_id}_chunk_{chunk_sequence}",
+                    conversation_id=None,
+                    session_id=session_id,
+                    user_id=request.user_id,
+                    employee_id=request.employee_id,
+                    chat_id=chat_id,
+                    chunk_type="token",
+                    chunk_data=status_chunk_data,
+                    sequence=chunk_sequence,
+                    timestamp=datetime.utcnow(),
+                    created_at=datetime.utcnow()
+                )
+                await db.stream_chunks.insert_one(status_chunk_record.model_dump())
+                
+                yield json.dumps(status_chunk_data)
 
             # Check if we've reached generation stage
             if (
-                "confidence" in event
-                and event.get("confidence", 0) > 0
+                "confidence" in state_update
+                and state_update.get("confidence", 0) > 0
                 and not should_generate
             ):
                 should_generate = True
-                final_state = event
-
+                final_state = state_update
+            
             # When ready to generate, do REAL streaming
             if should_generate and final_state:
                 should_generate = False  # Only generate once

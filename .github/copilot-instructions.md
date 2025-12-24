@@ -158,9 +158,9 @@ AI service calls Java backend via `JAVA_API_BASE_URL` for:
 **Important**: Java platform URLs are hardcoded in config, ensure `.env` has correct `JAVA_API_BASE_URL`.
 
 ### External APIs
-- **Tavily** (`tavily_api_key`): Web search fallback when RAG fails (**currently placeholder** - see web_search node)
+- **Tavily** (`tavily_api_key`): Web search fully implemented - triggers on realtime queries or low RAG relevance
 - **OpenAI/SiliconFlow**: LLM + Embeddings
-  - Embeddings: text-embedding-3-small OR BAAI/bge-large-zh-v1.5
+  - Embeddings: text-embedding-3-small OR BAAI/bge-large-zh-v1.5 (auto-truncated to max token limit)
   - LLM: DeepSeek-V3 (default) OR qwen2.5:7b (Ollama)
 
 ### Database Schemas
@@ -205,7 +205,7 @@ Keyword-based detection using hardcoded categories ([conversation_service.py:291
 - `news`: ["新闻", "热点", "最新", ...]
 - `market`: ["股价", "汇率", "行情", ...]
 
-When detected, query bypasses RAG and goes directly to web search (which is currently unimplemented).
+When detected, query bypasses RAG and goes directly to web search.
 
 ## Common Modification Patterns
 
@@ -232,15 +232,56 @@ OLLAMA_MODEL=qwen2.5:7b
 ### Adding Knowledge Base Filters
 Update employee config `capabilities.kb_ids` to restrict RAG search scope. The `rag_retrieval.search()` call automatically filters by `kb_ids` if provided.
 
+### Streaming Implementation
+**Fully integrated SSE streaming** via `sse-starlette` ([chat.py:166-293](ai-service/app/api/endpoints/chat.py#L166-L293)):
+- **Two streaming modes**:
+  1. Native SSE: `POST /api/chat/stream` - Custom format with sources metadata
+  2. OpenAI-compatible: `POST /v1/chat/completions?stream=true` - Standard OpenAI SSE format
+- **Token-level streaming**: LLM tokens streamed in real-time via `EventSourceResponse`
+- **Chunk persistence**: All stream chunks saved to MongoDB (`stream_chunks` collection) with:
+  - Chunk types: `user_query`, `role`, `token`, `done`, `error`
+  - Full metadata: `chat_id`, `conversation_id`, `session_id`, `sequence`, `timestamp`
+  - Query API: `GET /api/chat/stream/chunks` with multi-dimension filters
+- **Test client**: [stream_client.py](ai-service/scripts/stream_client.py) - Full-featured SSE client for testing
+- **Implementation detail**: Streaming bypasses LangGraph's standard execution - directly invokes `self.llm.astream()` after workflow preparation
+
+### Source Attribution
+**Automatic source tracking** in all chat responses ([chat.py:26-73](ai-service/app/api/endpoints/chat.py#L26-L73)):
+- `format_sources()` helper extracts top 3 RAG docs + top 5 web results
+- **RAG sources** include: `doc_id`, `kb_id`, `content_snippet` (200 chars), `score`, `chunk_index`
+- **Web sources** include: `title`, `url`, `score`, `rank`
+- Sources returned in both streaming (`sources` event) and non-streaming modes
+- Enables answer traceability and fact-checking workflows
+
+### Async Document Upload
+**Background task processing** via `TaskProcessor` ([task_processor.py](ai-service/app/services/task_processor.py)):
+- Set `async_mode=true` in document upload to get immediate task ID
+- Upload endpoint: `POST /api/knowledge_base/documents/upload?async_mode=true`
+- Task tracking: `GET /api/knowledge_base/tasks/{task_id}` returns status/progress/result
+- Task cancellation: `DELETE /api/knowledge_base/tasks/{task_id}`
+- **Queue system**: `asyncio.Queue` with concurrent worker processing (auto-started in app lifespan)
+- **Progress tracking**: Real-time percentage (0-100%) for chunking/vectorization progress
+
 ## Known Limitations & TODOs
 - **Sensitive word filtering**: AC automaton engine not implemented
-- **Streaming**: Framework exists but not integrated with LangGraph workflow
 - **Auth**: Middleware exists but `api_keys` list empty (auth disabled)
-- **Test coverage**: Minimal (only conftest + standalone chroma test + web search test)
+- **Test coverage**: Minimal (basic conftest + standalone DB tests)
+- **Rate limiting**: Middleware exists but not enforced
 
 ## Key Files Reference
-- [conversation_service.py](ai-service/app/services/conversation_service.py) - LangGraph workflow (12 nodes, 441 lines)
+- [conversation_service.py](ai-service/app/services/conversation_service.py) - LangGraph workflow (12 nodes, 800+ lines)
+- [chat.py](ai-service/app/api/endpoints/chat.py) - Chat endpoints with streaming/sources (800+ lines)
 - [rag_service.py](ai-service/app/services/rag_service.py) - Hybrid search (RRF fusion, 300 lines)
+- [task_processor.py](ai-service/app/services/task_processor.py) - Async task queue system
 - [config.py](ai-service/app/core/config.py) - Pydantic settings (50+ env vars)
 - [main.py](ai-service/main.py) - FastAPI app + lifespan management
+- [stream_client.py](ai-service/scripts/stream_client.py) - OpenAI-compatible test client
 - [docker-compose.yml](docker-compose.yml) - 4-service orchestration
+
+## Testing Tools & Scripts
+- **Web search**: `python ai-service/tests/test_web_search.py` - Validate Tavily integration
+- **ChromaDB**: `python ai-service/tests/test_chroma_standalone.py` - DB connectivity
+- **Ollama**: `python ai-service/tests/test_ollama_embedding.py` - Local LLM validation
+- **Streaming**: `python ai-service/scripts/stream_client.py --host http://localhost:8100 --query "test"` - Full SSE client
+- **Chunks**: `python ai-service/tests/test_stream_chunks.py` - Chunk storage/retrieval validation
+- **Always use venv**: `D:/zenking_work/metahuman_work/ZengKingMorphe/.venv/Scripts/python.exe <script>`

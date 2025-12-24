@@ -105,6 +105,7 @@ def handle_stream_payloads(payload_iter: Iterator[str], start_time: float) -> in
                         # 不换行，直接 flush
                         sys.stdout.write(content)
                         sys.stdout.flush()
+                        print('time:', time.time())
                     # 检查 finish_reason
                     finish = choice.get("finish_reason")
                     if finish == "stop":
