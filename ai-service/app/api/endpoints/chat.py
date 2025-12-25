@@ -680,7 +680,7 @@ async def openai_chat_completions(
     """
     兼容 OpenAI 的对话补全接口
 
-    支持流式传输和非流式传输两种模式
+    支持流式传输模式
 
     与 OpenAI 软件开发工具包（SDK）及应用程序接口（API）格式完全兼容
 
