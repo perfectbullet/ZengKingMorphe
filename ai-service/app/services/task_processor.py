@@ -34,7 +34,8 @@ class DocumentTaskProcessor:
         kb_id: str,
         filename: str,
         file_path: str,
-        category: Optional[str] = None
+        category: Optional[str] = None,
+        chunk_config: Optional[Dict] = None  # Custom chunk configuration
     ) -> str:
         """
         Submit a new document processing task.
@@ -44,6 +45,7 @@ class DocumentTaskProcessor:
             filename: Original filename
             file_path: Path to uploaded file
             category: Document category
+            chunk_config: Custom chunking configuration (optional)
             
         Returns:
             Task ID
@@ -58,7 +60,8 @@ class DocumentTaskProcessor:
             filename=filename,
             file_path=file_path,
             category=category,
-            status="pending"
+            status="pending",
+            metadata={"chunk_config": chunk_config} if chunk_config else {}
         )
         
         await db.document_tasks.insert_one(task_model.model_dump())
@@ -69,7 +72,8 @@ class DocumentTaskProcessor:
             "kb_id": kb_id,
             "filename": filename,
             "file_path": file_path,
-            "category": category
+            "category": category,
+            "chunk_config": chunk_config
         })
         
         logger.info("Document task submitted", task_id=task_id, filename=filename)
@@ -216,7 +220,8 @@ class DocumentTaskProcessor:
             filename=task_data["filename"],
             kb_id=task_data["kb_id"],
             category=task_data.get("category"),
-            task_id=task_id  # Pass task_id for progress tracking
+            task_id=task_id,  # Pass task_id for progress tracking
+            chunk_config=task_data.get("chunk_config")  # Pass chunk_config
         )
         
         return doc_id

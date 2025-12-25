@@ -3,6 +3,8 @@ Knowledge base management API endpoints.
 """
 import os
 import shutil
+import hashlib
+import aiohttp
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile, Form, Query
 from datetime import datetime
@@ -12,7 +14,7 @@ from app.core.logging import get_logger
 from app.core.database import get_database
 from app.core.chroma import chroma_db
 from app.services.task_processor import task_processor
-from app.models.schemas import CreateKnowledgeBaseRequest
+from app.models.schemas import CreateKnowledgeBaseRequest, CreateRagDocumentRequest, CreateRagDocumentResponse
 
 
 logger = get_logger(__name__)
@@ -573,4 +575,131 @@ async def cancel_task(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to cancel task"
         )
+
+
+@router.post("/documents/create_with_segment", response_model=CreateRagDocumentResponse)
+async def create_rag_document_with_segment(
+    request: CreateRagDocumentRequest,
+    api_key: str = Depends(get_api_key),
+    db = Depends(get_database)
+):
+    """
+    创建RAG文档（Java平台集成接口，支持自定义分段策略）。
+    
+    该接口接受Java平台的文档创建请求，支持：
+    - 从URL下载文档
+    - 自定义文本预处理（删除空格/换行/目录）
+    - 自定义分段策略（换行切分/标识符切分）
+    - 分段合并与最大长度控制
+    - 系统内置或自定义分隔符
+    
+    Args:
+        request: 创建RAG文档请求（包含分段配置）
+        api_key: API key from auth
+        db: Database instance
+    
+    Returns:
+        创建结果（task_id和rag_document_id）
+    """
+    try:
+        logger.info(
+            "Create RAG document with segment config",
+            team_id=request.team_id,
+            dataset_id=request.dataset_id,
+            document_name=request.document_name,
+            kb_id=request.rag_data_set_id,
+            segment_flag=request.segment_flag
+        )
+        
+        # Verify knowledge base exists
+        kb = await db.knowledge_bases.find_one({"kb_id": request.rag_data_set_id})
+        if not kb:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Knowledge base {request.rag_data_set_id} not found"
+            )
+        
+        # Download file from resource_url
+        file_path = None
+        try:
+            # Generate temporary file path
+            file_ext = os.path.splitext(request.document_name)[1] or '.txt'
+            temp_filename = f"java_upload_{request.resource_id}_{datetime.utcnow().timestamp()}{file_ext}"
+            file_path = os.path.join(UPLOAD_DIR, temp_filename)
+            
+            # Download file with timeout
+            async with aiohttp.ClientSession() as session:
+                async with session.get(request.resource_url, timeout=aiohttp.ClientTimeout(total=120)) as response:
+                    if response.status != 200:
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail=f"Failed to download file from URL: HTTP {response.status}"
+                        )
+                    
+                    # Save file to disk
+                    with open(file_path, 'wb') as f:
+                        async for chunk in response.content.iter_chunked(8192):
+                            f.write(chunk)
+            
+            logger.info("Downloaded file from URL", url=request.resource_url, file_path=file_path)
+        
+        except aiohttp.ClientError as e:
+            logger.error("Failed to download file", url=request.resource_url, error=str(e))
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Failed to download file: {str(e)}"
+            )
+        
+        # Build chunk_config from segment_vo
+        chunk_config = None
+        if request.segment_flag == 1 and request.segment_vo:
+            segment = request.segment_vo
+            chunk_config = {
+                'is_space_flag': segment.is_space_flag,
+                'is_menu_flag': segment.is_menu_flag,
+                'segment_type': segment.segment_type,
+                'is_segment_union_flag': segment.is_segment_union_flag,
+                'segment_union_max_length': segment.segment_union_max_length,
+                'segment_identifier_type': segment.segment_identifier_type,
+                'identifier_default': segment.identifier_default,
+                'identifier_customize': segment.identifier_customize,
+            }
+            logger.info("Using custom segment config", chunk_config=chunk_config)
+        
+        # Submit async task
+        task_id = await task_processor.submit_task(
+            kb_id=request.rag_data_set_id,
+            filename=request.document_name,
+            file_path=file_path,
+            category=None,  # Could map from Java dataset info
+            chunk_config=chunk_config
+        )
+        
+        # Generate rag_document_id (will be replaced by actual doc_id after processing)
+        rag_document_id = f"doc_{hashlib.md5(f'{request.document_name}_{request.rag_data_set_id}'.encode()).hexdigest()[:12]}"
+        
+        return CreateRagDocumentResponse(
+            code=200,
+            message="success",
+            data={
+                "task_id": task_id,
+                "rag_document_id": rag_document_id,
+                "status": "processing",
+                "team_id": request.team_id,
+                "dataset_id": request.dataset_id,
+                "resource_id": request.resource_id,
+                "document_name": request.document_name,
+                "rag_data_set_id": request.rag_data_set_id
+            }
+        )
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Create RAG document error", error=str(e), exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create RAG document"
+        )
+
 

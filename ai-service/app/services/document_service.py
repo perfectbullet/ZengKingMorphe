@@ -2,6 +2,7 @@
 Document processing service.
 """
 import os
+import re
 import hashlib
 from typing import List, Dict, Any, Optional
 from datetime import datetime
@@ -40,7 +41,8 @@ class DocumentProcessor:
         kb_id: str,
         category: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
-        task_id: Optional[str] = None  # Add task_id for progress tracking
+        task_id: Optional[str] = None,  # Add task_id for progress tracking
+        chunk_config: Optional[Dict[str, Any]] = None  # Custom chunk configuration
     ) -> str:
         """
         Process a document: extract text, chunk, vectorize, and store.
@@ -52,6 +54,7 @@ class DocumentProcessor:
             category: Document category (optional)
             metadata: Additional metadata (optional)
             task_id: Task ID for progress tracking (optional)
+            chunk_config: Custom chunking configuration (optional)
             
         Returns:
             Document ID
@@ -83,14 +86,19 @@ class DocumentProcessor:
                 "Started processing document",
                 doc_id=doc_id,
                 filename=filename,
-                kb_id=kb_id
+                kb_id=kb_id,
+                custom_chunking=bool(chunk_config)
             )
             
             # Extract text
             text_content = await self._extract_text(file_path, file_ext)
             
+            # Preprocess text if chunk_config specifies
+            if chunk_config:
+                text_content = self._preprocess_text(text_content, chunk_config)
+            
             # Chunk document
-            chunks = self._chunk_text(text_content, doc_id, kb_id, file_ext=file_ext)
+            chunks = self._chunk_text(text_content, doc_id, kb_id, file_ext=file_ext, chunk_config=chunk_config)
             
             # Update total_chunks if task_id provided
             if task_id:
@@ -227,53 +235,122 @@ class DocumentProcessor:
             logger.error("Failed to extract HTML", file=file_path, error=str(e))
             raise
     
+    def _preprocess_text(self, text: str, chunk_config: Dict[str, Any]) -> str:
+        """
+        Preprocess text based on chunk configuration.
+        
+        Args:
+            text: Raw text content
+            chunk_config: Chunk configuration with preprocessing flags
+            
+        Returns:
+            Preprocessed text
+        """
+        # Remove consecutive spaces, newlines, tabs
+        if chunk_config.get('is_space_flag', 0) == 1:
+            # Replace multiple spaces with single space
+            text = re.sub(r' {2,}', ' ', text)
+            # Replace multiple newlines with double newline (preserve paragraphs)
+            text = re.sub(r'\n{3,}', '\n\n', text)
+            # Replace tabs with space
+            text = re.sub(r'\t+', ' ', text)
+            logger.info("Applied space/newline/tab preprocessing")
+        
+        # Remove table of contents, headers, footers (basic heuristic)
+        if chunk_config.get('is_menu_flag', 0) == 1:
+            # Remove common TOC patterns
+            toc_patterns = [
+                r'目录.*?(?=\n\n|\Z)',  # Chinese TOC
+                r'Table of Contents.*?(?=\n\n|\Z)',  # English TOC
+                r'^第[一二三四五六七八九十\d]+章.*$',  # Chapter titles
+                r'^Chapter \d+.*$',  # English chapters
+                r'页眉|页脚|Page \d+',  # Headers/footers
+            ]
+            for pattern in toc_patterns:
+                text = re.sub(pattern, '', text, flags=re.MULTILINE | re.IGNORECASE)
+            logger.info("Applied TOC/header/footer removal")
+        
+        return text.strip()
+    
     def _chunk_text(
         self,
         text: str,
         doc_id: str,
         kb_id: str,
-        file_ext: Optional[str] = None
+        file_ext: Optional[str] = None,
+        chunk_config: Optional[Dict[str, Any]] = None
     ) -> List[DocumentChunkModel]:
         """
         Split text into chunks using RecursiveCharacterTextSplitter.
         Uses language-specific separators for markdown/html, custom for txt.
+        Supports custom chunk configuration from Java platform.
         
         Args:
             text: Text content
             doc_id: Document ID
             kb_id: Knowledge base ID
             file_ext: File extension (e.g., '.md', '.html', '.txt', '.pdf')
+            chunk_config: Custom chunking configuration (optional)
             
         Returns:
             List of document chunks
         """
-        chunk_size = settings.chunk_size
-        chunk_overlap = settings.chunk_overlap
-        
-        # Determine separators based on file type
-        if file_ext in ['.md', '.pdf']:  # PDF converted to markdown
-            # Use LangChain's markdown separators
-            separators = RecursiveCharacterTextSplitter.get_separators_for_language(Language.MARKDOWN)
-        elif file_ext == '.html':
-            # Use LangChain's HTML separators
-            separators = RecursiveCharacterTextSplitter.get_separators_for_language(Language.HTML)
+        # Determine chunk size and overlap
+        if chunk_config:
+            chunk_size = chunk_config.get('segment_union_max_length', settings.chunk_size)
+            chunk_overlap = min(chunk_size // 10, 50)  # 10% overlap, max 50
+            segment_type = chunk_config.get('segment_type', 0)
         else:
-            # Default separators for plain text (.txt, .docx, etc.)
-            # Priority: paragraph -> sentence -> punctuation -> space -> character
-            separators = [
-                "\n\n",  # Paragraph boundary
-                "\n",    # Line break
-                "。",    # Chinese period
-                "！",    # Chinese exclamation
-                "？",    # Chinese question
-                ".",     # English period
-                "!",     # English exclamation
-                "?",     # English question
-                ";",     # Semicolon
-                ":",     # Colon
-                " ",     # Space
-                "",      # Character-level split (fallback)
-            ]
+            chunk_size = settings.chunk_size
+            chunk_overlap = settings.chunk_overlap
+            segment_type = -1  # Use default logic
+        
+        # Determine separators
+        separators = None
+        
+        # Custom identifier-based splitting (segment_type=1)
+        if segment_type == 1:
+            identifier_type = chunk_config.get('segment_identifier_type', 0)
+            
+            if identifier_type == 0:  # System default identifiers
+                # Parse identifier_default bitmap: "1111111" = [......, 。, ., ！, !, ？, ?]
+                bitmap = chunk_config.get('identifier_default', '1111111')
+                default_identifiers = ['......', '。', '.', '！', '!', '？', '?']
+                separators = [default_identifiers[i] for i, bit in enumerate(bitmap) if bit == '1' and i < len(default_identifiers)]
+                # Add fallback separators
+                separators.extend(['\n\n', '\n', ' ', ''])
+                logger.info("Using system default identifiers", separators=separators[:7])
+            
+            elif identifier_type == 1:  # Custom identifiers
+                custom_str = chunk_config.get('identifier_customize', '')
+                if custom_str:
+                    # Parse custom identifiers (comma-separated or direct list)
+                    separators = [s.strip() for s in custom_str.split(',') if s.strip()]
+                    separators.extend(['\n\n', '\n', ' ', ''])  # Add fallbacks
+                    logger.info("Using custom identifiers", separators=separators)
+        
+        # Newline splitting (segment_type=0) or default logic
+        if separators is None:
+            if file_ext in ['.md', '.pdf']:  # PDF converted to markdown
+                separators = RecursiveCharacterTextSplitter.get_separators_for_language(Language.MARKDOWN)
+            elif file_ext == '.html':
+                separators = RecursiveCharacterTextSplitter.get_separators_for_language(Language.HTML)
+            else:
+                # Default separators for plain text
+                separators = [
+                    "\n\n",  # Paragraph boundary
+                    "\n",    # Line break
+                    "。",    # Chinese period
+                    "！",    # Chinese exclamation
+                    "？",    # Chinese question
+                    ".",     # English period
+                    "!",     # English exclamation
+                    "?",     # English question
+                    ";",     # Semicolon
+                    ":",     # Colon
+                    " ",     # Space
+                    "",      # Character-level split (fallback)
+                ]
         
         # Create text splitter with appropriate separators
         text_splitter = RecursiveCharacterTextSplitter(
