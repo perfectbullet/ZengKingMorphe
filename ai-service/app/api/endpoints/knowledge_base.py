@@ -14,7 +14,12 @@ from app.core.logging import get_logger
 from app.core.database import get_database
 from app.core.chroma import chroma_db
 from app.services.task_processor import task_processor
-from app.models.schemas import CreateKnowledgeBaseRequest, CreateRagDocumentRequest, CreateRagDocumentResponse
+from app.models.schemas import (
+    CreateKnowledgeBaseRequest, 
+    UpdateKnowledgeBaseRequest,
+    CreateRagDocumentRequest, 
+    CreateRagDocumentResponse
+)
 
 
 logger = get_logger(__name__)
@@ -85,6 +90,92 @@ async def create_knowledge_base(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create knowledge base"
+        )
+
+
+@router.post("/update")
+async def update_knowledge_base(
+    request: UpdateKnowledgeBaseRequest,
+    api_key: str = Depends(get_api_key),
+    db = Depends(get_database)
+):
+    """
+    更新知识库信息。
+    
+    Args:
+        - request: Update knowledge base request (includes kb_id)
+        - api_key: API key from auth
+        - db: Database instance
+
+    Returns:
+        - Updated knowledge base data
+    """
+    try:
+        kb_id = request.kb_id
+        logger.info("Update knowledge base request", kb_id=kb_id, updates=request.model_dump(exclude_none=True))
+        
+        # Check if knowledge base exists
+        kb = await db.knowledge_bases.find_one({"kb_id": kb_id})
+        if not kb:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Knowledge base {kb_id} not found"
+            )
+        
+        # Build update data (only include non-None fields)
+        update_data = {}
+        if request.name is not None:
+            update_data["name"] = request.name
+        if request.description is not None:
+            update_data["description"] = request.description
+        if request.priority is not None:
+            update_data["priority"] = request.priority
+        if request.tags is not None:
+            update_data["tags"] = request.tags
+        
+        # Add updated_at timestamp
+        update_data["updated_at"] = datetime.utcnow()
+        
+        if not update_data:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No valid fields to update"
+            )
+        
+        # Update knowledge base
+        await db.knowledge_bases.update_one(
+            {"kb_id": kb_id},
+            {"$set": update_data}
+        )
+        
+        # Get updated document
+        updated_kb = await db.knowledge_bases.find_one({"kb_id": kb_id})
+        updated_kb.pop("_id", None)
+        
+        logger.info("Knowledge base updated", kb_id=kb_id, fields_updated=list(update_data.keys()))
+        
+        return {
+            "code": 200,
+            "message": "Knowledge base updated successfully",
+            "data": {
+                "kb_id": updated_kb["kb_id"],
+                "name": updated_kb["name"],
+                "description": updated_kb["description"],
+                "priority": updated_kb["priority"],
+                "tags": updated_kb.get("tags", []),
+                "status": updated_kb["status"],
+                "created_at": updated_kb["created_at"].isoformat() + "Z",
+                "updated_at": updated_kb["updated_at"].isoformat() + "Z"
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Update knowledge base error", kb_id=kb_id, error=str(e), exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update knowledge base"
         )
 
 

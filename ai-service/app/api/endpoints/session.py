@@ -1,8 +1,10 @@
 """
 Session management API endpoints.
 """
+import hashlib
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status, Path, Query
-from app.models.schemas import SessionResponse
+from app.models.schemas import SessionResponse, CreateSessionRequest
 from app.api.middleware.auth import get_api_key
 from app.core.database import get_database
 from app.core.logging import get_logger
@@ -10,6 +12,78 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 
 router = APIRouter()
+
+
+@router.post("", status_code=status.HTTP_201_CREATED)
+async def create_session(
+    request: CreateSessionRequest,
+    api_key: str = Depends(get_api_key),
+    db = Depends(get_database)
+):
+    """
+    创建新会话。
+    
+    Args:
+        - request: Session creation request
+        - api_key: API key from auth
+        - db: Database instance
+        
+    Returns:
+        - Created session information
+    """
+    try:
+        logger.info("Create session request", user_id=request.user_id, employee_id=request.employee_id)
+        
+        # Check if employee exists
+        employee = await db.employee_configs.find_one({"employee_id": request.employee_id})
+        if not employee:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Employee {request.employee_id} not found"
+            )
+        
+        # Generate session ID
+        timestamp = datetime.utcnow().timestamp()
+        session_id = f"sess_{hashlib.md5(f'{request.user_id}_{timestamp}'.encode()).hexdigest()[:12]}"
+        
+        # Create session document
+        session_doc = {
+            "session_id": session_id,
+            "user_id": request.user_id,
+            "employee_id": request.employee_id,
+            "status": "active",
+            "message_count": 0,
+            "context_messages": [],
+            "created_at": datetime.utcnow(),
+            "last_activity": datetime.utcnow(),
+            "ended_at": None,
+            "metadata": request.metadata
+        }
+        
+        # Insert into database
+        await db.sessions.insert_one(session_doc)
+        
+        logger.info("Session created", session_id=session_id, user_id=request.user_id)
+        
+        # Format response
+        session_doc.pop("_id", None)
+        session_doc["created_at"] = session_doc["created_at"].isoformat() + "Z"
+        session_doc["last_activity"] = session_doc["last_activity"].isoformat() + "Z"
+        
+        return {
+            "code": 201,
+            "message": "Session created successfully",
+            "data": session_doc
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to create session", error=str(e), exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create session"
+        )
 
 
 @router.get("/{session_id}", response_model=SessionResponse)
@@ -85,7 +159,7 @@ async def end_session(
         logger.info("End session request", session_id=session_id)
         
         # Update session status
-        from datetime import datetime
+        
         result = await db.sessions.update_one(
             {"session_id": session_id},
             {

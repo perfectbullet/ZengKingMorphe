@@ -72,96 +72,6 @@ def format_sources(
     return sources
 
 
-@router.post("/message", response_model=ChatResponse)
-async def chat_message(request: ChatRequest, api_key: str = Depends(get_api_key)):
-    """
-    同步对话接口。
-
-        Args:
-            - request: Chat request
-            - api_key: API key from auth
-
-        Returns:
-            - Chat response
-    """
-    try:
-        # Rate limiting
-        await rate_limit_middleware(
-            request=None, user_id=request.user_id, session_id=request.session_id
-        )
-
-        logger.info(
-            "Chat message request",
-            user_id=request.user_id,
-            employee_id=request.employee_id,
-            query=request.query[:100],
-        )
-
-        # Generate session ID if not provided
-        session_id = request.session_id
-        if not session_id:
-            session_id = f"sess_{hashlib.md5(f'{request.user_id}_{datetime.now().timestamp()}'.encode()).hexdigest()[:12]}"
-
-        # Build initial state
-        initial_state: ConversationState = {
-            "messages": [],
-            "user_query": request.query,
-            "user_id": request.user_id,
-            "session_id": session_id,
-            "employee_id": request.employee_id,
-            "employee_config": {},
-            "is_realtime_query": False,
-            "realtime_category": "",
-            "realtime_detect_reason": "",
-            "intent": "",
-            "entities": {},
-            "retrieved_docs": [],
-            "relevance_score": 0.0,
-            "web_search_results": [],
-            "final_answer": "",
-            "confidence": 0.0,
-            "context": request.context or {},
-            "has_sensitive": False,
-            "error": None,
-            "kb_used": [],
-            "web_search_used": True,
-            "conversation_id": "",
-            "response_time_ms": 0,
-        }
-
-        # Run workflow
-        result = await conversation_workflow.run(initial_state)
-
-        # Format source attribution
-        sources = format_sources(
-            retrieved_docs=result.get("retrieved_docs", []),
-            web_search_results=result.get("web_search_results", []),
-        )
-
-        # Build response
-        response_data = {
-            "conversation_id": result["conversation_id"],
-            "session_id": session_id,
-            "answer": result["final_answer"],
-            "intent": result.get("intent", "general_query"),
-            "confidence": result.get("confidence", 0.0),
-            "kb_used": result.get("kb_used", []),
-            "web_search_used": result.get("web_search_used", False),
-            "sources": sources,
-            "timestamp": datetime.now().isoformat() + "Z",
-        }
-
-        return ChatResponse(code=200, message="success", data=response_data)
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error("Chat message error", error=str(e), exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to process chat message",
-        )
-
 
 async def generate_stream_response(request: ChatRequest) -> AsyncGenerator[str, None]:
     """
@@ -263,44 +173,7 @@ async def generate_stream_response(request: ChatRequest) -> AsyncGenerator[str, 
     except Exception as e:
         logger.error("Stream generation error", error=str(e), exc_info=True)
         yield json.dumps({"type": "error", "message": str(e)})
-
-
-@router.post("/stream")
-async def chat_stream(request: ChatRequest, api_key: str = Depends(get_api_key)):
-    """
-    流式对话接口 (SSE)。
-
-    Args:
-        request: Chat request
-        api_key: API key from auth
-
-    Returns:
-        SSE stream
-    """
-    try:
-        # Rate limiting
-        await rate_limit_middleware(
-            request=None, user_id=request.user_id, session_id=request.session_id
-        )
-
-        logger.info(
-            "Chat stream request",
-            user_id=request.user_id,
-            employee_id=request.employee_id,
-            query=request.query[:100],
-        )
-
-        return EventSourceResponse(generate_stream_response(request))
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error("Chat stream error", error=str(e), exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to start chat stream",
-        )
-
+ 
 
 async def generate_openai_stream_response(
     request: OpenAIChatRequest,

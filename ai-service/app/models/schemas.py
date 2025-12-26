@@ -139,6 +139,26 @@ class OpenAIChatRequest(BaseModel):
     session_id2: Optional[str] = Field('session_id2_default', description="Secondary Session ID")
 
 # Session API Schemas
+class CreateSessionRequest(BaseModel):
+    """Create session request schema."""
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "user_id": "user_123456",
+                "employee_id": "hutao",
+                "metadata": {
+                    "platform": "web",
+                    "device": "desktop"
+                }
+            }
+        }
+    )
+    
+    user_id: str = Field(..., description="User ID")
+    employee_id: str = Field(..., description="Digital employee ID")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
+
+
 class SessionResponse(BaseModel):
     """Session response schema."""
     code: int = 200
@@ -269,6 +289,7 @@ class CreateKnowledgeBaseRequest(BaseModel):
 
 class UpdateKnowledgeBaseRequest(BaseModel):
     """Update knowledge base request schema."""
+    kb_id: str = Field(..., description="Knowledge base ID")
     name: Optional[str] = None
     description: Optional[str] = None
     priority: Optional[str] = None
