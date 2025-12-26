@@ -77,6 +77,7 @@ class DocumentProcessor:
                 size=file_size,
                 format=file_ext[1:].upper(),
                 status="processing",
+                segment_config=chunk_config,  # Save segment configuration
                 metadata=metadata or {}
             )
             
@@ -117,6 +118,7 @@ class DocumentProcessor:
                         "status": "completed",
                         "chunks_count": len(chunks),
                         "vectors_count": len(chunks),
+                        "segment_config": chunk_config,  # Persist segment configuration
                         "processed_at": datetime.utcnow()
                     }
                 }

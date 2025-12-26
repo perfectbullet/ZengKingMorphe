@@ -269,7 +269,7 @@ class CreateKnowledgeBaseRequest(BaseModel):
                 "description": "包含所有产品的详细使用说明和常见问题解答",
                 "category": "产品文档",
                 "priority": "high",
-                "tags": ["产品", "教程", "FAQ"],
+                "tags": ["产品", "教程"],
                 "config": {
                     "chunk_size": 512,
                     "chunk_overlap": 50,
@@ -396,9 +396,6 @@ class SegmentVo(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                
-                "kb_id": "kb_id_abc123",
-                "document_id": "doc_abc123",
                 "is_space_flag": 1,
                 "is_menu_flag": 1,
                 "segment_type": 1,
@@ -411,8 +408,6 @@ class SegmentVo(BaseModel):
         }
     )
     
-    kb_id: str = Field(..., description="RAG文档ID")
-    document_id: Optional[str] = Field(None, description="RAG系统文档ID")
     is_space_flag: int = Field(0, description="文本预处理：删除连续空格、换行、制表符：0=不启用，1=启用")
     is_menu_flag: int = Field(0, description="文本预处理：删除目录、页眉、页脚：0=不启用，1=启用")
     segment_type: int = Field(0, description="分段方式：0=换行切分，1=分段标识符切分")
@@ -434,7 +429,6 @@ class CreateRagDocumentRequest(BaseModel):
                 "segment_flag": 1,
                 "segment_vo": {
                     "kb_id": "kb_id_abc123",
-                    "document_id": "doc_abc123",
                     "is_space_flag": 1,
                     "is_menu_flag": 0,
                     "segment_type": 1,
@@ -466,7 +460,160 @@ class CreateRagDocumentResponse(BaseModel):
     data: Dict[str, Any] = Field(
         default_factory=lambda: {
             "task_id": "",
-            "rag_document_id": "",
+            "document_id": "",
             "status": "processing"
         }
     )
+
+
+# External API Data Schemas (Java Platform Integration)
+class ExternalFAQItem(BaseModel):
+    """外部API FAQ项（来自Java平台）。"""
+    id: int = Field(..., description="FAQ ID")
+    team_id: int = Field(..., alias="teamId", description="Team ID")
+    question_name: str = Field(..., alias="questionName", description="主问题")
+    start_time: Optional[str] = Field(None, alias="startTime", description="生效开始时间")
+    end_time: Optional[str] = Field(None, alias="endTime", description="生效结束时间")
+    is_enable: int = Field(..., alias="isEnable", description="是否启用：0=禁用，1=启用")
+    is_clear: int = Field(..., alias="isClear", description="是否清除：0=不清除，1=清除")
+    create_user_id: int = Field(..., alias="createUserId", description="创建用户ID")
+    update_time: str = Field(..., alias="updateTime", description="更新时间")
+    create_time: str = Field(..., alias="createTime", description="创建时间")
+    similar_questions: List[str] = Field(default_factory=list, alias="similarQuestions", description="相似问题列表")
+    answers: List[str] = Field(default_factory=list, description="答案列表")
+    
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class ExternalRAGDataset(BaseModel):
+    """外部API RAG数据集（知识库）。"""
+    id: int = Field(..., description="Dataset ID")
+    team_id: int = Field(..., alias="teamId", description="Team ID")
+    rag_dataset_id: str = Field(..., alias="ragDatasetId", description="RAG数据集ID（映射为kb_id）")
+    name: str = Field(..., description="数据集名称")
+    is_enable: int = Field(..., alias="isEnable", description="是否启用：0=禁用，1=启用")
+    is_publish: int = Field(..., alias="isPublish", description="是否发布：0=未发布，1=已发布")
+    create_user_id: int = Field(..., alias="createUserId", description="创建用户ID")
+    flag: int = Field(..., description="标志位")
+    create_time: str = Field(..., alias="createTime", description="创建时间")
+    
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class ExternalEmployeeInfo(BaseModel):
+    """外部API员工信息。"""
+    id: int = Field(..., description="员工ID（映射为employee_id）")
+    team_id: int = Field(..., alias="teamId", description="Team ID")
+    name: str = Field(..., description="员工名称")
+    position: str = Field(..., description="职位")
+    type: str = Field(..., description="类型：AVATAR等")
+    tone: str = Field(..., description="语气风格")
+    language: str = Field(..., description="语言")
+    create_user_id: int = Field(..., alias="createUserId", description="创建用户ID")
+    onduty_status: int = Field(..., alias="ondutyStatus", description="在岗状态")
+    update_time: str = Field(..., alias="updateTime", description="更新时间")
+    create_time: str = Field(..., alias="createTime", description="创建时间")
+    gender: int = Field(..., description="性别：0=女，1=男")
+    intro: Optional[str] = Field(None, description="简介")
+    portrait: Optional[str] = Field(None, description="头像URL")
+    model_image: Optional[str] = Field(None, alias="modelImage", description="模型图片URL")
+    digital_code: Optional[str] = Field(None, alias="digitalCode", description="数字代码")
+    
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class ExternalKnowledgeConfig(BaseModel):
+    """外部API知识配置。"""
+    rag_datasets: List[ExternalRAGDataset] = Field(default_factory=list, alias="ragDatasets", description="RAG数据集列表")
+    faqs: List[ExternalFAQItem] = Field(default_factory=list, description="FAQ列表")
+    
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class ExternalPrologueConfig(BaseModel):
+    """外部API开场白配置。"""
+    prologue: Optional[str] = Field(None, description="开场白文本")
+    is_opening_questions: bool = Field(False, alias="isOpeningQuestions", description="是否开启问题")
+    question_type: int = Field(0, alias="questionType", description="问题类型")
+    faqs: List[ExternalFAQItem] = Field(default_factory=list, description="开场推荐FAQ列表")
+    my_questions: List[str] = Field(default_factory=list, alias="myQuestions", description="自定义问题列表")
+    
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class ExternalChatRule(BaseModel):
+    """外部API对话规则配置。"""
+    is_multimodal: bool = Field(False, alias="isMultimodal", description="是否多模态")
+    faq_sim_threshold: float = Field(0.0, alias="faqSimThreshold", description="FAQ相似度阈值")
+    faq_top_k: int = Field(1, alias="faqTopK", description="FAQ返回Top-K数量")
+    
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class ExternalLLMReply(BaseModel):
+    """外部API LLM回复配置。"""
+    is_web_search: bool = Field(False, alias="isWebSearch", description="是否启用网络搜索")
+    is_show_sign: bool = Field(False, alias="isShowSign", description="是否显示标识")
+    is_my_prompt: bool = Field(False, alias="isMyPrompt", description="是否自定义Prompt")
+    my_prompt: Optional[str] = Field(None, alias="myPrompt", description="自定义Prompt内容")
+    
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class ExternalUnusualRule(BaseModel):
+    """外部API异常规则配置。"""
+    excepition_reply: Optional[str] = Field(None, alias="excepitonReply", description="异常回复")
+    not_match_reply_type: int = Field(0, alias="notMatchReplyType", description="未匹配回复类型")
+    fixed_replys: List[str] = Field(default_factory=list, alias="fixedReplys", description="固定回复列表")
+    llm_reply: Optional[ExternalLLMReply] = Field(None, alias="llmReply", description="LLM回复配置")
+    
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class ExternalRuleConfig(BaseModel):
+    """外部API规则配置。"""
+    id: int = Field(..., description="规则ID")
+    chat_rule: ExternalChatRule = Field(..., alias="chatRule", description="对话规则")
+    unusual_rule: ExternalUnusualRule = Field(..., alias="unusualRule", description="异常规则")
+    
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class ExternalRoleConfig(BaseModel):
+    """外部API角色配置。"""
+    persona: Optional[str] = Field(None, description="人设")
+    style: Optional[str] = Field(None, description="风格")
+    style_desc: Optional[str] = Field(None, alias="styleDesc", description="风格描述")
+    
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class ExternalSettingConfig(BaseModel):
+    """外部API设置配置。"""
+    knowledge: ExternalKnowledgeConfig = Field(..., description="知识配置")
+    prologue: ExternalPrologueConfig = Field(..., description="开场白配置")
+    rule: ExternalRuleConfig = Field(..., description="规则配置")
+    role: ExternalRoleConfig = Field(..., description="角色配置")
+    
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class ExternalEmployeeAPIData(BaseModel):
+    """外部API完整数据结构（data字段）。"""
+    employee: ExternalEmployeeInfo = Field(..., description="员工信息")
+    setting: ExternalSettingConfig = Field(..., description="设置配置")
+    
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class ExternalEmployeeAPIResponse(BaseModel):
+    """外部API响应结构。"""
+    status: int = Field(..., description="状态码")
+    message: str = Field(..., description="消息")
+    data: ExternalEmployeeAPIData = Field(..., description="数据内容")
+    success: bool = Field(..., description="是否成功")
+    error: Optional[str] = Field(None, description="错误信息")
+    
+    model_config = ConfigDict(populate_by_name=True)
+
+

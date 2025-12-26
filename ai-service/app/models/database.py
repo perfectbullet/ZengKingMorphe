@@ -89,6 +89,7 @@ class DocumentModel(BaseModel):
     vectors_count: int = 0
     status: str = "processing"  # processing/completed/failed
     error_message: Optional[str] = None
+    segment_config: Optional[Dict[str, Any]] = None  # Custom segment configuration
     metadata: Dict[str, Any] = Field(default_factory=dict)
     uploaded_at: datetime = Field(default_factory=datetime.utcnow)
     processed_at: Optional[datetime] = None
@@ -173,3 +174,72 @@ class StreamChunkModel(BaseModel):
     sequence: int = 0  # Chunk sequence number
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
+class FAQModel(BaseModel):
+    """FAQ model for vector and keyword retrieval."""
+    faq_id: str  # Format: faq_{employee_id}_{external_faq_id}
+    employee_id: str
+    external_faq_id: int  # Original FAQ ID from Java platform
+    team_id: int
+    question_name: str  # Main question
+    similar_questions: List[str] = Field(default_factory=list)
+    answers: List[str] = Field(default_factory=list)
+    is_enable: int = 0  # 0=disabled, 1=enabled
+    is_clear: int = 0  # 0=not cleared, 1=cleared
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    update_time: str  # Used for incremental update detection
+    create_time: str
+    # Vector and keyword indexing metadata
+    vector_id: Optional[str] = None  # ChromaDB vector ID
+    es_indexed: bool = False  # ElasticSearch indexing status
+    combined_text: str = ""  # questionName + similarQuestions (for embedding)
+    keywords: List[str] = Field(default_factory=list)  # Extracted keywords
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    synced_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class DigitalEmployeeConfigModel(BaseModel):
+    """Digital employee configuration from external API (Java platform)."""
+    employee_id: str  # Converted from external employee.id
+    external_employee_id: int  # Original employee.id from Java platform
+    team_id: int
+    name: str
+    position: str
+    employee_type: str  # AVATAR, etc.
+    tone: str
+    language: str
+    gender: int  # 0=female, 1=male
+    intro: Optional[str] = None
+    portrait: Optional[str] = None
+    model_image: Optional[str] = None
+    digital_code: Optional[str] = None
+    onduty_status: int
+    # Knowledge configuration
+    kb_ids: List[str] = Field(default_factory=list)  # Converted from ragDatasets[].ragDatasetId
+    faq_count: int = 0  # Total FAQ count
+    # Prologue configuration
+    prologue: Optional[str] = None
+    is_opening_questions: bool = False
+    hot_questions: List[str] = Field(default_factory=list)
+    # Chat rules
+    is_multimodal: bool = False
+    faq_sim_threshold: float = 0.0  # FAQ similarity threshold for direct return
+    faq_top_k: int = 1  # FAQ top-K retrieval
+    # LLM configuration
+    web_search_enabled: bool = False
+    is_show_sign: bool = False
+    is_my_prompt: bool = False
+    my_prompt: Optional[str] = None
+    # Role configuration
+    persona: Optional[str] = None
+    style: Optional[str] = None
+    style_desc: Optional[str] = None
+    # Status and timestamps
+    status: str = "active"
+    external_update_time: str  # From external employee.updateTime
+    external_create_time: str  # From external employee.createTime
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    synced_at: datetime = Field(default_factory=datetime.utcnow)
+    metadata: Dict[str, Any] = Field(default_factory=dict)

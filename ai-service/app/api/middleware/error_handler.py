@@ -58,11 +58,15 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException) 
     logger.error(f"http_exception_handler request: {request}")
     logger.error(f"http_exception_handler exc: {exc}")
     logger.exception(exc)
+    
+    # 友好的错误提示
+    friendly_message = f"哎呀～服务遇到了点小问题呢😅 {str(exc.detail)}"
+    
     return JSONResponse(
         status_code=exc.status_code,
         content=create_error_response(
             code=exc.status_code,
-            message=str(exc.detail),
+            message=friendly_message,
             error_type="HTTPException"
         )
     )
@@ -89,29 +93,39 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     # Format validation errors for better readability
     error_details = exc.errors()
     formatted_errors = []
+    error_fields = []
+    
     for error in error_details:
+        field_name = " -> ".join(str(loc) for loc in error.get("loc", []))
+        error_fields.append(field_name)
         formatted_errors.append({
-            "field": " -> ".join(str(loc) for loc in error.get("loc", [])),
+            "field": field_name,
             "message": error.get("msg", ""),
             "type": error.get("type", ""),
             "input": error.get("input", "")
         })
     
-    logger.warning(
-        f"""Validation error on {request.method} {request.url.path}",
-        errors={formatted_errors},
-        error_count=len({error_details}),
-        request_body={body_str[:500]},  # Truncate to prevent PII leakage
-        query_params={request.query_params}"""
+    # 构建友好的错误提示信息
+    fields_str = "、".join(error_fields[:3])  # 最多显示3个字段
+    if len(error_fields) > 3:
+        fields_str += "等"
+    
+    friendly_message = (
+        f"哎呀～您传的参数好像跟我们接口八字不合呢😜， 麻烦检查下 [{fields_str}] 的值是不是填错啦？\n\n"
+        f"详细错误信息：\n"
     )
     
+    # 添加详细的错误信息
+    for i, err in enumerate(formatted_errors, 1):
+        friendly_message += f"{i}. 字段 '{err['field']}': {err['message']}\n"
+
     return JSONResponse(
         status_code=status.HTTP_400_BAD_REQUEST,
         content=create_error_response(
             code=400,
-            message="Invalid request parameters",
+            message=friendly_message,
             error_type="ValidationError",
-            details=exc.errors()
+            details=formatted_errors
         )
     )
 
@@ -135,12 +149,21 @@ async def general_exception_handler(request: Request, exc: Exception) -> JSONRes
         exc_info=True"""
     )
     
+    # 友好的错误提示
+    error_type_name = type(exc).__name__
+    error_details = str(exc) if settings.debug else None
+    
+    friendly_message = f"哎呀～服务器开小差了呢🙈 我们的工程师已经收到通知啦！错误类型：{error_type_name}"
+    
+    if settings.debug and error_details:
+        friendly_message += f"\n\n调试信息：{error_details}"
+    
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content=create_error_response(
             code=500,
-            message="Internal server error",
-            error_type=type(exc).__name__,
-            details=str(exc) if settings.debug else None
+            message=friendly_message,
+            error_type=error_type_name,
+            details=error_details
         )
     )

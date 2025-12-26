@@ -242,7 +242,7 @@ class ConversationWorkflow:
         """Load employee configuration (enhanced with full config)."""
         db = await get_database()
         employee = await db.employee_configs.find_one({"employee_id": state["employee_id"]})
-        
+        logger.info(f"Loading employee config: employee_id={state['employee_id']}")
         if not employee:
             error_msg = f"Employee config not found: employee_id={state['employee_id']}"
             logger.error(error_msg)
@@ -299,44 +299,96 @@ class ConversationWorkflow:
         return state
     
     async def match_faq(self, state: ConversationState) -> ConversationState:
-        """Match FAQ using keyword and similarity matching."""
+        """
+        Match FAQ using hybrid search (vector + keyword + RRF fusion).
+        
+        如果FAQ的RRF分数 >= faq_sim_threshold，直接返回FAQ答案（随机选择），
+        跳过后续的RAG检索和LLM生成。
+        """
         try:
             query = state["user_query"]
-            faqs = state["employee_config"].get("faqs", [])
+            employee_id = state["employee_id"]
             
-            if not faqs:
-                logger.info("No FAQs configured, skipping FAQ matching")
+            # Get FAQ configuration from digital_employee_configs
+            db = await get_database()
+            digital_config = await db.digital_employee_configs.find_one({"employee_id": employee_id})
+            
+            if not digital_config:
+                logger.info(f"No digital employee config found for {employee_id}, skipping FAQ matching")
                 state["faq_matched"] = None
                 return state
             
-            # Strategy 1: Keyword matching (fast filter)
-            keyword_matches = []
-            for faq in faqs:
-                keywords = faq.get("keywords", [])
-                question = faq.get("question", "")
-                
-                # Check if query contains FAQ keywords
-                if any(kw in query for kw in keywords):
-                    keyword_matches.append(faq)
-                # Or query is very similar to FAQ question
-                elif query in question or question in query:
-                    keyword_matches.append(faq)
+            faq_sim_threshold = digital_config.get("faq_sim_threshold", 0.0)
+            faq_top_k = digital_config.get("faq_top_k", 3)
             
-            # If matched, use the first match
-            if keyword_matches:
-                best_faq = keyword_matches[0]
-                state["final_answer"] = best_faq["answer"]
-                state["confidence"] = 0.95
-                state["intent"] = "faq_match"
-                state["faq_matched"] = {
-                    "faq_id": best_faq.get("faq_id"),
-                    "question": best_faq.get("question"),
-                    "category": best_faq.get("category")
-                }
-                
-                logger.info(f"FAQ matched: faq_id={best_faq.get('faq_id')}, question={best_faq.get('question')}")
-            else:
+            logger.info(f"FAQ matching: employee_id={employee_id}, threshold={faq_sim_threshold}, top_k={faq_top_k}")
+            
+            # Perform FAQ hybrid search (vector + keyword + RRF)
+            faq_results = await rag_retrieval.faq_hybrid_search(
+                query=query,
+                employee_id=employee_id,
+                faq_sim_threshold=faq_sim_threshold,
+                faq_top_k=faq_top_k
+            )
+            
+            if not faq_results:
+                logger.info("No FAQ matched above threshold")
                 state["faq_matched"] = None
+                return state
+            
+            # Get the best FAQ (highest RRF score)
+            best_faq_result = faq_results[0]
+            faq_id = best_faq_result["faq_id"]
+            rrf_score = best_faq_result["rrf_score"]
+            
+            logger.info(f"FAQ matched: faq_id={faq_id}, rrf_score={rrf_score:.4f}, vector_score={best_faq_result.get('vector_score', 0):.4f}, keyword_score={best_faq_result.get('keyword_score', 0):.4f}")
+            
+            # Retrieve full FAQ from MongoDB
+            faq_doc = await db.faqs.find_one({"faq_id": faq_id})
+            
+            if not faq_doc:
+                logger.warning(f"FAQ {faq_id} not found in MongoDB, skipping")
+                state["faq_matched"] = None
+                return state
+            
+            # Check if FAQ is enabled and within time range
+            if faq_doc.get("is_enable", 0) != 1:
+                logger.info(f"FAQ {faq_id} is disabled, skipping")
+                state["faq_matched"] = None
+                return state
+            
+            # Check time range (optional: add time validation logic here)
+            # start_time = faq_doc.get("start_time")
+            # end_time = faq_doc.get("end_time")
+            # now = datetime.utcnow().isoformat()
+            # if start_time and now < start_time: ...
+            # if end_time and now > end_time: ...
+            
+            # Select answer randomly from answers array
+            answers = faq_doc.get("answers", [])
+            if not answers:
+                logger.warning(f"FAQ {faq_id} has no answers, skipping")
+                state["faq_matched"] = None
+                return state
+            
+            import random
+            selected_answer = random.choice(answers)
+            
+            # Set state for direct FAQ answer return
+            state["final_answer"] = selected_answer
+            state["confidence"] = min(0.95, rrf_score)  # Cap at 0.95
+            state["intent"] = "faq_match"
+            state["faq_matched"] = {
+                "faq_id": faq_id,
+                "question_name": faq_doc.get("question_name"),
+                "rrf_score": rrf_score,
+                "vector_score": best_faq_result.get("vector_score"),
+                "keyword_score": best_faq_result.get("keyword_score"),
+                "selected_answer": selected_answer,
+                "total_answers": len(answers)
+            }
+            
+            logger.info(f"FAQ answer selected: faq_id={faq_id}, question={faq_doc.get('question_name')[:50]}, answer_length={len(selected_answer)}")
             
         except Exception as e:
             logger.error(f"FAQ matching failed: error={str(e)}", exc_info=True)

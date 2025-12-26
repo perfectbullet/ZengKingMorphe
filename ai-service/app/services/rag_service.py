@@ -280,6 +280,243 @@ class RAGRetrieval:
         logger.info(f"RRF fusion completed: vector_count={len(vector_results)}", keyword_count=len(keyword_results), fused_count=len(sorted_docs))
         
         return sorted_docs
+    
+    async def faq_hybrid_search(
+        self,
+        query: str,
+        employee_id: str,
+        faq_sim_threshold: float = 0.0,
+        faq_top_k: int = 3
+    ) -> List[Dict[str, Any]]:
+        """
+        FAQ混合搜索（向量+关键词双路召回+RRF融合）。
+        
+        Args:
+            query: 用户查询
+            employee_id: 员工ID（用于过滤FAQ）
+            faq_sim_threshold: FAQ相似度阈值（高于此值直接返回答案）
+            faq_top_k: 返回Top-K个FAQ
+            
+        Returns:
+            FAQ搜索结果列表（按RRF分数降序）
+        """
+        try:
+            logger.info(f"FAQ hybrid search: query={query[:100]}, employee_id={employee_id}, threshold={faq_sim_threshold}, top_k={faq_top_k}")
+            
+            # Step 1: Vector search in ChromaDB
+            vector_results = await self._faq_vector_search(query, employee_id, faq_top_k * 2)
+            
+            # Step 2: Keyword search in ElasticSearch
+            keyword_results = await self._faq_keyword_search(query, employee_id, faq_top_k * 2)
+            
+            # Step 3: RRF fusion
+            fused_results = self._faq_rrf_fusion(vector_results, keyword_results, k=60)
+            
+            # Step 4: Filter by similarity threshold and return top-k
+            filtered_results = [
+                result for result in fused_results
+                if result["rrf_score"] >= faq_sim_threshold
+            ]
+            
+            logger.info(f"FAQ hybrid search completed: total_fused={len(fused_results)}, above_threshold={len(filtered_results)}, returning_top_k={min(faq_top_k, len(filtered_results))}")
+            
+            return filtered_results[:faq_top_k]
+            
+        except Exception as e:
+            logger.error(f"FAQ hybrid search failed: query={query}, error={str(e)}", exc_info=True)
+            return []
+    
+    async def _faq_vector_search(
+        self,
+        query: str,
+        employee_id: str,
+        top_k: int
+    ) -> List[Dict[str, Any]]:
+        """
+        FAQ向量搜索（ChromaDB）。
+        
+        Args:
+            query: 用户查询
+            employee_id: 员工ID
+            top_k: 返回Top-K
+            
+        Returns:
+            向量搜索结果
+        """
+        try:
+            # Query ChromaDB faqs collection
+            where_filter = {"employee_id": employee_id}
+            
+            results = await chroma_db.query_documents(
+                collection_name="faqs",
+                query_texts=[query],
+                n_results=top_k,
+                where=where_filter
+            )
+            
+            # Format results
+            faq_results = []
+            if results and results.get("documents") and len(results["documents"]) > 0:
+                for i, doc_text in enumerate(results["documents"][0]):
+                    distance = results["distances"][0][i] if results.get("distances") else 1.0
+                    similarity = max(0.0, 1.0 - distance)
+                    
+                    metadata = results["metadatas"][0][i] if results.get("metadatas") else {}
+                    
+                    faq_results.append({
+                        "faq_id": metadata.get("faq_id"),
+                        "question_name": metadata.get("question_name"),
+                        "combined_text": doc_text,
+                        "score": similarity,
+                        "source": "vector"
+                    })
+            
+            logger.debug(f"FAQ vector search: query={query[:50]}, results_count={len(faq_results)}")
+            
+            return faq_results
+            
+        except Exception as e:
+            logger.error(f"FAQ vector search failed: query={query}, error={str(e)}", exc_info=True)
+            return []
+    
+    async def _faq_keyword_search(
+        self,
+        query: str,
+        employee_id: str,
+        top_k: int
+    ) -> List[Dict[str, Any]]:
+        """
+        FAQ关键词搜索（ElasticSearch）。
+        
+        Args:
+            query: 用户查询
+            employee_id: 员工ID
+            top_k: 返回Top-K
+            
+        Returns:
+            关键词搜索结果
+        """
+        try:
+            # Build ElasticSearch query
+            es_query = {
+                "query": {
+                    "bool": {
+                        "must": [
+                            {
+                                "multi_match": {
+                                    "query": query,
+                                    "fields": ["question_name^3", "similar_questions^2", "combined_text"],
+                                    "type": "best_fields"
+                                }
+                            }
+                        ],
+                        "filter": [
+                            {"term": {"employee_id": employee_id}},
+                            {"term": {"is_enable": 1}}
+                        ]
+                    }
+                }
+            }
+            
+            # Search ElasticSearch
+            results = await es_db.search(
+                index="digital_employee_faqs",
+                query=es_query,
+                size=top_k
+            )
+            
+            # Format results
+            faq_results = []
+            if results and results.get("hits"):
+                for hit in results["hits"]["hits"]:
+                    source = hit["_source"]
+                    score = hit["_score"]
+                    
+                    # Normalize score to 0-1 range
+                    normalized_score = min(1.0, score / 10.0)
+                    
+                    faq_results.append({
+                        "faq_id": source.get("faq_id"),
+                        "question_name": source.get("question_name"),
+                        "combined_text": source.get("combined_text"),
+                        "score": normalized_score,
+                        "source": "keyword"
+                    })
+            
+            logger.debug(f"FAQ keyword search: query={query[:50]}, results_count={len(faq_results)}")
+            
+            return faq_results
+            
+        except Exception as e:
+            logger.error(f"FAQ keyword search failed: query={query}, error={str(e)}", exc_info=True)
+            return []
+    
+    def _faq_rrf_fusion(
+        self,
+        vector_results: List[Dict[str, Any]],
+        keyword_results: List[Dict[str, Any]],
+        k: int = 60
+    ) -> List[Dict[str, Any]]:
+        """
+        FAQ结果的RRF融合。
+        
+        Args:
+            vector_results: 向量搜索结果
+            keyword_results: 关键词搜索结果
+            k: RRF常数（默认60）
+            
+        Returns:
+            融合后的排序结果
+        """
+        faq_scores: Dict[str, Dict[str, Any]] = {}
+        
+        # Add vector search scores
+        for rank, result in enumerate(vector_results, start=1):
+            faq_id = result["faq_id"]
+            if faq_id not in faq_scores:
+                faq_scores[faq_id] = {
+                    "faq_id": faq_id,
+                    "question_name": result["question_name"],
+                    "combined_text": result["combined_text"],
+                    "rrf_score": 0.0,
+                    "vector_score": result["score"],
+                    "keyword_score": 0.0,
+                    "vector_rank": rank,
+                    "keyword_rank": None
+                }
+            
+            faq_scores[faq_id]["rrf_score"] += 1.0 / (k + rank)
+        
+        # Add keyword search scores
+        for rank, result in enumerate(keyword_results, start=1):
+            faq_id = result["faq_id"]
+            if faq_id not in faq_scores:
+                faq_scores[faq_id] = {
+                    "faq_id": faq_id,
+                    "question_name": result["question_name"],
+                    "combined_text": result["combined_text"],
+                    "rrf_score": 0.0,
+                    "vector_score": 0.0,
+                    "keyword_score": result["score"],
+                    "vector_rank": None,
+                    "keyword_rank": rank
+                }
+            else:
+                faq_scores[faq_id]["keyword_score"] = result["score"]
+                faq_scores[faq_id]["keyword_rank"] = rank
+            
+            faq_scores[faq_id]["rrf_score"] += 1.0 / (k + rank)
+        
+        # Sort by RRF score
+        sorted_faqs = sorted(
+            faq_scores.values(),
+            key=lambda x: x["rrf_score"],
+            reverse=True
+        )
+        
+        logger.debug(f"FAQ RRF fusion: vector_count={len(vector_results)}, keyword_count={len(keyword_results)}, fused_count={len(sorted_faqs)}")
+        
+        return sorted_faqs
 
 
 # Global RAG retrieval instance

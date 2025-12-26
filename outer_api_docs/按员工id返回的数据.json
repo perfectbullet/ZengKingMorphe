@@ -1,0 +1,195 @@
+{
+    "status": 0,
+    "message": "string",
+    "data": {
+        "employee": {
+            "id": 0,
+            "teamId": 0,
+            "name": "string",
+            "position": "string",
+            "type": "AVATAR",
+            "tone": "string",
+            "language": "string",
+            "createUserId": 0,
+            "ondutyStatus": 0,
+            "updateTime": "2019-08-24T14:15:22.123Z",
+            "createTime": "2019-08-24T14:15:22.123Z",
+            "gender": 0,
+            "languages": [
+                {
+                    "language": "string",
+                    "remark": "string"
+                }
+            ],
+            "tones": [
+                {
+                    "gender": 0,
+                    "tone": "string",
+                    "remark": "string"
+                }
+            ],
+            "intro": "string",
+            "portrait": "string",
+            "modelImage": "string",
+            "digitalCode": "string"
+        },
+        "setting": {
+            "knowledge": {
+                "ragDatasets": [
+                    {
+                        "id": 0,
+                        "teamId": 0,
+                        "ragDatasetId": "string",
+                        "name": "string",
+                        "isEnable": 0,
+                        "isPublish": 0,
+                        "createUserId": 0,
+                        "flag": 0,
+                        "createTime": "2019-08-24T14:15:22.123Z"
+                    }
+                ],
+                "faqs": [
+                    {
+                        "id": 0,
+                        "teamId": 0,
+                        "questionName": "string",
+                        "startTime": "2019-08-24T14:15:22.123Z",
+                        "endTime": "2019-08-24T14:15:22.123Z",
+                        "isEnable": 0,
+                        "isClear": 0,
+                        "createUserId": 0,
+                        "updateTime": "2019-08-24T14:15:22.123Z",
+                        "createTime": "2019-08-24T14:15:22.123Z",
+                        "similarQuestions": [
+                            "string"
+                        ],
+                        "answers": [
+                            "string"
+                        ]
+                    }
+                ],
+                "medias": [
+                    {
+                        "id": 0,
+                        "teamId": 0,
+                        "ragVideoId": "string",
+                        "ragTaskId": "string",
+                        "resourceId": 0,
+                        "videoName": "string",
+                        "startTime": "2019-08-24T14:15:22.123Z",
+                        "endTime": "2019-08-24T14:15:22.123Z",
+                        "isEnable": 0,
+                        "isEnhance": 0,
+                        "status": 0,
+                        "isPublish": 0,
+                        "createUserId": 0,
+                        "flag": 0,
+                        "createTime": "2019-08-24T14:15:22.123Z"
+                    }
+                ],
+                "questionBanks": {}
+            },
+            "prologue": {
+                "prologue": "string",
+                "isOpeningQuestions": true,
+                "questionType": 0,
+                "faqs": [
+                    {
+                        "id": 0,
+                        "teamId": 0,
+                        "questionName": "string",
+                        "startTime": "2019-08-24T14:15:22.123Z",
+                        "endTime": "2019-08-24T14:15:22.123Z",
+                        "isEnable": 0,
+                        "isClear": 0,
+                        "createUserId": 0,
+                        "updateTime": "2019-08-24T14:15:22.123Z",
+                        "createTime": "2019-08-24T14:15:22.123Z",
+                        "similarQuestions": [
+                            "string"
+                        ],
+                        "answers": [
+                            "string"
+                        ]
+                    }
+                ],
+                "myQuestions": [
+                    "string"
+                ]
+            },
+            "rule": {
+                "id": 0,
+                "chatRule": {
+                    "isMultimodal": true,
+                    "faqSimThreshold": 0,
+                    "faqTopK": 1
+                },
+                "unusualRule": {
+                    "excepitonReply": "string",
+                    "notMatchReplyType": 0,
+                    "fixedReplys": [
+                        "string"
+                    ],
+                    "llmReply": {
+                        "isWebSearch": true,
+                        "isShowSign": true,
+                        "isMyPrompt": true,
+                        "myPrompt": "string"
+                    }
+                },
+                "safeRule": {
+                    "isRejectAnswer": true,
+                    "rejectAnswer": "string",
+                    "sensitiveBankIds": [
+                        0
+                    ],
+                    "sensitiveBanks": [
+                        {
+                            "id": 0,
+                            "bankName": "string",
+                            "isEnable": 0,
+                            "updateTime": "2019-08-24T14:15:22.123Z",
+                            "words": [
+                                "string"
+                            ]
+                        }
+                    ]
+                }
+            },
+            "role": {
+                "persona": "string",
+                "style": "string",
+                "styleDesc": "string"
+            },
+            "plugins": [
+                {
+                    "pluginId": 0,
+                    "pluginName": "string",
+                    "pluginCode": "string",
+                    "pluginIntro": "string",
+                    "pluginIcon": "string",
+                    "pluginParams": {}
+                }
+            ],
+            "majorWord": {
+                "isSynonymRewrite": true,
+                "majorBanks": [
+                    {
+                        "id": 0,
+                        "bankName": "string",
+                        "updateTime": "2019-08-24T14:15:22.123Z",
+                        "words": [
+                            {
+                                "word": "string",
+                                "similarWords": "string",
+                                "updateTime": "2019-08-24T14:15:22.123Z"
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+    },
+    "success": true,
+    "error": "string"
+}

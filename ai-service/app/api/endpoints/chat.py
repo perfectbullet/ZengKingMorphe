@@ -478,6 +478,11 @@ async def openai_chat_completions(
         )
 
         logger.info(f"OpenAI chat completion request: {request}")
+        # OpenAI chat completion request: model='qwen2.5:7b' 
+        # messages=[OpenAIMessage(role='user', content='胡桃')] 
+        # stream=True temperature=0.7 max_tokens=None employee_id='hutao' 
+        # user_id='user_123456' session_id='sess_20251218_abc123' 
+        # session_id2='session_id2_default'
 
         if request.stream:
             # Return streaming response

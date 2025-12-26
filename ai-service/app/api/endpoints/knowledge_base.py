@@ -690,14 +690,14 @@ async def create_rag_document_with_segment(
         创建结果（task_id和rag_document_id）
     """
     try:
-        logger.info(f"Create RAG document with segment config: team_id={request.team_id}, dataset_id={request.dataset_id}, document_name={request.document_name}, kb_id={request.rag_data_set_id}, segment_flag={request.segment_flag}")
+        logger.info(f"Create RAG document with segment config: kb_id={request.kb_id}, document_name={request.document_name}, resource_id={request.resource_id}, segment_flag={request.segment_flag}")
         
         # Verify knowledge base exists
-        kb = await db.knowledge_bases.find_one({"kb_id": request.rag_data_set_id})
+        kb = await db.knowledge_bases.find_one({"kb_id": request.kb_id})
         if not kb:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Knowledge base {request.rag_data_set_id} not found"
+                detail=f"Knowledge base {request.kb_id} not found"
             )
         
         # Download file from resource_url
@@ -749,28 +749,26 @@ async def create_rag_document_with_segment(
         
         # Submit async task
         task_id = await task_processor.submit_task(
-            kb_id=request.rag_data_set_id,
+            kb_id=request.kb_id,
             filename=request.document_name,
             file_path=file_path,
             category=None,  # Could map from Java dataset info
             chunk_config=chunk_config
         )
         
-        # Generate rag_document_id (will be replaced by actual doc_id after processing)
-        rag_document_id = f"doc_{hashlib.md5(f'{request.document_name}_{request.rag_data_set_id}'.encode()).hexdigest()[:12]}"
+        # Generate document_id (will be replaced by actual doc_id after processing)
+        document_id = f"doc_{hashlib.md5(f'{request.document_name}_{request.kb_id}'.encode()).hexdigest()[:12]}"
         
         return CreateRagDocumentResponse(
             code=200,
             message="success",
             data={
                 "task_id": task_id,
-                "rag_document_id": rag_document_id,
                 "status": "processing",
-                "team_id": request.team_id,
-                "dataset_id": request.dataset_id,
+                "document_id": document_id,
                 "resource_id": request.resource_id,
                 "document_name": request.document_name,
-                "rag_data_set_id": request.rag_data_set_id
+                "kb_id": request.kb_id
             }
         )
     
