@@ -66,6 +66,7 @@ class ConversationWorkflow:
     def __init__(self):
         # Initialize LLM based on configuration
         if settings.use_ollama:
+            logger.info(f"Ollama configuration detected, initializing Ollama LLMs,model= {settings.ollama_model}")
             # Use Ollama
             self.llm = ChatOllama(
                 base_url=settings.ollama_base_url,
@@ -275,10 +276,8 @@ class ConversationWorkflow:
                 state["employee_config"] = employee
             
             logger.info(
-                "Employee config loaded",
-                employee_id=state["employee_id"],
-                kb_count=len(state["employee_config"].get("capabilities", {}).get("kb_ids", [])),
-                faq_count=len(state["employee_config"].get("faqs", []))
+                f"Employee config loaded: {employee}",
+                 
             )
             return state
             

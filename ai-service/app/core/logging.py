@@ -89,47 +89,29 @@ def setup_logging() -> None:
     # Parse log level from settings
     log_level = settings.log_level.upper()
     
-    # Development mode: colorized console output with detailed format
-    if settings.debug:
-        _loguru_logger.add(
-            sys.stdout,
-            level=log_level,
-            format=(
-                "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
-                "<level>{level: <8}</level> | "
-                "<cyan>{extra[module]}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> | "
-                "<level>{message}</level> | "
-                "{extra}"
-            ),
-            colorize=True,
-            backtrace=True,
-            diagnose=True,
-        )
-    else:
-        # Production mode: JSON structured logging
-        _loguru_logger.add(
-            sys.stdout,
-            level=log_level,
-            format="{message}",
-            serialize=True,  # Output as JSON
-            backtrace=False,
-            diagnose=False,
-        )
+    # Unified simple text format for all modes
+    _loguru_logger.add(
+        sys.stdout,
+        level=log_level,
+        format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {extra[module]}:{function}:{line} - {message}",
+        colorize=False,
+        backtrace=False,
+        diagnose=False,
+    )
     
     # Optional: Add file logging with rotation
     if hasattr(settings, 'log_file') and settings.log_file:
         _loguru_logger.add(
             settings.log_file,
             level=log_level,
-            format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {extra[module]}:{function}:{line} | {message} | {extra}",
+            format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {extra[module]}:{function}:{line} - {message}",
             rotation="100 MB",  # Rotate when file reaches 100MB
             retention="30 days",  # Keep logs for 30 days
             compression="zip",  # Compress rotated logs
-            serialize=True,  # JSON format for production
             enqueue=True,  # Async logging for better performance
         )
     
-    _loguru_logger.info("Loguru logging configured", level=log_level, debug=settings.debug)
+    _loguru_logger.info(f"Loguru logging configured (level={log_level}, debug={settings.debug})")
 
 
 def get_logger(name: str) -> LoguruAdapter:

@@ -441,7 +441,7 @@ async def generate_openai_stream_response(
             
             # 检测 knowledge_retrieval 节点并发送状态提示
             if node_name == "knowledge_retrieval":
-                status_token = "好的。"
+                status_token = "正在查询资料。"
                 status_chunk_data = {
                     "id": chat_id,
                     "object": "chat.completion.chunk",
@@ -474,10 +474,9 @@ async def generate_openai_stream_response(
                 await db.stream_chunks.insert_one(status_chunk_record.model_dump())
                 
                 yield json.dumps(status_chunk_data)
-                
             # 检测 web_search 节点并发送状态提示
             elif node_name == "web_search":
-                status_token = "ok。"
+                status_token = "正在进行网络搜索。"
                 status_chunk_data = {
                     "id": chat_id,
                     "object": "chat.completion.chunk",
