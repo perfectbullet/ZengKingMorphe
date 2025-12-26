@@ -77,6 +77,16 @@ async def test_create_rag_document():
     except Exception as e:
         print(f"\n✗ Unexpected error: {e}")
 
+# Simple test with minimal config
+simple_request = {
+    "team_id": 1,
+    "dataset_id": 1,
+    "resource_id": 1001,
+    "document_name": "simple_test.txt",
+    "segment_flag": 0,  # Auto segmentation (use defaults)
+    "rag_data_set_id": "kb_316a7dbc75d0",
+    "resource_url": "https://www.example.com/test.txt"  # Replace with real URL
+}
 
 async def test_with_simple_url():
     """Test with a simple text file URL."""
@@ -84,17 +94,7 @@ async def test_with_simple_url():
     base_url = "http://localhost:8100"
     endpoint = f"{base_url}/api/knowledge_base/documents/create_with_segment"
     
-    # Simple test with minimal config
-    simple_request = {
-        "team_id": 1,
-        "dataset_id": 1,
-        "resource_id": 1001,
-        "document_name": "simple_test.txt",
-        "segment_flag": 0,  # Auto segmentation (use defaults)
-        "rag_data_set_id": "kb_316a7dbc75d0",
-        "resource_url": "https://www.example.com/test.txt"  # Replace with real URL
-    }
-    
+
     print("\n" + "=" * 80)
     print("Testing with AUTO segmentation (segment_flag=0)")
     print("=" * 80)

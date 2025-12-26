@@ -1,99 +1,27 @@
 """
 Logging configuration for the Digital Employee AI Service.
-Using loguru with structlog-style keyword argument support.
+Using loguru for structured logging.
 """
 
 import sys
-from loguru import logger as _loguru_logger
+from loguru import logger
 from app.core.config import settings
-
-
-class LoguruAdapter:
-    """
-    Adapter to support structlog-style keyword arguments with loguru.
-    
-    Allows seamless migration from structlog syntax like:
-        logger.info(f"Message: key1={value1}, key2={value2}")
-    
-    To loguru's structured logging via extra dict:
-        logger.bind(key1=value1, key2=value2).info("Message")
-    """
-    
-    def __init__(self, name: str):
-        """Initialize adapter with module name."""
-        self.name = name
-        self._logger = _loguru_logger.bind(module=name)
-    
-    def _bind_and_log(
-        self, 
-        level: str, 
-        message: str, 
-        exc_info: bool = False,
-        **kwargs
-    ) -> None:
-        """
-        Internal method to bind context and log message.
-        
-        Args:
-            level: Log level (debug/info/warning/error)
-            message: Log message
-            exc_info: Whether to include exception info (for error logs)
-            **kwargs: Structured context fields
-        """
-        # Filter out None values to keep logs clean
-        context = {k: v for k, v in kwargs.items() if v is not None}
-        
-        # Bind context to logger
-        bound_logger = self._logger.bind(**context) if context else self._logger
-        
-        # Handle exception info
-        if exc_info:
-            bound_logger.opt(exception=True).log(level.upper(), message)
-        else:
-            bound_logger.log(level.upper(), message)
-    
-    def debug(self, message: str, **kwargs) -> None:
-        """Log debug message with optional structured fields."""
-        self._bind_and_log("debug", message, **kwargs)
-    
-    def info(self, message: str, **kwargs) -> None:
-        """Log info message with optional structured fields."""
-        self._bind_and_log("info", message, **kwargs)
-    
-    def warning(self, message: str, **kwargs) -> None:
-        """Log warning message with optional structured fields."""
-        self._bind_and_log("warning", message, **kwargs)
-    
-    def error(self, message: str, exc_info: bool = False, **kwargs) -> None:
-        """
-        Log error message with optional structured fields and exception info.
-        
-        Args:
-            message: Error message
-            exc_info: If True, includes exception traceback
-            **kwargs: Structured context fields
-        """
-        self._bind_and_log("error", message, exc_info=exc_info, **kwargs)
-    
-    def exception(self, message: str, **kwargs) -> None:
-        """Log exception with traceback (alias for error with exc_info=True)."""
-        self._bind_and_log("error", message, exc_info=True, **kwargs)
 
 
 def setup_logging() -> None:
     """Configure loguru logging with structured output support."""
     
     # Remove default handler
-    _loguru_logger.remove()
+    logger.remove()
     
     # Parse log level from settings
     log_level = settings.log_level.upper()
     
-    # Unified simple text format for all modes
-    _loguru_logger.add(
+    # Unified simple text format for all modes (use {name} instead of {extra[module]})
+    logger.add(
         sys.stdout,
         level=log_level,
-        format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {extra[module]}:{function}:{line} - {message}",
+        format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}",
         colorize=False,
         backtrace=False,
         diagnose=False,
@@ -101,31 +29,31 @@ def setup_logging() -> None:
     
     # Optional: Add file logging with rotation
     if hasattr(settings, 'log_file') and settings.log_file:
-        _loguru_logger.add(
+        logger.add(
             settings.log_file,
             level=log_level,
-            format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {extra[module]}:{function}:{line} - {message}",
+            format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}",
             rotation="100 MB",  # Rotate when file reaches 100MB
             retention="30 days",  # Keep logs for 30 days
             compression="zip",  # Compress rotated logs
             enqueue=True,  # Async logging for better performance
         )
     
-    _loguru_logger.info(f"Loguru logging configured (level={log_level}, debug={settings.debug})")
+    logger.info(f"Loguru logging configured (level={log_level}, debug={settings.debug})")
 
 
-def get_logger(name: str) -> LoguruAdapter:
+def get_logger(name: str):
     """
-    Get a logger adapter instance with structlog-compatible API.
+    Get a logger instance bound with module name.
     
     Args:
         name: Logger name (typically __name__ of the module)
     
     Returns:
-        LoguruAdapter instance supporting keyword argument logging
+        Loguru logger instance
     
     Example:
         logger = get_logger(__name__)
-        logger.info(f"User login: user_id={user_id}, ip={ip}")
+        logger.info("User login", user_id=user_id, ip=ip)
     """
-    return LoguruAdapter(name)
+    return logger.bind(module=name)
