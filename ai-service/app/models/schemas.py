@@ -396,9 +396,9 @@ class SegmentVo(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "team_id": 40,
-                "dataset_document_id": 16,
-                "rag_document_id": "doc_abc123",
+                
+                "kb_id": "kb_id_abc123",
+                "document_id": "doc_abc123",
                 "is_space_flag": 1,
                 "is_menu_flag": 1,
                 "segment_type": 1,
@@ -411,9 +411,8 @@ class SegmentVo(BaseModel):
         }
     )
     
-    team_id: int = Field(..., description="团队ID")
-    dataset_document_id: int = Field(..., description="RAG文档ID")
-    rag_document_id: Optional[str] = Field(None, description="RAG系统文档ID")
+    kb_id: str = Field(..., description="RAG文档ID")
+    document_id: Optional[str] = Field(None, description="RAG系统文档ID")
     is_space_flag: int = Field(0, description="文本预处理：删除连续空格、换行、制表符：0=不启用，1=启用")
     is_menu_flag: int = Field(0, description="文本预处理：删除目录、页眉、页脚：0=不启用，1=启用")
     segment_type: int = Field(0, description="分段方式：0=换行切分，1=分段标识符切分")
@@ -429,14 +428,13 @@ class CreateRagDocumentRequest(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "team_id": 40,
-                "kb_id": 3,
+                "kb_id": "kb_id_abc123",
                 "resource_id": 48907,
                 "document_name": "首饰雕蜡工艺-全本.txt",
                 "segment_flag": 1,
                 "segment_vo": {
-                    "team_id": 40,
-                    "dataset_document_id": 16,
+                    "kb_id": "kb_id_abc123",
+                    "document_id": "doc_abc123",
                     "is_space_flag": 1,
                     "is_menu_flag": 0,
                     "segment_type": 1,
@@ -450,9 +448,8 @@ class CreateRagDocumentRequest(BaseModel):
             }
         }
     )
-    
-    team_id: int = Field(..., description="团队ID")
-    kb_id: int = Field(..., description="知识库ID")
+
+    kb_id: str = Field(..., description="知识库ID")
     resource_id: int = Field(..., description="系统资源ID")
     document_name: str = Field(..., description="文档名称")
     start_time: Optional[str] = Field(None, description="生效开始时间")
