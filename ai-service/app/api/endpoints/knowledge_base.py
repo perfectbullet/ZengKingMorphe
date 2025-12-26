@@ -49,7 +49,7 @@ async def create_knowledge_base(
         \n- Created knowledge base data
     """
     try:
-        logger.info("Create knowledge base request", name=request.name, category=request.category)
+        logger.info(f"Create knowledge base request: name={request.name}, category={request.category}")
         
         # Generate KB ID
         import hashlib
@@ -86,7 +86,7 @@ async def create_knowledge_base(
         }
         
     except Exception as e:
-        logger.error("Create knowledge base error", error=str(e), exc_info=True)
+        logger.error(f"Create knowledge base error: error={str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create knowledge base"
@@ -112,7 +112,7 @@ async def update_knowledge_base(
     """
     try:
         kb_id = request.kb_id
-        logger.info("Update knowledge base request", kb_id=kb_id, updates=request.model_dump(exclude_none=True))
+        logger.info(f"Update knowledge base request: kb_id={kb_id}, updates={request.model_dump(exclude_none=True)}")
         
         # Check if knowledge base exists
         kb = await db.knowledge_bases.find_one({"kb_id": kb_id})
@@ -152,7 +152,7 @@ async def update_knowledge_base(
         updated_kb = await db.knowledge_bases.find_one({"kb_id": kb_id})
         updated_kb.pop("_id", None)
         
-        logger.info("Knowledge base updated", kb_id=kb_id, fields_updated=list(update_data.keys()))
+        logger.info(f"Knowledge base updated: kb_id={kb_id}, fields_updated={list(update_data.keys())}")
         
         return {
             "code": 200,
@@ -172,7 +172,7 @@ async def update_knowledge_base(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Update knowledge base error", kb_id=kb_id, error=str(e), exc_info=True)
+        logger.error(f"Update knowledge base error: kb_id={kb_id}, error={str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to update knowledge base"
@@ -242,7 +242,7 @@ async def list_knowledge_bases(
         }
         
     except Exception as e:
-        logger.error("List knowledge bases error", error=str(e), exc_info=True)
+        logger.error(f"List knowledge bases error: error={str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to list knowledge bases"
@@ -274,11 +274,8 @@ async def upload_documents(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Maximum 50 files allowed per upload"
             )
-        logger.info(
-            "Upload documents request",
-            kb_id=kb_id,
-            file_count=len(files)
-        )
+        logger.info(f"Upload documents request: kb_id={kb_id}, file_count={len(files)}")
+        
         # Async mode: submit tasks and return immediately
         task_ids = []
         for file in files:
@@ -302,7 +299,7 @@ async def upload_documents(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Upload documents error", error=str(e), exc_info=True)
+        logger.error(f"Upload documents error: error={str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to upload documents"
@@ -378,7 +375,7 @@ async def list_documents(
         }
         
     except Exception as e:
-        logger.error("List documents error", error=str(e), exc_info=True)
+        logger.error(f"List documents error: error={str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to list documents"
@@ -403,7 +400,7 @@ async def get_document_detail(
         \n- Document details with chunks summary and knowledge base info
     """
     try:
-        logger.info("Get document detail request", doc_id=doc_id)
+        logger.info(f"Get document detail request: doc_id={doc_id}")
         
         # Get document from MongoDB
         doc = await db.documents.find_one({"doc_id": doc_id})
@@ -447,7 +444,7 @@ async def get_document_detail(
                     chunks_stats["total_characters"] = total_chars
                     chunks_stats["avg_chunk_size"] = total_chars // len(chunks) if chunks else 0
         except Exception as e:
-            logger.warning("Failed to get chunks statistics", doc_id=doc_id, error=str(e))
+            logger.warning(f"Failed to get chunks statistics: doc_id={doc_id}, error={str(e)}")
         
         # Format response
         doc.pop("_id", None)
@@ -473,7 +470,7 @@ async def get_document_detail(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Get document detail error", doc_id=doc_id, error=str(e), exc_info=True)
+        logger.error(f"Get document detail error: doc_id={doc_id}, error={str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to get document detail"
@@ -502,7 +499,7 @@ async def get_document_chunks(
         \n- List of document chunks with text content and metadata
     """
     try:
-        logger.info("Get document chunks request", doc_id=doc_id, page=page, page_size=page_size)
+        logger.info(f"Get document chunks request: doc_id={doc_id}, page={page}, page_size={page_size}")
         
         # Verify document exists
         doc = await db.documents.find_one({"doc_id": doc_id})
@@ -579,7 +576,7 @@ async def get_document_chunks(
         }
         
     except Exception as e:
-        logger.error("Get document chunks error", doc_id=doc_id, error=str(e), exc_info=True)
+        logger.error(f"Get document chunks error: doc_id={doc_id}, error={str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to get document chunks"
@@ -602,7 +599,7 @@ async def get_task_status(
         \n- Task status information (status, progress, doc_id, error, etc.)
     """
     try:
-        logger.info("Get task status request", task_id=task_id)
+        logger.info(f"Get task status request: task_id={task_id}")
         
         task = await task_processor.get_task_status(task_id)
         
@@ -620,7 +617,7 @@ async def get_task_status(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Get task status error", task_id=task_id, error=str(e), exc_info=True)
+        logger.error(f"Get task status error: task_id={task_id}, error={str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to get task status"
@@ -643,7 +640,7 @@ async def cancel_task(
         \n- Cancellation result
     """
     try:
-        logger.info("Cancel task request", task_id=task_id)
+        logger.info(f"Cancel task request: task_id={task_id}")
         
         cancelled = await task_processor.cancel_task(task_id)
         
@@ -661,7 +658,7 @@ async def cancel_task(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Cancel task error", task_id=task_id, error=str(e), exc_info=True)
+        logger.error(f"Cancel task error: task_id={task_id}, error={str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to cancel task"
@@ -693,14 +690,7 @@ async def create_rag_document_with_segment(
         创建结果（task_id和rag_document_id）
     """
     try:
-        logger.info(
-            "Create RAG document with segment config",
-            team_id=request.team_id,
-            dataset_id=request.dataset_id,
-            document_name=request.document_name,
-            kb_id=request.rag_data_set_id,
-            segment_flag=request.segment_flag
-        )
+        logger.info(f"Create RAG document with segment config: team_id={request.team_id}, dataset_id={request.dataset_id}, document_name={request.document_name}, kb_id={request.rag_data_set_id}, segment_flag={request.segment_flag}")
         
         # Verify knowledge base exists
         kb = await db.knowledge_bases.find_one({"kb_id": request.rag_data_set_id})
@@ -732,10 +722,10 @@ async def create_rag_document_with_segment(
                         async for chunk in response.content.iter_chunked(8192):
                             f.write(chunk)
             
-            logger.info("Downloaded file from URL", url=request.resource_url, file_path=file_path)
+            logger.info(f"Downloaded file from URL: url={request.resource_url}, file_path={file_path}")
         
         except aiohttp.ClientError as e:
-            logger.error("Failed to download file", url=request.resource_url, error=str(e))
+            logger.error(f"Failed to download file: url={request.resource_url}, error={str(e)}")
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Failed to download file: {str(e)}"
@@ -755,7 +745,7 @@ async def create_rag_document_with_segment(
                 'identifier_default': segment.identifier_default,
                 'identifier_customize': segment.identifier_customize,
             }
-            logger.info("Using custom segment config", chunk_config=chunk_config)
+            logger.info(f"Using custom segment config: chunk_config={chunk_config}")
         
         # Submit async task
         task_id = await task_processor.submit_task(
@@ -787,7 +777,7 @@ async def create_rag_document_with_segment(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Create RAG document error", error=str(e), exc_info=True)
+        logger.error(f"Create RAG document error: error={str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create RAG document"

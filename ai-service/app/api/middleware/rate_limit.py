@@ -87,11 +87,7 @@ class RateLimiter:
             del self.session_buckets[session_id]
         
         self.last_cleanup = now
-        logger.info(
-            "Cleaned up old rate limit buckets",
-            expired_users=len(expired_users),
-            expired_sessions=len(expired_sessions)
-        )
+        logger.info(f"Cleaned up old rate limit buckets: expired_users={len(expired_users)}, expired_sessions={len(expired_sessions)}")
     
     async def check_user_rate_limit(self, user_id: str) -> None:
         """
@@ -114,7 +110,7 @@ class RateLimiter:
         
         bucket = self.user_buckets[user_id]
         if not bucket.consume():
-            logger.warning("User rate limit exceeded", user_id=user_id)
+            logger.warning(f"User rate limit exceeded: user_id={user_id}")
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail="Rate limit exceeded. Please try again later.",
@@ -139,7 +135,7 @@ class RateLimiter:
         
         bucket = self.session_buckets[session_id]
         if not bucket.consume():
-            logger.warning("Session rate limit exceeded", session_id=session_id)
+            logger.warning(f"Session rate limit exceeded: session_id={session_id}")
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail="Too many requests in this session. Please slow down.",

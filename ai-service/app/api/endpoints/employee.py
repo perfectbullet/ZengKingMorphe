@@ -35,7 +35,7 @@ async def create_employee(
         \n- Created employee data
     """
     try:
-        logger.info("Create employee request", employee_id=request.employee_id)
+        logger.info(f"Create employee request: employee_id={request.employee_id}")
         
         # Check if employee already exists
         existing = await db.employee_configs.find_one({"employee_id": request.employee_id})
@@ -66,7 +66,7 @@ async def create_employee(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Create employee error", error=str(e), exc_info=True)
+        logger.error(f"Create employee error: error={str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create employee"
@@ -97,7 +97,7 @@ async def list_employees(
         \n- List of employees
     """
     try:
-        logger.info("List employees request", domain=domain, status=status)
+        logger.info(f"List employees request: domain={domain}, status={status}")
         
         # Build query
         query = {}
@@ -137,7 +137,7 @@ async def list_employees(
         }
         
     except Exception as e:
-        logger.error("List employees error", error=str(e), exc_info=True)
+        logger.error(f"List employees error: error={str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to list employees"
@@ -162,7 +162,7 @@ async def get_employee(
         \n- Employee configuration
     """
     try:
-        logger.info("Get employee request", employee_id=employee_id)
+        logger.info(f"Get employee request: employee_id={employee_id}")
         
         employee = await db.employee_configs.find_one({"employee_id": employee_id})
         
@@ -188,7 +188,7 @@ async def get_employee(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Get employee error", employee_id=employee_id, error=str(e), exc_info=True)
+        logger.error(f"Get employee error: employee_id={employee_id}, error={str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to get employee"
@@ -215,7 +215,7 @@ async def update_employee(
         \n- Updated employee data
     """
     try:
-        logger.info("Update employee request", employee_id=employee_id)
+        logger.info(f"Update employee request: employee_id={employee_id}")
         
         # Build update document
         update_doc = {
@@ -247,7 +247,7 @@ async def update_employee(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Update employee error", employee_id=employee_id, error=str(e), exc_info=True)
+        logger.error(f"Update employee error: employee_id={employee_id}, error={str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to update employee"
@@ -272,7 +272,7 @@ async def delete_employee(
         \n- Success message
     """
     try:
-        logger.info("Delete employee request", employee_id=employee_id)
+        logger.info(f"Delete employee request: employee_id={employee_id}")
         
         result = await db.employee_configs.delete_one({"employee_id": employee_id})
         
@@ -290,7 +290,7 @@ async def delete_employee(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Delete employee error", employee_id=employee_id, error=str(e), exc_info=True)
+        logger.error(f"Delete employee error: employee_id={employee_id}, error={str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to delete employee"

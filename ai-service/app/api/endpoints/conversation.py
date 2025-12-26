@@ -116,13 +116,7 @@ async def get_conversation_records(
                 record["updated_at"] = record["updated_at"].isoformat()
             formatted_records.append(record)
         
-        logger.info(
-            "Retrieved conversation records",
-            total=total,
-            page=page,
-            page_size=page_size,
-            filters=query_filter
-        )
+        logger.info(f"Retrieved conversation records: total={total}, page={page}, page_size={page_size}, filters={query_filter}")
         
         return {
             "code": 200,
@@ -139,7 +133,7 @@ async def get_conversation_records(
         }
         
     except Exception as e:
-        logger.error("Failed to retrieve conversation records", error=str(e), exc_info=True)
+        logger.error(f"Failed to retrieve conversation records: error={str(e)}", exc_info=True)
         return {
             "code": 500,
             "message": f"Failed to retrieve records: {str(e)}"
@@ -339,12 +333,7 @@ async def get_conversation_statistics(
                 for item in kb_stats
             ]
         
-        logger.info(
-            "Retrieved conversation statistics",
-            dimension=dimension,
-            total_conversations=total_conversations,
-            date_range=f"{start_date} to {end_date}"
-        )
+        logger.info(f"Retrieved conversation statistics: dimension={dimension}, total_conversations={total_conversations}, date_range={start_date} to {end_date}")
         
         return {
             "code": 200,
@@ -353,7 +342,7 @@ async def get_conversation_statistics(
         }
         
     except Exception as e:
-        logger.error("Failed to retrieve conversation statistics", error=str(e), exc_info=True)
+        logger.error(f"Failed to retrieve conversation statistics: error={str(e)}", exc_info=True)
         return {
             "code": 500,
             "message": f"Failed to retrieve statistics: {str(e)}"

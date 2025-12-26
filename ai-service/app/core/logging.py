@@ -13,7 +13,7 @@ class LoguruAdapter:
     Adapter to support structlog-style keyword arguments with loguru.
     
     Allows seamless migration from structlog syntax like:
-        logger.info("Message", key1=value1, key2=value2)
+        logger.info(f"Message: key1={value1}, key2={value2}")
     
     To loguru's structured logging via extra dict:
         logger.bind(key1=value1, key2=value2).info("Message")
@@ -126,6 +126,6 @@ def get_logger(name: str) -> LoguruAdapter:
     
     Example:
         logger = get_logger(__name__)
-        logger.info("User login", user_id=123, ip="192.168.1.1")
+        logger.info(f"User login: user_id={user_id}, ip={ip}")
     """
     return LoguruAdapter(name)

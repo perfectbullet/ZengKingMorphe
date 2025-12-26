@@ -80,7 +80,7 @@ class ConversationWorkflow:
                 temperature=0,
                 format="json",  # 强制 JSON
             )
-            logger.info("Using Ollama LLM", model=settings.ollama_model)
+            logger.info(f"Using Ollama LLM: model={settings.ollama_model}")
         else:
             # Use OpenAI-style API (e.g., SiliconFlow)
             self.llm = ChatOpenAI(
@@ -97,7 +97,7 @@ class ConversationWorkflow:
                 temperature=0,
                 model_kwargs={"response_format": {"type": "json_object"}},
             )
-            logger.info("Using OpenAI-style LLM", model=settings.openai_model)
+            logger.info(f"Using OpenAI-style LLM: model={settings.openai_model}")
         
         # 初始化 Web 搜索工具
         self.web_search_tool = TavilySearchResults(k=3)
@@ -251,7 +251,7 @@ class ConversationWorkflow:
             employee = await db.employee_configs.find_one({"employee_id": state["employee_id"]})
             
             if not employee:
-                logger.warning("Employee config not found, using defaults", employee_id=state["employee_id"])
+                logger.warning(f"Employee config not found, using defaults: employee_id={state['employee_id']}")
                 # Default configuration
                 state["employee_config"] = {
                     "name": "AI助手",
@@ -282,7 +282,7 @@ class ConversationWorkflow:
             return state
             
         except Exception as e:
-            logger.error("Failed to load employee config", error=str(e), exc_info=True)
+            logger.error(f"Failed to load employee config: error={str(e)}", exc_info=True)
             state["employee_config"] = {}
             return state
     
@@ -316,11 +316,11 @@ class ConversationWorkflow:
                 await db.sessions.insert_one(session_model.model_dump())
                 state["context"] = {"messages": [], "message_count": 0}
             
-            logger.info("Loaded session context", session_id=state["session_id"])
+            logger.info(f"Loaded session context: session_id={state['session_id']}")
             return state
             
         except Exception as e:
-            logger.error("Failed to load session context", error=str(e), exc_info=True)
+            logger.error(f"Failed to load session context: error={str(e)}", exc_info=True)
             state["context"] = {"messages": [], "message_count": 0}
             return state
     
@@ -366,16 +366,12 @@ class ConversationWorkflow:
                     "category": best_faq.get("category")
                 }
                 
-                logger.info(
-                    "FAQ matched",
-                    faq_id=best_faq.get("faq_id"),
-                    question=best_faq.get("question")
-                )
+                logger.info(f"FAQ matched: faq_id={best_faq.get('faq_id')}, question={best_faq.get('question')}")
             else:
                 state["faq_matched"] = None
             
         except Exception as e:
-            logger.error("FAQ matching failed", error=str(e), exc_info=True)
+            logger.error(f"FAQ matching failed: error={str(e)}", exc_info=True)
             state["faq_matched"] = None
         
         return state
@@ -401,12 +397,8 @@ class ConversationWorkflow:
                 if keyword in query:
                     state["is_realtime_query"] = True
                     state["realtime_category"] = category
-                    state["realtime_detect_reason"] = f"keyword:{keyword}"
-                    logger.info(
-                        "Realtime query detected",
-                        category=category,
-                        keyword=keyword
-                    )
+                    state['realtime_detect_reason'] = f"keyword:{keyword}"
+                    logger.info(f"Realtime query detected: category={category}, keyword={keyword}")
                     return state
         
         state["is_realtime_query"] = False
@@ -436,14 +428,10 @@ class ConversationWorkflow:
             state["retrieved_docs"] = results
             state["kb_used"] = list(set([doc.get("kb_id") for doc in results if doc.get("kb_id")]))
             
-            logger.info(
-                "Knowledge retrieval completed",
-                results_count=len(results),
-                kb_used=state["kb_used"]
-            )
+            logger.info(f"Knowledge retrieval completed: results_count={len(results)}, kb_used={state['kb_used']}")
             
         except Exception as e:
-            logger.error("Knowledge retrieval failed", error=str(e), exc_info=True)
+            logger.error(f"Knowledge retrieval failed: error={str(e)}", exc_info=True)
             state["retrieved_docs"] = []
             state["kb_used"] = []
         
@@ -460,7 +448,7 @@ class ConversationWorkflow:
         # Use the top document's score as relevance score
         state["relevance_score"] = docs[0].get("rrf_score", 0.0) if docs else 0.0
         
-        logger.info("Document grading completed", relevance_score=state["relevance_score"])
+        logger.info(f"Document grading completed: relevance_score={state['relevance_score']}")
         return state
     
     async def web_search(self, state: ConversationState) -> ConversationState:
@@ -486,10 +474,7 @@ class ConversationWorkflow:
             web_search_enabled = capabilities.get("web_search_enabled", True)
             
             if not web_search_enabled:
-                logger.info(
-                    "Web search disabled for employee",
-                    employee_id=state.get("employee_id")
-                )
+                logger.info(f"Web search disabled for employee: employee_id={state.get('employee_id')}")
                 state["web_search_results"] = []
                 state["web_search_used"] = False
                 return state
@@ -497,12 +482,7 @@ class ConversationWorkflow:
             query = state["user_query"]
             
             # Perform web search
-            logger.info(
-                "Performing web search",
-                query=query[:100],
-                is_realtime=state.get("is_realtime_query", False),
-                realtime_category=state.get("realtime_category")
-            )
+            logger.info(f"Performing web search: query={query[:100]}, is_realtime={state.get('is_realtime_query')}, realtime_category={state.get('realtime_category')}")
             
             # Call Tavily search tool
             search_results = await self.web_search_tool.ainvoke({"query": query})
@@ -523,19 +503,10 @@ class ConversationWorkflow:
             state["web_search_results"] = formatted_results
             state["web_search_used"] = len(formatted_results) > 0
             
-            logger.info(
-                "Web search completed",
-                results_count=len(formatted_results),
-                has_results=state["web_search_used"]
-            )
+            logger.info(f"Web search completed: results_count={len(formatted_results)}, has_results={state['web_search_used']}")
             
         except Exception as e:
-            logger.error(
-                "Web search failed",
-                error=str(e),
-                query=state.get("user_query", "")[:100],
-                exc_info=True
-            )
+            logger.error(f"Web search failed: error={str(e)}, query={state.get('user_query', '')[:100]}", exc_info=True)
             # Don't fail the entire workflow, just continue without web results
             state["web_search_results"] = []
             state["web_search_used"] = False
@@ -562,12 +533,7 @@ class ConversationWorkflow:
         state["confidence"] = confidence
         state["final_answer"] = ""  # Placeholder
         
-        logger.info(
-            "Ready for answer generation",
-            confidence=confidence,
-            web_search_used=state.get("web_search_used", False),
-            kb_docs_count=len(state.get("retrieved_docs", []))
-        )
+        logger.info(f"Ready for answer generation: confidence={confidence}, web_search_used={state.get('web_search_used')}, kb_docs_count={len(state.get('retrieved_docs', []))}")
         
         return state
     
@@ -733,10 +699,10 @@ class ConversationWorkflow:
                 }
             )
             
-            logger.info("Conversation saved", conversation_id=conv_id)
+            logger.info(f"Conversation saved: conversation_id={conv_id}")
             
         except Exception as e:
-            logger.error("Failed to save conversation", error=str(e), exc_info=True)
+            logger.error(f"Failed to save conversation: error={str(e)}", exc_info=True)
         
         return state
     
@@ -768,7 +734,7 @@ class ConversationWorkflow:
             return result
             
         except Exception as e:
-            logger.error("Workflow execution failed", error=str(e), exc_info=True)
+            logger.error(f"Workflow execution failed: error={str(e)}", exc_info=True)
             raise
 
 

@@ -30,9 +30,7 @@ class ChromaDB:
         try:
             # Initialize Chroma client using REST API (Chroma >=0.5)
             logger.info(
-                "Initializing Chroma client",
-                host=settings.chroma_host,
-                port=settings.chroma_port
+                f"Initializing Chroma client: host={settings.chroma_host}, port={settings.chroma_port}"
             )
             
             # Create settings with telemetry disabled to avoid signature mismatch errors
@@ -51,11 +49,7 @@ class ChromaDB:
 
             # Create embedding function based on configuration
             logger.info(
-                "Creating embedding function",
-                embedding_type=settings.embedding_type,
-                embedding_model=settings.embedding_model,
-                embedding_base_url=settings.embedding_base_url,
-                embedding_api_url=settings.embedding_api_url
+                f"Creating embedding function: embedding_type={settings.embedding_type}, embedding_model={settings.embedding_model}, embedding_base_url={settings.embedding_base_url}, embedding_api_url={settings.embedding_api_url}"
             )
             
             if settings.embedding_type == "siliconflow":
@@ -66,10 +60,7 @@ class ChromaDB:
                     max_tokens=512  # BGE model limit
                 )
                 logger.info(
-                    "Using SiliconFlow embeddings",
-                    model=settings.embedding_model,
-                    base_url=settings.siliconflow_embedding_api_url,
-                    has_api_key=bool(settings.siliconflow_api_key or settings.embedding_api_key)
+                    f"Using SiliconFlow embeddings: model={settings.embedding_model}, base_url={settings.siliconflow_embedding_api_url}, has_api_key={bool(settings.siliconflow_api_key or settings.embedding_api_key)}"
                 )
             elif settings.embedding_type == "ollama":
                 embedder = OllamaEmbeddings(
@@ -78,9 +69,7 @@ class ChromaDB:
                     max_tokens=512  # BGE model limit
                 )
                 logger.info(
-                    "Using Ollama embeddings",
-                    model=settings.embedding_ollama_model,
-                    base_url=settings.ollama_base_url
+                    f"Using Ollama embeddings: model={settings.embedding_ollama_model}, base_url={settings.ollama_base_url}"
                 )
             else:
                 # Default to OpenAI-style embeddings
@@ -91,10 +80,7 @@ class ChromaDB:
                     timeout=30.0,
                 )
                 logger.info(
-                    "Using OpenAI-style embeddings",
-                    model=settings.embedding_model,
-                    base_url=settings.embedding_base_url,
-                    has_api_key=bool(settings.embedding_api_key)
+                    f"Using OpenAI-style embeddings: model={settings.embedding_model}, base_url={settings.embedding_base_url}, has_api_key={bool(settings.embedding_api_key)}"
                 )
 
             embedding_function = ChromaEmbeddingWrapper(embedder)
@@ -128,13 +114,11 @@ class ChromaDB:
             )
 
             logger.info(
-                "Connected to Chroma",
-                host=settings.chroma_host,
-                port=settings.chroma_port,
+                f"Connected to Chroma: host={settings.chroma_host}, port={settings.chroma_port}"
             )
 
         except Exception as e:
-            logger.error("Failed to connect to Chroma", error=str(e))
+            logger.error(f"Failed to connect to Chroma: error={str(e)}")
             raise
 
     def disconnect(self) -> None:
@@ -164,15 +148,11 @@ class ChromaDB:
             collection = self._get_collection(collection_name)
             collection.add(documents=documents, metadatas=metadatas, ids=ids)
             logger.info(
-                "Added documents to Chroma",
-                collection=collection_name,
-                count=len(documents),
+                f"Added documents to Chroma: collection={collection_name}, count={len(documents)}"
             )
         except Exception as e:
             logger.error(
-                "Failed to add documents to Chroma",
-                collection=collection_name,
-                error=str(e),
+                f"Failed to add documents to Chroma: collection={collection_name}, error={str(e)}"
             )
             raise
 
@@ -201,16 +181,12 @@ class ChromaDB:
                 query_texts=query_texts, n_results=n_results, where=where
             )
             logger.info(
-                "Queried documents from Chroma",
-                collection=collection_name,
-                n_results=n_results,
+                f"Queried documents from Chroma: collection={collection_name}, n_results={n_results}"
             )
             return results
         except Exception as e:
             logger.error(
-                "Failed to query documents from Chroma",
-                collection=collection_name,
-                error=str(e),
+                f"Failed to query documents from Chroma: collection={collection_name}, error={str(e)}"
             )
             logger.exception(e)
             raise
@@ -227,15 +203,11 @@ class ChromaDB:
             collection = self._get_collection(collection_name)
             collection.delete(ids=ids)
             logger.info(
-                "Deleted documents from Chroma",
-                collection=collection_name,
-                count=len(ids),
+                f"Deleted documents from Chroma: collection={collection_name}, count={len(ids)}"
             )
         except Exception as e:
             logger.error(
-                "Failed to delete documents from Chroma",
-                collection=collection_name,
-                error=str(e),
+                f"Failed to delete documents from Chroma: collection={collection_name}, error={str(e)}"
             )
             raise
 

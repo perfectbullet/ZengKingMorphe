@@ -82,13 +82,7 @@ class DocumentProcessor:
             
             await db.documents.insert_one(doc_model.model_dump())
             
-            logger.info(
-                "Started processing document",
-                doc_id=doc_id,
-                filename=filename,
-                kb_id=kb_id,
-                custom_chunking=bool(chunk_config)
-            )
+            logger.info(f"Started processing document: doc_id={doc_id}, filename={filename}, kb_id={kb_id}, custom_chunking={bool(chunk_config)}")
             
             # Extract text
             text_content = await self._extract_text(file_path, file_ext)
@@ -128,21 +122,11 @@ class DocumentProcessor:
                 }
             )
             
-            logger.info(
-                "Completed processing document",
-                doc_id=doc_id,
-                chunks_count=len(chunks)
-            )
-            
+            logger.info(f"Completed processing document: doc_id={doc_id}, chunks_count={len(chunks)}")
             return doc_id
             
         except Exception as e:
-            logger.error(
-                "Failed to process document",
-                filename=filename,
-                error=str(e),
-                exc_info=True
-            )
+            logger.error(f"Failed to process document: filename={filename}, error={str(e)}", exc_info=True)
             
             # Update document status to failed
             try:
@@ -189,7 +173,7 @@ class DocumentProcessor:
                     text_parts.append(text)
             return "\n\n".join(text_parts)
         except Exception as e:
-            logger.error("Failed to extract PDF", file=file_path, error=str(e))
+            logger.error(f"Failed to extract PDF: file={file_path}, error={str(e)}")
             raise
     
     async def _extract_docx(self, file_path: str) -> str:
@@ -199,7 +183,7 @@ class DocumentProcessor:
             paragraphs = [para.text for para in doc.paragraphs if para.text.strip()]
             return "\n\n".join(paragraphs)
         except Exception as e:
-            logger.error("Failed to extract DOCX", file=file_path, error=str(e))
+            logger.error(f"Failed to extract DOCX: file={file_path}, error={str(e)}")
             raise
     
     async def _extract_txt(self, file_path: str) -> str:
@@ -208,7 +192,7 @@ class DocumentProcessor:
             async with aiofiles.open(file_path, 'r', encoding='utf-8') as f:
                 return await f.read()
         except Exception as e:
-            logger.error("Failed to extract TXT", file=file_path, error=str(e))
+            logger.error(f"Failed to extract TXT: file={file_path}, error={str(e)}")
             raise
     
     async def _extract_markdown(self, file_path: str) -> str:
@@ -221,7 +205,7 @@ class DocumentProcessor:
             # soup = BeautifulSoup(html, 'html.parser')
             return md_content
         except Exception as e:
-            logger.error("Failed to extract Markdown", file=file_path, error=str(e))
+            logger.error(f"Failed to extract Markdown: file={file_path}, error={str(e)}")
             raise
     
     async def _extract_html(self, file_path: str) -> str:
@@ -232,7 +216,7 @@ class DocumentProcessor:
             soup = BeautifulSoup(html_content, 'html.parser')
             return soup.get_text()
         except Exception as e:
-            logger.error("Failed to extract HTML", file=file_path, error=str(e))
+            logger.error(f"Failed to extract HTML: file={file_path}, error={str(e)}")
             raise
     
     def _preprocess_text(self, text: str, chunk_config: Dict[str, Any]) -> str:
@@ -319,7 +303,7 @@ class DocumentProcessor:
                 separators = [default_identifiers[i] for i, bit in enumerate(bitmap) if bit == '1' and i < len(default_identifiers)]
                 # Add fallback separators
                 separators.extend(['\n\n', '\n', ' ', ''])
-                logger.info("Using system default identifiers", separators=separators[:7])
+                logger.info(f"Using system default identifiers: separators={separators[:7]}")
             
             elif identifier_type == 1:  # Custom identifiers
                 custom_str = chunk_config.get('identifier_customize', '')
@@ -327,7 +311,7 @@ class DocumentProcessor:
                     # Parse custom identifiers (comma-separated or direct list)
                     separators = [s.strip() for s in custom_str.split(',') if s.strip()]
                     separators.extend(['\n\n', '\n', ' ', ''])  # Add fallbacks
-                    logger.info("Using custom identifiers", separators=separators)
+                    logger.info(f"Using custom identifiers: separators={separators}")
         
         # Newline splitting (segment_type=0) or default logic
         if separators is None:
@@ -378,13 +362,7 @@ class DocumentProcessor:
             )
             chunks.append(chunk_model)
         
-        logger.info(
-            "Chunked document with RecursiveCharacterTextSplitter",
-            doc_id=doc_id,
-            file_ext=file_ext,
-            chunks_count=len(chunks),
-            avg_chunk_size=sum(len(c.content) for c in chunks) / len(chunks) if chunks else 0
-        )
+        logger.info(f"Chunked document with RecursiveCharacterTextSplitter: doc_id={doc_id}, file_ext={file_ext}, chunks_count={len(chunks)}",         avg_chunk_size=sum(len(c.content) for c in chunks) / len(chunks) if chunks else 0       )
         
         return chunks
     
@@ -463,11 +441,7 @@ class DocumentProcessor:
         chunk_docs = [chunk.model_dump() for chunk in chunks]
         await db.document_chunks.insert_many(chunk_docs)
         
-        logger.info(
-            "Stored chunks",
-            doc_id=doc_id,
-            chunks_count=len(chunks)
-        )
+        logger.info(f"Stored chunks: doc_id={doc_id}, chunks_count={len(chunks)}")
     
     def _generate_doc_id(self, filename: str, kb_id: str) -> str:
         """Generate unique document ID."""

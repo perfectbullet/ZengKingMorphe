@@ -27,11 +27,7 @@ async def sync_sensitive_words(
         \n- Success message
     """
     try:
-        logger.info(
-            "Sensitive words sync notification",
-            event_type=request.event_type,
-            word_count=len(request.word_ids)
-        )
+        logger.info(f"Sensitive words sync notification: event_type={request.event_type}, word_count={len(request.word_ids)}")
         
         # TODO: Implement sensitive words sync logic in Phase 5
         # 1. Fetch updated words from Java API
@@ -44,7 +40,7 @@ async def sync_sensitive_words(
         }
         
     except Exception as e:
-        logger.error("Sync sensitive words error", error=str(e), exc_info=True)
+        logger.error(f"Sync sensitive words error: error={str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to sync sensitive words"
@@ -67,11 +63,7 @@ async def sync_professional_words(
         \n- Success message
     """
     try:
-        logger.info(
-            "Professional words sync notification",
-            event_type=request.event_type,
-            word_count=len(request.word_ids)
-        )
+        logger.info(f"Professional words sync notification: event_type={request.event_type}, word_count={len(request.word_ids)}")
         
         # TODO: Implement professional words sync logic in Phase 5
         # 1. Fetch updated words from Java API
@@ -84,7 +76,7 @@ async def sync_professional_words(
         }
         
     except Exception as e:
-        logger.error("Sync professional words error", error=str(e), exc_info=True)
+        logger.error(f"Sync professional words error: error={str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to sync professional words"
@@ -107,11 +99,7 @@ async def sync_faq(
         \n- Success message
     """
     try:
-        logger.info(
-            "FAQ sync notification",
-            event_type=request.event_type,
-            faq_count=len(request.word_ids)
-        )
+        logger.info(f"FAQ sync notification: event_type={request.event_type}, faq_count={len(request.word_ids)}")
         
         # TODO: Implement FAQ sync logic in Phase 2
         # 1. Fetch updated FAQs from Java API
@@ -124,7 +112,7 @@ async def sync_faq(
         }
         
     except Exception as e:
-        logger.error("Sync FAQ error", error=str(e), exc_info=True)
+        logger.error(f"Sync FAQ error: error={str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to sync FAQ"

@@ -32,7 +32,7 @@ async def create_session(
         - Created session information
     """
     try:
-        logger.info("Create session request", user_id=request.user_id, employee_id=request.employee_id)
+        logger.info(f"Create session request: user_id={request.user_id}, employee_id={request.employee_id}")
         
         # Check if employee exists
         employee = await db.employee_configs.find_one({"employee_id": request.employee_id})
@@ -63,7 +63,7 @@ async def create_session(
         # Insert into database
         await db.sessions.insert_one(session_doc)
         
-        logger.info("Session created", session_id=session_id, user_id=request.user_id)
+        logger.info(f"Session created: session_id={session_id}, user_id={request.user_id}")
         
         # Format response
         session_doc.pop("_id", None)
@@ -79,7 +79,7 @@ async def create_session(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Failed to create session", error=str(e), exc_info=True)
+        logger.error(f"Failed to create session: error={str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create session"
@@ -104,7 +104,7 @@ async def get_session(
         \n- Session information
     """
     try:
-        logger.info("Get session request", session_id=session_id)
+        logger.info(f"Get session request: session_id={session_id}")
         
         # Get session from database
         session = await db.sessions.find_one({"session_id": session_id})
@@ -131,7 +131,7 @@ async def get_session(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Get session error", session_id=session_id, error=str(e), exc_info=True)
+        logger.error(f"Get session error: session_id={session_id}, error={str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to get session"
@@ -156,7 +156,7 @@ async def end_session(
         \n- Success message
     """
     try:
-        logger.info("End session request", session_id=session_id)
+        logger.info(f"End session request: session_id={session_id}")
         
         # Update session status
         
@@ -184,7 +184,7 @@ async def end_session(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("End session error", session_id=session_id, error=str(e), exc_info=True)
+        logger.error(f"End session error: session_id={session_id}, error={str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to end session"
@@ -215,7 +215,7 @@ async def get_session_conversations(
         - Conversation records for the session with pagination info
     """
     try:
-        logger.info("Get session conversations request", session_id=session_id, page=page, page_size=page_size)
+        logger.info(f"Get session conversations request: session_id={session_id}, page={page}, page_size={page_size}")
         
         # First check if session exists
         session = await db.sessions.find_one({"session_id": session_id})
@@ -252,13 +252,7 @@ async def get_session_conversations(
                 conv["updated_at"] = conv["updated_at"].isoformat()
             formatted_conversations.append(conv)
         
-        logger.info(
-            "Retrieved session conversations",
-            session_id=session_id,
-            total=total,
-            page=page,
-            returned=len(formatted_conversations)
-        )
+        logger.info(f"Retrieved session conversations: session_id={session_id}, total={total}, page={page}, returned={len(formatted_conversations)}")
         
         return {
             "code": 200,
@@ -278,7 +272,7 @@ async def get_session_conversations(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Get session conversations error", session_id=session_id, error=str(e), exc_info=True)
+        logger.error(f"Get session conversations error: session_id={session_id}, error={str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to get session conversations"

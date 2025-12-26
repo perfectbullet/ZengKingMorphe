@@ -38,7 +38,7 @@ class RAGRetrieval:
                 return await self._vector_search(query, kb_ids, top_k)
                 
         except Exception as e:
-            logger.error("RAG search failed", query=query, error=str(e), exc_info=True)
+            logger.error(f"RAG search failed: query={query}, error={str(e)}", exc_info=True)
             raise
     
     async def _vector_search(
@@ -91,16 +91,12 @@ class RAGRetrieval:
                         "source": "vector"
                     })
             
-            logger.info(
-                "Vector search completed",
-                query=query[:100],
-                results_count=len(documents)
-            )
+            logger.info(f"Vector search completed: query={query[:100]}, results_count={len(documents)}")
             
             return documents
             
         except Exception as e:
-            logger.error("Vector search failed", query=query, error=str(e), exc_info=True)
+            logger.error(f"Vector search failed: query={query}, error={str(e)}", exc_info=True)
             return []
     
     async def _keyword_search(
@@ -170,16 +166,12 @@ class RAGRetrieval:
                         "source": "keyword"
                     })
             
-            logger.info(
-                "Keyword search completed",
-                query=query[:100],
-                results_count=len(documents)
-            )
-            
+            logger.info(f"Keyword search completed: query={query[:100]}, results_count={len(documents)}")
+
             return documents
             
         except Exception as e:
-            logger.error("Keyword search failed", query=query, error=str(e), exc_info=True)
+            logger.error(f"Keyword search failed: query={query}, error={str(e)}", exc_info=True)
             return []
     
     async def _hybrid_search(
@@ -211,7 +203,7 @@ class RAGRetrieval:
             return fused_results[:top_k]
             
         except Exception as e:
-            logger.error("Hybrid search failed", query=query, error=str(e), exc_info=True)
+            logger.error(f"Hybrid search failed: query={query}, error={str(e)}", exc_info=True)
             # Fallback to vector search only
             return await self._vector_search(query, kb_ids, top_k)
     
@@ -285,12 +277,7 @@ class RAGRetrieval:
             reverse=True
         )
         
-        logger.info(
-            "RRF fusion completed",
-            vector_count=len(vector_results),
-            keyword_count=len(keyword_results),
-            fused_count=len(sorted_docs)
-        )
+        logger.info(f"RRF fusion completed: vector_count={len(vector_results)}", keyword_count=len(keyword_results), fused_count=len(sorted_docs))
         
         return sorted_docs
 

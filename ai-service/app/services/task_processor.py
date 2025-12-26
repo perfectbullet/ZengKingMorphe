@@ -76,7 +76,7 @@ class DocumentTaskProcessor:
             "chunk_config": chunk_config
         })
         
-        logger.info("Document task submitted", task_id=task_id, filename=filename)
+        logger.info(f"Document task submitted: task_id={task_id}, filename={filename}")
         
         return task_id
     
@@ -123,7 +123,7 @@ class DocumentTaskProcessor:
                         self.task_queue.get(),
                         timeout=1.0
                     )
-                    logger.info("Fetched task from queue", task_id=task_data["task_id"])
+                    logger.info(f"Fetched task from queue: task_id={task_data['task_id']}")
                 except asyncio.TimeoutError:
                     continue
                 
@@ -136,7 +136,7 @@ class DocumentTaskProcessor:
                 asyncio.create_task(self._execute_task(task_data))
                 
             except Exception as e:
-                logger.error("Error in task processor loop", error=str(e), exc_info=True)
+                logger.error(f"Error in task processor loop: error={str(e)}", exc_info=True)
                 await asyncio.sleep(1)
     
     async def _execute_task(self, task_data: Dict):
@@ -156,7 +156,7 @@ class DocumentTaskProcessor:
                 }
             )
             
-            logger.info("Processing document task", task_id=task_id, filename=task_data["filename"])
+            logger.info(f"Processing document task: task_id={task_id}, task_data={task_data}")
             
             # Process document with progress tracking
             doc_id = await self._process_with_progress(task_data)
@@ -172,7 +172,7 @@ class DocumentTaskProcessor:
                         }
                     }
                 )
-                logger.info("Document task cancelled", task_id=task_id)
+                logger.info(f"Document task cancelled: task_id={task_id}")
                 return
             
             # Update task status to completed
@@ -188,10 +188,10 @@ class DocumentTaskProcessor:
                 }
             )
             
-            logger.info("Document task completed", task_id=task_id, doc_id=doc_id)
+            logger.info(f"Document task completed: task_id={task_id}, doc_id={doc_id}")
             
         except Exception as e:
-            logger.error("Document task failed", task_id=task_id, error=str(e), exc_info=True)
+            logger.error(f"Document task failed: task_id={task_id}, error={str(e)}", exc_info=True)
             
             # Update task status to failed
             await db.document_tasks.update_one(
@@ -289,13 +289,13 @@ class DocumentTaskProcessor:
                     }
                 }
             )
-            logger.info("Cancelled pending task", task_id=task_id)
+            logger.info(f"Cancelled pending task: task_id={task_id}")
             return True
         
         # If running, set cancellation flag
         if task_id in self.active_tasks:
             self.active_tasks[task_id] = True  # Set cancellation flag
-            logger.info("Cancellation requested for running task", task_id=task_id)
+            logger.info(f"Cancellation requested for running task: task_id={task_id}")
             return True
         
         return False

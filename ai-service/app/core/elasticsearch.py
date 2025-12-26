@@ -29,13 +29,13 @@ class ElasticSearchDB:
             
             # Test connection
             info = await self.client.info()
-            logger.info("Connected to ElasticSearch", version=info["version"]["number"])
+            logger.info(f"Connected to ElasticSearch: version={info['version']['number']}")
             
             # Create indexes
             await self._create_indexes()
             
         except Exception as e:
-            logger.error("Failed to connect to ElasticSearch", error=str(e))
+            logger.error(f"Failed to connect to ElasticSearch: error={str(e)}")
             raise
     
     async def disconnect(self) -> None:
@@ -96,7 +96,7 @@ class ElasticSearchDB:
                     index=self.faq_index,
                     body=faq_mapping
                 )
-                logger.info("Created FAQ index", index=self.faq_index)
+                logger.info(f"Created FAQ index: index={self.faq_index}")
             
             # Document index mapping
             doc_mapping = {
@@ -133,10 +133,10 @@ class ElasticSearchDB:
                     index=self.doc_index,
                     body=doc_mapping
                 )
-                logger.info("Created document index", index=self.doc_index)
+                logger.info(f"Created document index: index={self.doc_index}")
             
         except Exception as e:
-            logger.error("Failed to create indexes", error=str(e))
+            logger.error(f"Failed to create indexes: error={str(e)}")
             raise
     
     async def index_document(
@@ -160,14 +160,10 @@ class ElasticSearchDB:
                 id=doc_id,
                 document=document
             )
-            logger.info("Indexed document", index=index_name, doc_id=doc_id)
+            logger.info(f"Indexed document: index={index_name}, doc_id={doc_id}")
         except Exception as e:
-            logger.error(
-                "Failed to index document",
-                index=index,
-                doc_id=doc_id,
-                error=str(e)
-            )
+            logger.error(f"Failed to index document: index={index}, doc_id={doc_id}, error={str(e)}")
+
             raise
     
     async def search(
@@ -194,10 +190,10 @@ class ElasticSearchDB:
                 body=query,
                 size=size
             )
-            logger.info("Searched documents", index=index_name, hits=results["hits"]["total"]["value"])
+            logger.info(f"Searched documents: index={index_name}, hits={results['hits']['total']['value']}")
             return results
         except Exception as e:
-            logger.error("Failed to search documents", index=index, error=str(e))
+            logger.error(f"Failed to search documents: index={index}, error={str(e)}")
             raise
     
     async def delete_document(
@@ -218,14 +214,10 @@ class ElasticSearchDB:
                 index=index_name,
                 id=doc_id
             )
-            logger.info("Deleted document", index=index_name, doc_id=doc_id)
+            logger.info(f"Deleted document: index={index_name}, doc_id={doc_id}")
         except Exception as e:
-            logger.error(
-                "Failed to delete document",
-                index=index,
-                doc_id=doc_id,
-                error=str(e)
-            )
+            logger.error(f"Failed to delete document: index={index}, doc_id={doc_id}, error={str(e)}")
+
             raise
 
 

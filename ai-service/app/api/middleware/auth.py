@@ -34,7 +34,7 @@ async def verify_api_key(api_key: Optional[str] = Security(api_key_header)) -> s
     
     # Validate against configured API keys
     if api_key not in settings.api_keys:
-        logger.warning("Invalid API key attempt", api_key_prefix=api_key[:8] if len(api_key) >= 8 else "***")
+        logger.warning(f"Invalid API key attempt: api_key_prefix={api_key[:8] if len(api_key) >= 8 else '***'}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid API key",

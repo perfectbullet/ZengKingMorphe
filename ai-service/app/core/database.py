@@ -29,13 +29,13 @@ class MongoDB:
             
             # Test connection
             await self.client.admin.command('ping')
-            logger.info("Connected to MongoDB", database=settings.mongodb_db_name)
+            logger.info(f"Connected to MongoDB: database={settings.mongodb_db_name}")
             
             # Create indexes
             await self._create_indexes()
             
         except Exception as e:
-            logger.error("Failed to connect to MongoDB", error=str(e))
+            logger.error(f"Failed to connect to MongoDB: error={str(e)}")
             raise
     
     async def disconnect(self) -> None:
@@ -117,7 +117,7 @@ class MongoDB:
             logger.info("Created MongoDB indexes")
             
         except Exception as e:
-            logger.error("Failed to create indexes", error=str(e))
+            logger.error(f"Failed to create indexes: error={str(e)}")
             raise
     
     def get_collection(self, name: str):

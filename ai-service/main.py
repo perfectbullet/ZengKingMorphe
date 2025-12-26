@@ -48,7 +48,7 @@ async def lifespan(app: FastAPI):
         logger.info("All databases connected and task processor started successfully")
         
     except Exception as e:
-        logger.error("Failed to start application", error=str(e))
+        logger.error(f"Failed to start application: error={str(e)}")
         raise
     
     yield
@@ -67,7 +67,7 @@ async def lifespan(app: FastAPI):
         logger.info("Task processor stopped and all databases disconnected successfully")
         
     except Exception as e:
-        logger.error("Error during shutdown", error=str(e))
+        logger.error(f"Error during shutdown: error={str(e)}")
 
 
 # Create FastAPI application
