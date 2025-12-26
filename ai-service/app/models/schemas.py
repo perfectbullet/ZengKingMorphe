@@ -430,7 +430,7 @@ class CreateRagDocumentRequest(BaseModel):
         json_schema_extra={
             "example": {
                 "team_id": 40,
-                "dataset_id": 3,
+                "kb_id": 3,
                 "resource_id": 48907,
                 "document_name": "首饰雕蜡工艺-全本.txt",
                 "segment_flag": 1,
@@ -446,21 +446,19 @@ class CreateRagDocumentRequest(BaseModel):
                     "identifier_default": "1111111",
                     "identifier_customize": ""
                 },
-                "rag_data_set_id": "kb_c8507c336f48",
                 "resource_url": "https://example.com/file.txt"
             }
         }
     )
     
     team_id: int = Field(..., description="团队ID")
-    dataset_id: int = Field(..., description="知识库ID")
+    kb_id: int = Field(..., description="知识库ID")
     resource_id: int = Field(..., description="系统资源ID")
     document_name: str = Field(..., description="文档名称")
     start_time: Optional[str] = Field(None, description="生效开始时间")
     end_time: Optional[str] = Field(None, description="生效结束时间")
     segment_flag: int = Field(0, description="分段策略：0=自动分段，1=自定义文档分段")
     segment_vo: Optional[SegmentVo] = Field(None, description="RAG文档分段设置")
-    rag_data_set_id: str = Field(..., description="RAG知识库ID (kb_id)")
     resource_url: str = Field(..., description="系统资源URL")
 
 

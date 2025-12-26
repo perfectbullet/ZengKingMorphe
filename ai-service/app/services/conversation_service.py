@@ -7,17 +7,12 @@ from typing import TypedDict, Annotated, List, Dict, Any, Optional
 from operator import add
 from datetime import datetime
 
-# Load environment variables before importing settings
-from dotenv import load_dotenv
-load_dotenv()
-
 from langgraph.graph import StateGraph, END
 from langchain_openai import ChatOpenAI
 from langchain_community.chat_models import ChatOllama
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
 from langchain_community.tools.tavily_search import TavilySearchResults
-
 
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -26,7 +21,6 @@ from app.services.rag_service import rag_retrieval
 from app.models.database import ConversationModel, SessionModel
 
 logger = get_logger(__name__)
-
 
 
 # Define conversation state
@@ -246,45 +240,19 @@ class ConversationWorkflow:
 
     async def load_employee_config(self, state: ConversationState) -> ConversationState:
         """Load employee configuration (enhanced with full config)."""
-        try:
-            db = await get_database()
-            employee = await db.employee_configs.find_one({"employee_id": state["employee_id"]})
-            
-            if not employee:
-                logger.warning(f"Employee config not found, using defaults: employee_id={state['employee_id']}")
-                # Default configuration
-                state["employee_config"] = {
-                    "name": "AI助手",
-                    "role": "通用助理",
-                    "description": "专业的AI助手",
-                    "personality": {
-                        "tone": "professional",
-                        "style": "friendly",
-                        "language": "zh-CN",
-                        "formality": "moderate"
-                    },
-                    "capabilities": {
-                        "kb_ids": [],
-                        "web_search_enabled": True,
-                        "max_context_turns": 10
-                    },
-                    "greeting": "您好，我是AI助手，很高兴为您服务。",
-                    "faqs": []
-                }
-            else:
-                employee.pop("_id", None)
-                state["employee_config"] = employee
-            
-            logger.info(
-                f"Employee config loaded: {employee}",
-                 
-            )
-            return state
-            
-        except Exception as e:
-            logger.error(f"Failed to load employee config: error={str(e)}", exc_info=True)
-            state["employee_config"] = {}
-            return state
+        db = await get_database()
+        employee = await db.employee_configs.find_one({"employee_id": state["employee_id"]})
+        
+        if not employee:
+            error_msg = f"Employee config not found: employee_id={state['employee_id']}"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+        
+        employee.pop("_id", None)
+        state["employee_config"] = employee
+        
+        logger.info(f"Employee config loaded: {employee}")
+        return state
     
     async def load_session_context(self, state: ConversationState) -> ConversationState:
         """Load session context."""
