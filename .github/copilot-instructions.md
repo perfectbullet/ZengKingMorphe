@@ -90,11 +90,22 @@ docker-compose logs -f ai-service  # Watch logs
 
 ### Testing Patterns
 - **Unit tests**: Basic pytest setup in [tests/conftest.py](ai-service/tests/conftest.py) with `anyio_backend` fixture
-- **Standalone ChromaDB testing**: [test_chroma_standalone.py](ai-service/test_chroma_standalone.py) validates ChromaDB connection without full app context
-- **Web search testing**: [test_web_search.py](ai-service/test_web_search.py) validates Tavily API integration
-- **Run tests**: Always use venv - `cd ai-service; D:/zenking_work/metahuman_work/ZengKingMorphe/.venv/Scripts/python.exe test_web_search.py`
+- **Test suite includes** (13 test files):
+  - `test_web_search.py` - Tavily API integration
+  - `test_chroma_standalone.py` - ChromaDB connectivity (4 test functions)
+  - `test_ollama_embedding.py` - Ollama embedding validation
+  - `test_stream_chunks.py` - Streaming chunk persistence
+  - `test_sources_attribution.py` - RAG/web source tracking
+  - `test_faq_integration.py` - FAQ hybrid search workflow
+  - `test_create_rag_document.py` - Document upload with custom chunking
+  - `test_embedding_truncation.py` - Token limit handling
+  - `test_config_loading.py` - Environment variable validation
+  - `test_api.py` - Basic HTTP endpoint testing
+  - Additional: `test_loguru_migration.py`, `quick_test_ollama.py`
+- **Run tests**: Always use venv - `cd ai-service; D:/zenking_work/metahuman_work/ZengKingMorphe/.venv/Scripts/python.exe -m pytest tests/`
+- **Standalone scripts**: Several test files are standalone (not using pytest framework) - run directly with Python
 
-**Note**: Test coverage is minimal - only basic conftest + standalone chroma test + web search test exist.
+**Note**: Tests focus on integration validation rather than comprehensive unit coverage.
 
 ## Project-Specific Conventions
 
@@ -147,6 +158,20 @@ Custom exception handlers registered globally ([app/api/middleware/error_handler
 - `HTTPException` → JSON response with status code
 - `RequestValidationError` → 422 with field-level validation errors
 - General exceptions → 500 with logged stack trace
+
+### API Response Schema Pattern
+All API responses follow standardized structure ([schemas.py](ai-service/app/models/schemas.py)):
+```python
+class ChatResponse(BaseModel):
+    code: int = 200
+    message: str = "success"
+    data: ChatResponseData  # Nested data model
+```
+**Key schemas**:
+- `ChatRequest` / `ChatResponse` - Chat endpoints with full source attribution
+- `SourceAttribution` - Contains `RAGSource` (top 3) + `WebSource` (top 5) lists
+- `StreamChunkResponse` - SSE chunk format with `type` field (user_query/role/token/done/error)
+- All models use Pydantic v2 with `model_config = ConfigDict(json_schema_extra=...)` for OpenAPI examples
 
 ## Integration Points
 
@@ -267,6 +292,18 @@ Update employee config `capabilities.kb_ids` to restrict RAG search scope. The `
 - **Auth**: Middleware exists but `api_keys` list empty (auth disabled)
 - **Test coverage**: Minimal (basic conftest + standalone DB tests)
 - **Rate limiting**: Middleware exists but not enforced
+
+## Documentation Structure
+The `docs/` folder contains feature-specific documentation:
+- **Core Features**: [联网检索功能使用指南.md](docs/联网检索功能使用指南.md), [FAQ多路召回功能实现总结.md](docs/FAQ多路召回功能实现总结.md), [异步文档上传使用说明.md](docs/异步文档上传使用说明.md)
+- **API Documentation**: [API使用文档.md](docs/API使用文档.md), [API-Key-Authentication.md](docs/API-Key-Authentication.md)
+- **Technical Deep Dives**: [来源归属功能说明.md](docs/来源归属功能说明.md), [流式Chunk存储与查询功能说明.md](docs/流式Chunk存储与查询功能说明.md), [自定义分段策略RAG文档创建接口说明.md](docs/自定义分段策略RAG文档创建接口说明.md)
+- **Migration Guides**: [loguru迁移说明.md](docs/loguru迁移说明.md), [字段重命名迁移说明.md](docs/字段重命名迁移说明.md), [Embedding配置修复说明.md](docs/Embedding配置修复说明.md)
+- **Integration**: [Java后端提供的接口-by-刑伟.md](docs/Java后端提供的接口-by-刑伟.md), [数字员工信息集成总结.md](docs/数字员工信息集成总结.md)
+- **Deployment**: [部署指南.md](docs/部署指南.md)
+- **Project Summary**: [项目总结.md](docs/项目总结.md), [需求补充与完善文档.md](docs/需求补充与完善文档.md)
+
+**Important**: Check `docs/` folder for detailed feature documentation before implementing or modifying features.
 
 ## Key Files Reference
 - [conversation_service.py](ai-service/app/services/conversation_service.py) - LangGraph workflow (12 nodes, 800+ lines)

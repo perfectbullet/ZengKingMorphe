@@ -146,9 +146,11 @@ class CreateSessionRequest(BaseModel):
             "example": {
                 "user_id": "user_123456",
                 "employee_id": "hutao",
+                "session_id": "sess_hutao_abc123",
                 "metadata": {
                     "platform": "web",
-                    "device": "desktop"
+                    "device": "desktop",
+                    "source": "metahuman_app",
                 }
             }
         }
@@ -156,7 +158,14 @@ class CreateSessionRequest(BaseModel):
     
     user_id: str = Field(..., description="User ID")
     employee_id: str = Field(..., description="Digital employee ID")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
+    session_id: Optional[str] = Field(
+        None,
+        description="Custom session ID for idempotent creation (format: sess_{12 hex digits})"
+    )
+    metadata: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Additional session metadata (e.g., platform, device, source)"
+    )
 
 
 class SessionResponse(BaseModel):

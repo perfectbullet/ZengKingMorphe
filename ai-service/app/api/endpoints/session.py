@@ -40,12 +40,18 @@ async def fetch_external_employee_data(employee_id: str) -> Optional[dict]:
             with open(test_data_file, "r", encoding="utf-8") as f:
                 test_data = json.load(f)
             
-            if test_data.get("success"):
-                logger.info(f"✅ Successfully loaded hutao test data: {len(test_data.get('data', {}).get('setting', {}).get('knowledge', {}).get('faqs', []))} FAQs")
-                return test_data["data"]
-            else:
-                logger.warning(f"Test data file format error: success={test_data.get('success')}")
+            # 使用 Pydantic 模型解析，保持与API模式一致
+            api_response = ExternalEmployeeAPIResponse(**test_data)
+            
+            if not api_response.success:
+                logger.warning(f"Test data indicates failure: status={api_response.status}")
                 return None
+            
+            faq_count = len(api_response.data.setting.knowledge.faqs)
+            logger.info(f"✅ Successfully loaded hutao test data: {faq_count} FAQs")
+            
+            # 返回 model_dump() 结果，自动转换为下划线命名
+            return api_response.data.model_dump()
                 
         except FileNotFoundError:
             logger.error(f"❌ Test data file not found: {test_data_file}")
@@ -212,16 +218,73 @@ async def create_session(
     """
     创建新会话（集成外部API调用和FAQ向量化）。
     
-    Args:
-        - request: Session creation request
-        - api_key: API key from auth
-        - db: Database instance
-        
+    **请求参数**：
+    - `user_id` (required, str): 用户唯一标识，用于关联用户身份和对话历史
+    - `employee_id` (required, str): 数字员工ID，用于调用外部API获取员工配置
+    - `session_id` (optional, str): 客户端指定的会话ID，支持幂等创建（格式: sess_{12位MD5})
+    - `metadata` (optional, dict): 会话元数据，用于记录会话上下文信息
+        - `platform`: 来源平台（web/mobile/desktop）
+        - `device`: 设备类型（desktop/mobile/tablet）
+        - `source`: 来源页面（homepage/chatbot/embed）
+        - `user_agent`: 浏览器User-Agent
+        - `ip_address`: 客户端IP地址
+    
+    **响应数据**：
+    - `session_id` (str): 自动生成的会话ID（格式: sess_{12位MD5哈希}）
+    - `user_id` (str): 用户ID
+    - `employee_id` (str): 员工ID
+    - `status` (str): 会话状态（"active" | "ended"）
+    - `message_count` (int): 消息数量（初始为0）
+    - `context_messages` (list): 上下文消息列表（初始为空）
+    - `created_at` (str): 创建时间（ISO 8601格式）
+    - `last_activity` (str): 最后活动时间（ISO 8601格式）
+    - `ended_at` (str|null): 结束时间（初始为null）
+    - `metadata` (dict): 会话元数据（来自请求）
+    
     Returns:
-        - Created session information
+
+        - 201: Created session information with session_id and metadata
+        - 200: Existing session returned for idempotent request
+        - 404: Employee not found
+        - 500: Internal server error
+    
+    
     """
+    def _format_session_doc(session_doc: dict) -> dict:
+        formatted = session_doc.copy()
+        formatted.pop("_id", None)
+        formatted["created_at"] = formatted["created_at"].isoformat() + "Z"
+        formatted["last_activity"] = formatted["last_activity"].isoformat() + "Z"
+        if formatted.get("ended_at"):
+            formatted["ended_at"] = formatted["ended_at"].isoformat() + "Z"
+        return formatted
+
     try:
         logger.info(f"Create session request: user_id={request.user_id}, employee_id={request.employee_id}")
+
+        if request.session_id:
+            existing_session = await db.sessions.find_one({"session_id": request.session_id})
+            if existing_session:
+                if existing_session.get("user_id") != request.user_id or existing_session.get("employee_id") != request.employee_id:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Provided session_id conflicts with another user or employee"
+                    )
+
+                update_fields = {"last_activity": datetime.utcnow()}
+                if request.metadata:
+                    update_fields["metadata"] = request.metadata
+                await db.sessions.update_one(
+                    {"session_id": request.session_id},
+                    {"$set": update_fields}
+                )
+                existing_session = await db.sessions.find_one({"session_id": request.session_id})
+                formatted_session = _format_session_doc(existing_session)
+                return {
+                    "code": 200,
+                    "message": "Session already exists",
+                    "data": formatted_session
+                }
         
         # Step 1: Fetch external employee data
         external_data = await fetch_external_employee_data(request.employee_id)
@@ -261,7 +324,7 @@ async def create_session(
         
         # Step 5: Generate session ID
         timestamp = datetime.utcnow().timestamp()
-        session_id = f"sess_{hashlib.md5(f'{request.user_id}_{timestamp}'.encode()).hexdigest()[:12]}"
+        session_id = request.session_id or f"sess_{hashlib.md5(f'{request.user_id}_{timestamp}'.encode()).hexdigest()[:12]}"
         
         # Step 6: Create session document
         session_doc = {
@@ -282,15 +345,11 @@ async def create_session(
         
         logger.info(f"Session created: session_id={session_id}, user_id={request.user_id}")
         
-        # Format response
-        session_doc.pop("_id", None)
-        session_doc["created_at"] = session_doc["created_at"].isoformat() + "Z"
-        session_doc["last_activity"] = session_doc["last_activity"].isoformat() + "Z"
-        
+        formatted_session = _format_session_doc(session_doc)
         return {
             "code": 201,
             "message": "Session created successfully",
-            "data": session_doc
+            "data": formatted_session
         }
         
     except HTTPException:
@@ -312,13 +371,15 @@ async def get_session(
     """
     获取会话信息。
     
-    \nArgs:
-        \n- session_id: Session ID
-        \n- api_key: API key from auth
-        \n- db: Database instance
+    Args:
+
+        - session_id: Session ID
+        - api_key: API key from auth
+        - db: Database instance
         
-    \nReturns:
-        \n- Session information
+    Returns:
+
+        - Session information
     """
     try:
         logger.info(f"Get session request: session_id={session_id}")
