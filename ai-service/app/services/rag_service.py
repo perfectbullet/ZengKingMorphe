@@ -311,7 +311,7 @@ class RAGRetrieval:
             
             # Step 3: RRF fusion
             fused_results = self._faq_rrf_fusion(vector_results, keyword_results, k=60)
-            
+            logger.info(f"FAQ RRF fusion done: total_fused={fused_results}")
             # Step 4: Filter by similarity threshold and return top-k
             filtered_results = [
                 result for result in fused_results
@@ -348,7 +348,7 @@ class RAGRetrieval:
             where_filter = {"employee_id": employee_id}
             
             results = await chroma_db.query_documents(
-                collection_name="faqs",
+                collection_name="faq",
                 query_texts=[query],
                 n_results=top_k,
                 where=where_filter

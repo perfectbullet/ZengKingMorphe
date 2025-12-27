@@ -120,7 +120,7 @@ async def fetch_external_employee_data(employee_id: str) -> Optional[dict]:
 
 async def sync_digital_employee_config(db, request_employee_id: str, external_data: dict) -> Optional[str]:
     """
-    同步数字员工配置到MongoDB。
+    同步数字员工配置、FAQs到MongoDB。
     
     Args:
         db: Database instance
@@ -214,19 +214,19 @@ async def sync_digital_employee_config(db, request_employee_id: str, external_da
             synced_count = 0
             failed_faqs = []
             current_time = datetime.utcnow()
-            
+            logger.info(f"Syncing FAQ: employee_id={employee_id}, faqs_data={faqs_data[0]}")
             for faq_item in faqs_data:
                 try:
-                    external_faq_id = faq_item.get("id", "")
+                    external_faq_id = faq_item.get("faq_id", "")
                     faq_id = f"faq_{employee_id}_{external_faq_id}"
                     
                     # Extract answer texts from answer objects
                     answer_objects = faq_item.get("answers", [])
-                    answer_texts = [ans.get("answerText", "") for ans in answer_objects if isinstance(ans, dict)]
+                    answer_texts = [ans for ans in answer_objects]
                     
                     # Build combined_text for embedding (question + similar questions)
-                    similar_questions = faq_item.get("similarQuestions", [])
-                    combined_text = faq_item.get("questionName", "")
+                    similar_questions = faq_item.get("similar_questions", [])
+                    combined_text = faq_item.get("question_name", "")
                     if similar_questions:
                         combined_text += " " + " ".join(similar_questions)
                     
@@ -235,16 +235,16 @@ async def sync_digital_employee_config(db, request_employee_id: str, external_da
                         "faq_id": faq_id,
                         "employee_id": employee_id,
                         "external_faq_id": external_faq_id,
-                        "team_id": faq_item.get("teamId", 0),
-                        "question_name": faq_item.get("questionName", ""),
+                        "team_id": faq_item.get("team_id", 0),
+                        "question_name": faq_item.get("question_name", ""),
                         "similar_questions": similar_questions,
                         "answers": answer_texts,
-                        "is_enable": faq_item.get("isEnable", 0),
-                        "is_clear": faq_item.get("isClear", 0),
-                        "start_time": faq_item.get("startTime"),
-                        "end_time": faq_item.get("endTime"),
-                        "update_time": faq_item.get("updateTime", ""),
-                        "create_time": faq_item.get("createTime", ""),
+                        "is_enable": faq_item.get("is_enable", 0),
+                        "is_clear": faq_item.get("is_clear", 0),
+                        "start_time": faq_item.get("start_time"),
+                        "end_time": faq_item.get("end_time"),
+                        "update_time": faq_item.get("update_time", ""),
+                        "create_time": faq_item.get("create_time", ""),
                         "combined_text": combined_text,
                         "keywords": [],  # Will be populated by vectorization task
                         "vector_id": None,  # Will be set after vectorization
@@ -320,10 +320,7 @@ async def create_session(
 
         - 201: Created session information with session_id and metadata
         - 200: Existing session returned for idempotent request
-        - 404: Employee not found
-        - 500: Internal server error
-    
-    
+
     """
     def _format_session_doc(session_doc: dict) -> dict:
         formatted = session_doc.copy()
@@ -341,25 +338,21 @@ async def create_session(
         external_data = await fetch_external_employee_data(request.employee_id)
         
         if external_data:
-            # Step 2: Sync employee config to MongoDB
+            # Step 2: 同步数字员工配置、FAQs到MongoDB
             synced_employee_id = await sync_digital_employee_config(db, request.employee_id, external_data)
             
             if synced_employee_id:
                 # Step 3: Trigger FAQ vectorization task (async background)
                 from app.services.task_processor import task_processor
                 
-                faqs = external_data["setting"]["knowledge"]["faqs"]
-                prologue_faqs = external_data["setting"]["prologue"].get("faqs", [])
-                all_faqs = faqs + prologue_faqs
+                faqs_count = len(external_data["setting"]["knowledge"]["faqs"])
                 
-                if all_faqs:
+                if faqs_count > 0:
                     employee_name = external_data["employee"]["name"]
                     task_id = await task_processor.submit_faq_vectorization_task(
-                        employee_id=synced_employee_id,
-                        faqs=all_faqs,
-                        employee_name=employee_name
+                        employee_id=synced_employee_id
                     )
-                    logger.info(f"FAQ vectorization task submitted: task_id={task_id}, employee_id={synced_employee_id} ({employee_name}), faq_count={len(all_faqs)}")
+                    logger.info(f"FAQ vectorization task submitted: task_id={task_id}, employee_id={synced_employee_id} ({employee_name}), faq_count={faqs_count}")
         else:
             logger.warning(f"Failed to fetch external employee data for {request.employee_id}, using existing config")
         
@@ -376,7 +369,18 @@ async def create_session(
         timestamp = datetime.utcnow().timestamp()
         session_id = request.session_id or f"sess_{hashlib.md5(f'{request.user_id}_{timestamp}'.encode()).hexdigest()[:12]}"
         
-        # Step 6: Create session document
+        # Step 6: Check if session already exists (idempotent creation)
+        existing_session = await db.sessions.find_one({"session_id": session_id})
+        if existing_session:
+            logger.info(f"Session already exists, returning existing session: session_id={session_id}")
+            formatted_session = _format_session_doc(existing_session)
+            return {
+                "code": 200,
+                "message": "Session already exists",
+                "data": formatted_session
+            }
+        
+        # Step 7: Create session document
         session_doc = {
             "session_id": session_id,
             "user_id": request.user_id,
@@ -405,7 +409,8 @@ async def create_session(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to create session: error={str(e)}", exc_info=True)
+        # Use keyword args to avoid Loguru format issues with curly braces in error messages
+        logger.error("Failed to create session", error=str(e), exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create session"

@@ -307,17 +307,15 @@ class DocumentTaskProcessor:
     
     async def submit_faq_vectorization_task(
         self,
-        employee_id: str,
-        faqs: List[Dict],
-        employee_name: str = None
+        employee_id: str
     ) -> str:
         """
         提交FAQ向量化任务（异步后台处理）。
         
+        从MongoDB的faqs集合中读取该员工的FAQ数据进行向量化。
+        
         Args:
             employee_id: 员工ID
-            faqs: FAQ列表（外部API格式）
-            employee_name: 员工名称（可选，用于日志）
             
         Returns:
             Task ID
@@ -328,13 +326,10 @@ class DocumentTaskProcessor:
         await self.task_queue.put({
             "task_id": task_id,
             "task_type": "faq_vectorization",
-            "employee_id": employee_id,
-            "faqs": faqs,
-            "employee_name": employee_name
+            "employee_id": employee_id
         })
         
-        name_suffix = f" ({employee_name})" if employee_name else ""
-        logger.info(f"FAQ vectorization task submitted: task_id={task_id}, employee_id={employee_id}{name_suffix}, faq_count={len(faqs)}")
+        logger.info(f"FAQ vectorization task submitted: task_id={task_id}, employee_id={employee_id}")
         
         return task_id
     
@@ -343,24 +338,30 @@ class DocumentTaskProcessor:
         执行FAQ向量化任务（包含增量更新逻辑）。
         
         处理流程：
-        1. 从外部API FAQ数据提取字段
-        2. 检查数据库中是否已存在FAQ（基于updateTime判断）
-        3. 生成combined_text（questionName + similarQuestions）
+        1. 从MongoDB的faqs集合按employee_id查询FAQ数据
+        2. 比较update_time和synced_at判断是否需要更新
+        3. 使用combined_text生成向量（已在sync时生成）
         4. 调用Embedding API生成向量
         5. 写入ChromaDB（向量存储）
         6. 写入ElasticSearch（关键词索引）
-        7. 写入MongoDB（元数据）
+        7. 更新MongoDB的synced_at时间戳
         """
         task_id = task_data["task_id"]
         employee_id = task_data["employee_id"]
-        faqs = task_data["faqs"]
-        employee_name = task_data.get("employee_name")
         
         db = await get_database()
         
         try:
-            name_suffix = f" ({employee_name})" if employee_name else ""
-            logger.info(f"Starting FAQ vectorization: task_id={task_id}, employee_id={employee_id}{name_suffix}, total_faqs={len(faqs)}")
+            # Step 1: Fetch FAQs from MongoDB by employee_id
+            faqs_cursor = db.faqs.find({"employee_id": employee_id})
+            faqs = await faqs_cursor.to_list(length=None)
+            
+            if not faqs:
+                logger.warning(f"No FAQs found for employee_id={employee_id}, task_id={task_id}")
+                return
+            
+            logger.info(f"Starting FAQ vectorization: task_id={task_id}, employee_id={employee_id}, total_faqs={len(faqs)}")
+            
             from app.utils.embeddings import get_embedding
             from app.core.chroma import chroma_db
             from app.core.elasticsearch import es_db
@@ -368,129 +369,107 @@ class DocumentTaskProcessor:
             vectorized_count = 0
             skipped_count = 0
             updated_count = 0
+            disabled_count = 0
             
-            for idx, faq_data in enumerate(faqs):
+            for idx, faq_doc in enumerate(faqs):
                 try:
-                    # Debug: Log FAQ data structure
-                    if idx == 0:
-                        logger.info(f"DEBUG FAQ[0] keys: {list(faq_data.keys())}")
-                        logger.info(f"DEBUG FAQ[0] data: {faq_data}")
-                    
-                    # Generate FAQ ID first (needed for both enabled and disabled FAQs)
-                    external_faq_id = faq_data.get("id") or faq_data.get("faq_id")  # Try both field names
-                    if not external_faq_id:
-                        logger.error(f"FAQ {idx} missing both 'id' and 'faq_id' fields: {faq_data}")
-                        skipped_count += 1
-                        continue
-                    
-                    faq_id = f"faq_{employee_id}_{external_faq_id}"
+                    faq_id = faq_doc["faq_id"]
                     
                     # Handle disabled FAQs - delete from vector stores
-                    if faq_data.get("isEnable", 0) != 1:
-                        existing_faq = await db.faqs.find_one({"faq_id": faq_id})
+                    if faq_doc.get("is_enable", 0) != 1:
+                        logger.info(f"FAQ {faq_id} is disabled (is_enable=0), cleaning up vector stores")
+                        deleted_count = 0
                         
-                        if existing_faq:
-                            logger.info(f"FAQ {faq_id} is disabled (isEnable=0), cleaning up vector stores")
-                            deleted_count = 0
-                            
-                            # Delete from ChromaDB
-                            try:
-                                chroma_collection = chroma_db.get_collection("faqs")
-                                chroma_collection.delete(ids=[faq_id])
-                                deleted_count += 1
-                                logger.debug(f"Deleted FAQ {faq_id} from ChromaDB")
-                            except Exception as e:
-                                logger.warning(f"ChromaDB delete failed for {faq_id}: {e}")
-                            
-                            # Delete from ElasticSearch
-                            try:
-                                await es_db.client.delete(
-                                    index="digital_employee_faqs",
-                                    id=faq_id,
-                                    ignore=[404]  # Ignore if not found
-                                )
-                                deleted_count += 1
-                                logger.debug(f"Deleted FAQ {faq_id} from ElasticSearch")
-                            except Exception as e:
-                                logger.warning(f"ES delete failed for {faq_id}: {e}")
-                            
-                            # Update MongoDB status (soft delete - keep record)
-                            await db.faqs.update_one(
-                                {"faq_id": faq_id},
-                                {"$set": {
-                                    "is_enable": 0,
-                                    "es_indexed": False,
-                                    "vector_id": None,  # Mark vector as removed
-                                    "synced_at": datetime.utcnow()
-                                }}
+                        # Delete from ChromaDB
+                        try:
+                            chroma_collection = chroma_db._get_collection("faq")
+                            chroma_collection.delete(ids=[faq_id])
+                            deleted_count += 1
+                            logger.debug(f"Deleted FAQ {faq_id} from ChromaDB")
+                        except Exception as e:
+                            logger.warning(f"ChromaDB delete failed for {faq_id}: {e}")
+                        
+                        # Delete from ElasticSearch
+                        try:
+                            await es_db.client.delete(
+                                index="digital_employee_faqs",
+                                id=faq_id,
+                                ignore=[404]
                             )
-                            
-                            logger.info(f"FAQ {faq_id} cleanup completed: {deleted_count}/2 vector stores cleaned")
+                            deleted_count += 1
+                            logger.debug(f"Deleted FAQ {faq_id} from ElasticSearch")
+                        except Exception as e:
+                            logger.warning(f"ES delete failed for {faq_id}: {e}")
                         
-                        skipped_count += 1
-                        continue  # Skip to next FAQ
-                    
-                    # Check if FAQ exists in database (for enabled FAQs)
-                    existing_faq = await db.faqs.find_one({"faq_id": faq_id})
-                    
-                    # Compare updateTime for incremental update
-                    if existing_faq:
-                        existing_update_time = existing_faq.get("update_time", "")
-                        new_update_time = faq_data.get("updateTime", "")
+                        # Update MongoDB status (mark as cleaned)
+                        await db.faqs.update_one(
+                            {"faq_id": faq_id},
+                            {"$set": {
+                                "es_indexed": False,
+                                "vector_id": None,
+                                "synced_at": datetime.utcnow()
+                            }}
+                        )
                         
-                        if new_update_time <= existing_update_time:
-                            # Skip if not newer
-                            skipped_count += 1
-                            logger.debug(f"FAQ {faq_id} not updated (existing: {existing_update_time}, new: {new_update_time})")
-                            continue
+                        disabled_count += 1
+                        logger.info(f"FAQ {faq_id} cleanup completed: {deleted_count}/2 vector stores cleaned")
+                        continue
+                    
+                    # Step 2: Check if vectorization is needed (compare update_time vs synced_at)
+                    update_time = faq_doc.get("update_time", "")
+                    synced_at = faq_doc.get("synced_at")
+                    
+                    # Initialize needs_update flag
+                    needs_update = False
+                    
+                    # 没有synced_at则表示从未同步过，必须更新
+                    if not synced_at:
+                        needs_update = True
+
+                    # Convert synced_at to string for comparison (ISO format)
+                    synced_at_str = ""
+                    if synced_at:
+                        if isinstance(synced_at, datetime):
+                            synced_at_str = synced_at.isoformat()
                         else:
-                            logger.info(f"FAQ {faq_id} needs update (existing: {existing_update_time}, new: {new_update_time})")
-                            updated_count += 1
+                            synced_at_str = str(synced_at)
                     
-                    # Extract FAQ fields
-                    question_name = faq_data.get("questionName", "")
-                    similar_questions = faq_data.get("similarQuestions", [])
-                    answers = faq_data.get("answers", [])
+                    # Handle empty update_time - treat as latest and set current timestamp
+                    if not update_time or update_time.strip() == "":
+                        # Empty update_time means it's a new/latest FAQ, process it
+                        update_time = datetime.utcnow().isoformat() + "Z"
+                        logger.info(f"FAQ {faq_id} has empty update_time, setting to current time: {update_time}")
+                        needs_update = True
+                    elif not needs_update and synced_at_str and update_time <= synced_at_str:
+                        # Skip if already synced and not updated
+                        # skipped_count += 1
+                        logger.info(f"FAQ {faq_id} already synced (update_time: {update_time}, synced_at: {synced_at_str}), synced_at: {synced_at}")
+                        # continue
+                    else:
+                        needs_update = True
                     
-                    # Combine text for embedding (questionName + all similarQuestions)
-                    combined_text = question_name + " " + " ".join(similar_questions)
-                    combined_text = combined_text.strip()
+                    # Mark as update if synced_at exists
+                    if synced_at and needs_update:
+                        updated_count += 1
+                        logger.info(f"FAQ {faq_id} needs update (update_time: {update_time}, synced_at: {synced_at_str})")
+                    
+                    # Step 3: Extract fields from MongoDB document
+                    combined_text = faq_doc.get("combined_text", "").strip()
                     
                     if not combined_text:
                         skipped_count += 1
                         logger.warning(f"FAQ {faq_id} has empty combined_text, skipping")
                         continue
                     
-                    # Generate embedding vector
-                    embedding = await get_embedding(combined_text)
+                    # Step 4: 根据配置创建 Embedding model 实例的工厂函数。
+                    embedding_model = get_embedding()
                     
-                    # Prepare FAQ model
-                    faq_model = FAQModel(
-                        faq_id=faq_id,
-                        employee_id=employee_id,
-                        external_faq_id=external_faq_id,
-                        team_id=faq_data.get("teamId", 0),
-                        question_name=question_name,
-                        similar_questions=similar_questions,
-                        answers=answers,
-                        is_enable=faq_data.get("isEnable", 1),
-                        is_clear=faq_data.get("isClear", 0),
-                        start_time=faq_data.get("startTime"),
-                        end_time=faq_data.get("endTime"),
-                        update_time=faq_data.get("updateTime", ""),
-                        create_time=faq_data.get("createTime", ""),
-                        combined_text=combined_text,
-                        keywords=similar_questions,  # Use similar questions as keywords
-                        vector_id=faq_id,  # Use faq_id as vector_id
-                        es_indexed=False  # Will be set to True after ES indexing
-                    )
-                    
-                    # Step 1: Write to ChromaDB (vector storage)
+                    # Step 5: Write to ChromaDB (vector storage)
                     try:
-                        chroma_collection = chroma_db.get_collection("faqs")
+                        chroma_collection = chroma_db._get_collection("faq")
                         
                         # Delete existing vector if updating
-                        if existing_faq:
+                        if faq_doc.get("vector_id"):
                             try:
                                 chroma_collection.delete(ids=[faq_id])
                             except Exception as e:
@@ -499,31 +478,31 @@ class DocumentTaskProcessor:
                         # Add new vector
                         chroma_collection.add(
                             ids=[faq_id],
-                            embeddings=[embedding],
+                            embeddings=[embedding_model.embed_query(combined_text)],
                             metadatas=[{
                                 "employee_id": employee_id,
                                 "faq_id": faq_id,
-                                "question_name": question_name,
-                                "combined_text": combined_text[:500]  # Truncate for metadata
+                                "question_name": faq_doc.get("question_name", ""),
+                                "combined_text": combined_text[:500]
                             }],
                             documents=[combined_text]
                         )
-                        logger.debug(f"FAQ {faq_id} vectorized in ChromaDB")
+                        logger.info(f"FAQ {faq_id} vectorized in ChromaDB")
                     except Exception as e:
                         logger.error(f"Failed to write FAQ {faq_id} to ChromaDB: {e}", exc_info=True)
                         raise
                     
-                    # Step 2: Write to ElasticSearch (keyword index)
+                    # Step 6: Write to ElasticSearch (keyword index)
                     try:
                         es_doc = {
                             "faq_id": faq_id,
                             "employee_id": employee_id,
-                            "question_name": question_name,
-                            "similar_questions": similar_questions,
+                            "question_name": faq_doc.get("question_name", ""),
+                            "similar_questions": faq_doc.get("similar_questions", []),
                             "combined_text": combined_text,
-                            "answers": answers,
-                            "is_enable": faq_data.get("isEnable", 1),
-                            "update_time": faq_data.get("updateTime", "")
+                            "answers": faq_doc.get("answers", []),
+                            "is_enable": faq_doc.get("is_enable", 1),
+                            "update_time": update_time
                         }
                         
                         await es_db.client.index(
@@ -532,36 +511,37 @@ class DocumentTaskProcessor:
                             document=es_doc
                         )
                         
-                        faq_model.es_indexed = True
-                        logger.debug(f"FAQ {faq_id} indexed in ElasticSearch")
+                        logger.info(f"FAQ {faq_id} indexed in ElasticSearch")
                     except Exception as e:
                         logger.error(f"Failed to write FAQ {faq_id} to ElasticSearch: {e}", exc_info=True)
-                        # Continue even if ES fails (can retry later)
+                        # Continue even if ES fails
                     
-                    # Step 3: Write to MongoDB (metadata storage)
+                    # Step 7: Update MongoDB synced_at timestamp and update_time
                     await db.faqs.update_one(
                         {"faq_id": faq_id},
-                        {"$set": faq_model.model_dump()},
-                        upsert=True
+                        {"$set": {
+                            "vector_id": faq_id,
+                            "es_indexed": True,
+                            "update_time": update_time,
+                            "synced_at": datetime.utcnow()
+                        }}
                     )
                     
                     vectorized_count += 1
-                    logger.debug(f"FAQ {faq_id} saved to MongoDB ({vectorized_count}/{len(faqs)})")
+                    logger.info(f"FAQ {faq_id} synced successfully ({vectorized_count}/{len(faqs)})")
                     
                 except Exception as e:
-                    logger.error(f"Failed to process FAQ {idx}: {e}", exc_info=True)
-                    logger.exception(e)
+                    logger.error(f"Failed to process FAQ {idx} (faq_id={faq_doc.get('faq_id', 'unknown')}): {e}", exc_info=True)
                     # Continue processing other FAQs
             
             logger.info(
-                f"FAQ vectorization completed: task_id={task_id}, "
-                f"employee_id={employee_id}, total={len(faqs)}, "
-                f"vectorized={vectorized_count}, updated={updated_count}, skipped={skipped_count}"
+                f"FAQ vectorization completed: task_id={task_id}, employee_id={employee_id}, "
+                f"total={len(faqs)}, vectorized={vectorized_count}, updated={updated_count}, "
+                f"disabled={disabled_count}, skipped={skipped_count}"
             )
             
         except Exception as e:
             logger.error(f"FAQ vectorization task failed: task_id={task_id}, error={str(e)}", exc_info=True)
-            logger.exception(e)
             raise
 
 
