@@ -391,10 +391,9 @@ class DocumentTaskProcessor:
                         
                         # Delete from ElasticSearch
                         try:
-                            await es_db.client.delete(
-                                index="digital_employee_faqs",
-                                id=faq_id,
-                                ignore=[404]
+                            await es_db.delete_document(
+                                index="faq",
+                                doc_id=faq_id
                             )
                             deleted_count += 1
                             logger.debug(f"Deleted FAQ {faq_id} from ElasticSearch")
@@ -505,9 +504,9 @@ class DocumentTaskProcessor:
                             "update_time": update_time
                         }
                         
-                        await es_db.client.index(
-                            index="digital_employee_faqs",
-                            id=faq_id,
+                        await es_db.index_document(
+                            index="faq",
+                            doc_id=faq_id,
                             document=es_doc
                         )
                         

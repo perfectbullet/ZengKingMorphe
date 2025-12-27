@@ -91,6 +91,7 @@ class ChromaDB:
                 metadata={
                     "description": "FAQ问答库",
                     "embedding_model": settings.embedding_model,
+                    "hnsw:space": "cosine",  # ✅ 使用余弦距离
                 },
                 embedding_function=embedding_function,
             )
@@ -100,6 +101,7 @@ class ChromaDB:
                 metadata={
                     "description": "RAG文档库",
                     "embedding_model": settings.embedding_model,
+                    "hnsw:space": "cosine",  # ✅ 使用余弦距离
                 },
                 embedding_function=embedding_function,
             )
@@ -109,6 +111,7 @@ class ChromaDB:
                 metadata={
                     "description": "专业词库",
                     "embedding_model": settings.embedding_model,
+                    "hnsw:space": "cosine",  # ✅ 使用余弦距离
                 },
                 embedding_function=embedding_function,
             )
@@ -181,7 +184,7 @@ class ChromaDB:
                 query_texts=query_texts, n_results=n_results, where=where
             )
             logger.info(
-                f"Queried documents from Chroma: collection={collection_name}, n_results={n_results}"
+                f"Queried documents from Chroma: collection={collection_name}, results={results}"
             )
             return results
         except Exception as e:

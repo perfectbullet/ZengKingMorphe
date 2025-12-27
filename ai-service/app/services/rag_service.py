@@ -357,11 +357,17 @@ class RAGRetrieval:
             # Format results
             faq_results = []
             if results and results.get("documents") and len(results["documents"]) > 0:
+                logger.info(f"FAQ vector search raw results: distances={results.get('distances', [[]])[0][:3] if results.get('distances') else 'None'}")
                 for i, doc_text in enumerate(results["documents"][0]):
-                    distance = results["distances"][0][i] if results.get("distances") else 1.0
-                    similarity = max(0.0, 1.0 - distance)
+                    distance = results["distances"][0][i] if results.get("distances") else 2.0
+                    # ChromaDB cosine distance: 0 (identical) to 2 (opposite)
+                    # Convert to similarity: 1.0 (identical) to 0.0 (opposite)
+                    similarity = max(0.0, min(1.0, 1.0 - (distance / 2.0)))
                     
                     metadata = results["metadatas"][0][i] if results.get("metadatas") else {}
+                    
+                    if i < 3:  # Log first 3 results for debugging
+                        logger.info(f"FAQ vector result {i+1}: distance={distance:.4f}, similarity={similarity:.4f}, faq_id={metadata.get('faq_id')}")
                     
                     faq_results.append({
                         "faq_id": metadata.get("faq_id"),
@@ -371,7 +377,7 @@ class RAGRetrieval:
                         "source": "vector"
                     })
             
-            logger.debug(f"FAQ vector search: query={query[:50]}, results_count={len(faq_results)}")
+            logger.info(f"FAQ vector search: query={query[:50]}, results_count={len(faq_results)}")
             
             return faq_results
             
@@ -420,10 +426,12 @@ class RAGRetrieval:
             
             # Search ElasticSearch
             results = await es_db.search(
-                index="digital_employee_faqs",
+                index="faq",  # Use short identifier, will be mapped to digital_employee_faqs
                 query=es_query,
                 size=top_k
             )
+            
+            logger.info(f"FAQ keyword search ES results: total_hits={results.get('hits', {}).get('total', {}).get('value', 0)}, returned={len(results.get('hits', {}).get('hits', []))}")
             
             # Format results
             faq_results = []
