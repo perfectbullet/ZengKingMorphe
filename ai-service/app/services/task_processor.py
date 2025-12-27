@@ -377,7 +377,7 @@ class DocumentTaskProcessor:
                         logger.info(f"DEBUG FAQ[0] data: {faq_data}")
                     
                     # Generate FAQ ID first (needed for both enabled and disabled FAQs)
-                    external_faq_id = faq_data.get("id")  # Try both field names
+                    external_faq_id = faq_data.get("id") or faq_data.get("faq_id")  # Try both field names
                     if not external_faq_id:
                         logger.error(f"FAQ {idx} missing both 'id' and 'faq_id' fields: {faq_data}")
                         skipped_count += 1

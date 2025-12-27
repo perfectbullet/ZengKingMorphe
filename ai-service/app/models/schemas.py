@@ -603,7 +603,7 @@ class ExternalSettingConfig(BaseModel):
     prologue: ExternalPrologueConfig = Field(..., description="开场白配置")
     rule: ExternalRuleConfig = Field(..., description="规则配置")
     role: ExternalRoleConfig = Field(..., description="角色配置")
-    
+    employee_id: str = Field('', description="员工ID")
     model_config = ConfigDict(populate_by_name=True)
 
 
@@ -624,5 +624,3 @@ class ExternalEmployeeAPIResponse(BaseModel):
     error: Optional[str] = Field(None, description="错误信息")
     
     model_config = ConfigDict(populate_by_name=True)
-
-

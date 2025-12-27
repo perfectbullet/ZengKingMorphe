@@ -133,6 +133,7 @@ async def sync_digital_employee_config(db, request_employee_id: str, external_da
     try:
         employee_info = external_data["employee"]
         setting_info = external_data["setting"]
+        setting_info["employee_id"] = employee_info["employee_id"]  # Ensure employee_id is included in setting
         
         # Use request_employee_id as the primary key, not the external id
         employee_id = request_employee_id
@@ -207,6 +208,75 @@ async def sync_digital_employee_config(db, request_employee_id: str, external_da
             f"external_id={employee_info['employee_id']}, kb_ids={kb_ids}, faq_count={len(setting_info['knowledge']['faqs'])}"
         )
         
+        # Sync FAQs to MongoDB faqs collection
+        faqs_data = setting_info["knowledge"]["faqs"]
+        if faqs_data:
+            synced_count = 0
+            failed_faqs = []
+            current_time = datetime.utcnow()
+            
+            for faq_item in faqs_data:
+                try:
+                    external_faq_id = faq_item.get("id", "")
+                    faq_id = f"faq_{employee_id}_{external_faq_id}"
+                    
+                    # Extract answer texts from answer objects
+                    answer_objects = faq_item.get("answers", [])
+                    answer_texts = [ans.get("answerText", "") for ans in answer_objects if isinstance(ans, dict)]
+                    
+                    # Build combined_text for embedding (question + similar questions)
+                    similar_questions = faq_item.get("similarQuestions", [])
+                    combined_text = faq_item.get("questionName", "")
+                    if similar_questions:
+                        combined_text += " " + " ".join(similar_questions)
+                    
+                    # Build FAQ document
+                    faq_doc = {
+                        "faq_id": faq_id,
+                        "employee_id": employee_id,
+                        "external_faq_id": external_faq_id,
+                        "team_id": faq_item.get("teamId", 0),
+                        "question_name": faq_item.get("questionName", ""),
+                        "similar_questions": similar_questions,
+                        "answers": answer_texts,
+                        "is_enable": faq_item.get("isEnable", 0),
+                        "is_clear": faq_item.get("isClear", 0),
+                        "start_time": faq_item.get("startTime"),
+                        "end_time": faq_item.get("endTime"),
+                        "update_time": faq_item.get("updateTime", ""),
+                        "create_time": faq_item.get("createTime", ""),
+                        "combined_text": combined_text,
+                        "keywords": [],  # Will be populated by vectorization task
+                        "vector_id": None,  # Will be set after vectorization
+                        "es_indexed": False,  # Will be set after ElasticSearch indexing
+                        "created_at": current_time,
+                        "synced_at": current_time,
+                    }
+                    
+                    # Upsert FAQ document (idempotent)
+                    await db.faqs.update_one(
+                        {"faq_id": faq_id},
+                        {"$set": faq_doc},
+                        upsert=True
+                    )
+                    
+                    synced_count += 1
+                    
+                except Exception as faq_error:
+                    logger.error(
+                        f"Failed to sync FAQ: faq_id={external_faq_id}, error={str(faq_error)}",
+                        exc_info=True
+                    )
+                    failed_faqs.append(external_faq_id)
+            
+            logger.info(
+                f"FAQs synced to MongoDB: employee_id={employee_id}, "
+                f"total={len(faqs_data)}, synced={synced_count}, failed={len(failed_faqs)}"
+            )
+            
+            if failed_faqs:
+                logger.warning(f"Failed FAQ IDs: {failed_faqs}")
+        
         return employee_id
         
     except Exception as e:
@@ -266,30 +336,6 @@ async def create_session(
 
     try:
         logger.info(f"Create session request: user_id={request.user_id}, employee_id={request.employee_id}")
-
-        if request.session_id:
-            existing_session = await db.sessions.find_one({"session_id": request.session_id})
-            if existing_session:
-                if existing_session.get("user_id") != request.user_id or existing_session.get("employee_id") != request.employee_id:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="Provided session_id conflicts with another user or employee"
-                    )
-
-                update_fields = {"last_activity": datetime.utcnow()}
-                if request.metadata:
-                    update_fields["metadata"] = request.metadata
-                await db.sessions.update_one(
-                    {"session_id": request.session_id},
-                    {"$set": update_fields}
-                )
-                existing_session = await db.sessions.find_one({"session_id": request.session_id})
-                formatted_session = _format_session_doc(existing_session)
-                return {
-                    "code": 200,
-                    "message": "Session already exists",
-                    "data": formatted_session
-                }
         
         # Step 1: Fetch external employee data
         external_data = await fetch_external_employee_data(request.employee_id)
