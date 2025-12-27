@@ -55,9 +55,9 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException) 
     Returns:
         JSON response
     """
-    logger.error(f"http_exception_handler request: {request}")
-    logger.error(f"http_exception_handler exc: {exc}")
-    logger.exception(exc)
+    # logger.error(f"http_exception_handler request: {request}")
+    # logger.error(f"http_exception_handler exc: {exc}")
+    # logger.exception(exc)
     
     # 友好的错误提示
     friendly_message = f"哎呀～服务遇到了点小问题呢😅 {str(exc.detail)}"

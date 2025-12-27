@@ -118,12 +118,13 @@ async def fetch_external_employee_data(employee_id: str) -> Optional[dict]:
         return None
 
 
-async def sync_digital_employee_config(db, external_data: dict) -> Optional[str]:
+async def sync_digital_employee_config(db, request_employee_id: str, external_data: dict) -> Optional[str]:
     """
     同步数字员工配置到MongoDB。
     
     Args:
         db: Database instance
+        request_employee_id: 请求参数中的 employee_id（作为系统主键）
         external_data: 外部API返回的data字段数据
         
     Returns:
@@ -133,8 +134,9 @@ async def sync_digital_employee_config(db, external_data: dict) -> Optional[str]
         employee_info = external_data["employee"]
         setting_info = external_data["setting"]
         
-        # Use employee_id directly (already a string from Pydantic model)
-        employee_id = employee_info["employee_id"]
+        # Use request_employee_id as the primary key, not the external id
+        employee_id = request_employee_id
+        employee_name = employee_info["name"]
         
         # Extract kb_ids from ragDatasets
         kb_ids = [
@@ -154,8 +156,8 @@ async def sync_digital_employee_config(db, external_data: dict) -> Optional[str]
         
         # Build employee config document
         config_doc = DigitalEmployeeConfigModel(
-            employee_id=employee_id,
-            external_employee_id=employee_info["employee_id"],
+            employee_id=employee_id,  # Use request parameter as primary key
+            external_employee_id=employee_info["employee_id"],  # Store external id separately
             team_id=employee_info["team_id"],
             name=employee_info["name"],
             position=employee_info["position"],
@@ -200,7 +202,10 @@ async def sync_digital_employee_config(db, external_data: dict) -> Optional[str]
             upsert=True
         )
         
-        logger.info(f"Digital employee config synced: employee_id={employee_id}, kb_ids={kb_ids}, faq_count={len(setting_info['knowledge']['faqs'])}")
+        logger.info(
+            f"Digital employee config synced: employee_id={employee_id} ({employee_name}), "
+            f"external_id={employee_info['employee_id']}, kb_ids={kb_ids}, faq_count={len(setting_info['knowledge']['faqs'])}"
+        )
         
         return employee_id
         
@@ -291,7 +296,7 @@ async def create_session(
         
         if external_data:
             # Step 2: Sync employee config to MongoDB
-            synced_employee_id = await sync_digital_employee_config(db, external_data)
+            synced_employee_id = await sync_digital_employee_config(db, request.employee_id, external_data)
             
             if synced_employee_id:
                 # Step 3: Trigger FAQ vectorization task (async background)
@@ -302,11 +307,13 @@ async def create_session(
                 all_faqs = faqs + prologue_faqs
                 
                 if all_faqs:
+                    employee_name = external_data["employee"]["name"]
                     task_id = await task_processor.submit_faq_vectorization_task(
                         employee_id=synced_employee_id,
-                        faqs=all_faqs
+                        faqs=all_faqs,
+                        employee_name=employee_name
                     )
-                    logger.info(f"FAQ vectorization task submitted: task_id={task_id}, faq_count={len(all_faqs)}")
+                    logger.info(f"FAQ vectorization task submitted: task_id={task_id}, employee_id={synced_employee_id} ({employee_name}), faq_count={len(all_faqs)}")
         else:
             logger.warning(f"Failed to fetch external employee data for {request.employee_id}, using existing config")
         

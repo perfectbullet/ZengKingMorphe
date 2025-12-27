@@ -308,7 +308,8 @@ class DocumentTaskProcessor:
     async def submit_faq_vectorization_task(
         self,
         employee_id: str,
-        faqs: List[Dict]
+        faqs: List[Dict],
+        employee_name: str = None
     ) -> str:
         """
         提交FAQ向量化任务（异步后台处理）。
@@ -316,6 +317,7 @@ class DocumentTaskProcessor:
         Args:
             employee_id: 员工ID
             faqs: FAQ列表（外部API格式）
+            employee_name: 员工名称（可选，用于日志）
             
         Returns:
             Task ID
@@ -327,10 +329,12 @@ class DocumentTaskProcessor:
             "task_id": task_id,
             "task_type": "faq_vectorization",
             "employee_id": employee_id,
-            "faqs": faqs
+            "faqs": faqs,
+            "employee_name": employee_name
         })
         
-        logger.info(f"FAQ vectorization task submitted: task_id={task_id}, employee_id={employee_id}, faq_count={len(faqs)}")
+        name_suffix = f" ({employee_name})" if employee_name else ""
+        logger.info(f"FAQ vectorization task submitted: task_id={task_id}, employee_id={employee_id}{name_suffix}, faq_count={len(faqs)}")
         
         return task_id
     
@@ -350,11 +354,13 @@ class DocumentTaskProcessor:
         task_id = task_data["task_id"]
         employee_id = task_data["employee_id"]
         faqs = task_data["faqs"]
+        employee_name = task_data.get("employee_name")
         
         db = await get_database()
         
         try:
-            logger.info(f"Starting FAQ vectorization: task_id={task_id}, employee_id={employee_id}, total_faqs={len(faqs)}")
+            name_suffix = f" ({employee_name})" if employee_name else ""
+            logger.info(f"Starting FAQ vectorization: task_id={task_id}, employee_id={employee_id}{name_suffix}, total_faqs={len(faqs)}")
             from app.utils.embeddings import get_embedding
             from app.core.chroma import chroma_db
             from app.core.elasticsearch import es_db
