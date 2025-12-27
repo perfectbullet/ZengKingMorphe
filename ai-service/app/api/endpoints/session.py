@@ -28,6 +28,35 @@ async def fetch_external_employee_data(employee_id: str) -> Optional[dict]:
     Returns:
         外部API返回的data字段数据，或None（失败时）
     """
+    # 🔧 测试模式：如果是 hutao，直接加载本地测试数据
+    if employee_id == "hutao":
+        try:
+            import json
+            from pathlib import Path
+            
+            test_data_file = Path(__file__).parent.parent.parent.parent / "outer_api_docs" / "按员工id返回的数据-hutao.json"
+            logger.info(f"🧪 Using local test data for hutao: {test_data_file}")
+            
+            with open(test_data_file, "r", encoding="utf-8") as f:
+                test_data = json.load(f)
+            
+            if test_data.get("success"):
+                logger.info(f"✅ Successfully loaded hutao test data: {len(test_data.get('data', {}).get('setting', {}).get('knowledge', {}).get('faqs', []))} FAQs")
+                return test_data["data"]
+            else:
+                logger.warning(f"Test data file format error: success={test_data.get('success')}")
+                return None
+                
+        except FileNotFoundError:
+            logger.error(f"❌ Test data file not found: {test_data_file}")
+            return None
+        except json.JSONDecodeError as e:
+            logger.error(f"❌ Test data JSON decode error: {e}", exc_info=True)
+            return None
+        except Exception as e:
+            logger.error(f"❌ Failed to load test data: {e}", exc_info=True)
+            return None
+    
     # 从环境变量读取外部API地址
     external_api_url = os.getenv(
         "EXTERNAL_EMPLOYEE_API_URL",
@@ -46,8 +75,8 @@ async def fetch_external_employee_data(employee_id: str) -> Optional[dict]:
             if not api_response.success:
                 logger.error(
                     f"{'!' * 100}\n"
-                    f"外部API调用失败！强烈谴责！\n"
-                    f"API URL: {external_api_url}\n"
+                    f"哎呀，调用外部接口失败了呢。\n"
+                    f"外部接口是: {external_api_url}\n"
                     f"Employee ID: {employee_id}\n"
                     f"Error: {api_response.error}\n"
                     f"{'!' * 100}"
@@ -98,8 +127,8 @@ async def sync_digital_employee_config(db, external_data: dict) -> Optional[str]
         employee_info = external_data["employee"]
         setting_info = external_data["setting"]
         
-        # Convert employee.id to employee_id string
-        employee_id = str(employee_info["id"])
+        # Use employee_id directly (already a string from Pydantic model)
+        employee_id = employee_info["employee_id"]
         
         # Extract kb_ids from ragDatasets
         kb_ids = [
@@ -120,7 +149,7 @@ async def sync_digital_employee_config(db, external_data: dict) -> Optional[str]
         # Build employee config document
         config_doc = DigitalEmployeeConfigModel(
             employee_id=employee_id,
-            external_employee_id=employee_info["id"],
+            external_employee_id=employee_info["employee_id"],
             team_id=employee_info["team_id"],
             name=employee_info["name"],
             position=employee_info["position"],

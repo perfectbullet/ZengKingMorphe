@@ -469,7 +469,7 @@ class CreateRagDocumentResponse(BaseModel):
 # External API Data Schemas (Java Platform Integration)
 class ExternalFAQItem(BaseModel):
     """外部API FAQ项（来自Java平台）。"""
-    id: int = Field(..., description="FAQ ID")
+    faq_id: str = Field(..., alias="id", description="FAQ ID")
     team_id: int = Field(..., alias="teamId", description="Team ID")
     question_name: str = Field(..., alias="questionName", description="主问题")
     start_time: Optional[str] = Field(None, alias="startTime", description="生效开始时间")
@@ -487,7 +487,7 @@ class ExternalFAQItem(BaseModel):
 
 class ExternalRAGDataset(BaseModel):
     """外部API RAG数据集（知识库）。"""
-    id: int = Field(..., description="Dataset ID")
+    kb_id: str = Field(..., alias="id", description="Dataset ID")
     team_id: int = Field(..., alias="teamId", description="Team ID")
     rag_dataset_id: str = Field(..., alias="ragDatasetId", description="RAG数据集ID（映射为kb_id）")
     name: str = Field(..., description="数据集名称")
@@ -502,7 +502,7 @@ class ExternalRAGDataset(BaseModel):
 
 class ExternalEmployeeInfo(BaseModel):
     """外部API员工信息。"""
-    id: int = Field(..., description="员工ID（映射为employee_id）")
+    employee_id: str = Field(..., alias="id", description="员工ID")
     team_id: int = Field(..., alias="teamId", description="Team ID")
     name: str = Field(..., description="员工名称")
     position: str = Field(..., description="职位")
@@ -572,7 +572,7 @@ class ExternalUnusualRule(BaseModel):
 
 class ExternalRuleConfig(BaseModel):
     """外部API规则配置。"""
-    id: int = Field(..., description="规则ID")
+    rule_config_id: str = Field(..., alias="id", description="规则ID")
     chat_rule: ExternalChatRule = Field(..., alias="chatRule", description="对话规则")
     unusual_rule: ExternalUnusualRule = Field(..., alias="unusualRule", description="异常规则")
     

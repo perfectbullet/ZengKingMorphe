@@ -366,7 +366,7 @@ class DocumentTaskProcessor:
             for idx, faq_data in enumerate(faqs):
                 try:
                     # Generate FAQ ID first (needed for both enabled and disabled FAQs)
-                    external_faq_id = faq_data["id"]
+                    external_faq_id = faq_data["faq_id"]  # Use new field name (str type)
                     faq_id = f"faq_{employee_id}_{external_faq_id}"
                     
                     # Handle disabled FAQs - delete from vector stores

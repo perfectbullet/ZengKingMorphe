@@ -179,7 +179,7 @@ class FAQModel(BaseModel):
     """FAQ model for vector and keyword retrieval."""
     faq_id: str  # Format: faq_{employee_id}_{external_faq_id}
     employee_id: str
-    external_faq_id: int  # Original FAQ ID from Java platform
+    external_faq_id: str  # Original FAQ ID from Java platform
     team_id: int
     question_name: str  # Main question
     similar_questions: List[str] = Field(default_factory=list)
@@ -202,7 +202,7 @@ class FAQModel(BaseModel):
 class DigitalEmployeeConfigModel(BaseModel):
     """Digital employee configuration from external API (Java platform)."""
     employee_id: str  # Converted from external employee.id
-    external_employee_id: int  # Original employee.id from Java platform
+    external_employee_id: str  # Original employee.id from Java platform
     team_id: int
     name: str
     position: str

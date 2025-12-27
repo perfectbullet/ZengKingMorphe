@@ -11,7 +11,9 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from app.core.database import get_database
+from app.core.database import mongodb, get_database
+from app.core.elasticsearch import es_db
+from app.core.chroma import chroma_db
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -166,6 +168,13 @@ async def main():
     print("=" * 60)
     
     try:
+        # 连接数据库
+        print("\n正在连接数据库...")
+        await mongodb.connect()
+        await es_db.connect()
+        chroma_db.connect()
+        print("✓ 数据库连接成功\n")
+        
         # 测试1: 检查MongoDB数据
         await test_faq_data_in_mongodb()
         
@@ -183,6 +192,14 @@ async def main():
         print(f"\n❌ 测试失败: {e}")
         import traceback
         traceback.print_exc()
+    
+    finally:
+        # 关闭数据库连接
+        print("\n正在关闭数据库连接...")
+        await mongodb.disconnect()
+        await es_db.disconnect()
+        chroma_db.disconnect()
+        print("✓ 数据库连接已关闭")
 
 
 if __name__ == "__main__":

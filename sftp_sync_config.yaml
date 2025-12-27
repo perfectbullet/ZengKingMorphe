@@ -25,6 +25,8 @@ include_patterns:
   - "ai-service"            # Include app directory
   - "requirements.txt"
   - ".env"
+  - ai-service/tests
+  - outer_api_docs
 
 # Exclude patterns (排除模式) - Which files to skip
 exclude_patterns:
@@ -45,7 +47,7 @@ exclude_patterns:
   - "dist"                     # Build output (构建输出)
   - "build"                    # Build directory (构建目录)
   # - "docs"                     # Documentation directory (文档目录)
-  - "tests"                    # Test files (测试文件)
+  # - "tests"                    # Test files (测试文件)
   # - "models"                   # Models directory (模型目录)
   - "sftp_sync"                # SFTP sync tool directory (SFTP同步工具目录)
   - "sftp_sync_config.yaml"  # This config file itself (此配置文件本身)

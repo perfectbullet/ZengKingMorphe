@@ -55,7 +55,7 @@
                         "questionName": "string",
                         "startTime": "2019-08-24T14:15:22.123Z",
                         "endTime": "2019-08-24T14:15:22.123Z",
-                        "isEnable": 0,
+                        "isEnable": 1,
                         "isClear": 0,
                         "createUserId": 0,
                         "updateTime": "2019-08-24T14:15:22.123Z",

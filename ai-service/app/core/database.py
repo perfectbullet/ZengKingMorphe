@@ -35,7 +35,26 @@ class MongoDB:
             await self._create_indexes()
             
         except Exception as e:
-            logger.error(f"Failed to connect to MongoDB: error={str(e)}")
+            # Log detailed connection info for debugging (mask password)
+            masked_url = settings.mongodb_url
+            if '@' in masked_url and '://' in masked_url:
+                # Mask password in URL: mongodb://user:password@host -> mongodb://user:***@host
+                parts = masked_url.split('://')
+                if len(parts) == 2 and '@' in parts[1]:
+                    auth_and_host = parts[1].split('@')
+                    if ':' in auth_and_host[0]:
+                        user = auth_and_host[0].split(':')[0]
+                        masked_url = f"{parts[0]}://{user}:***@{auth_and_host[1]}"
+            
+            logger.error(
+                "Failed to connect to MongoDB",
+                error=str(e),
+                mongodb_url=masked_url,
+                database=settings.mongodb_db_name,
+                max_pool_size=settings.mongodb_max_pool_size,
+                min_pool_size=settings.mongodb_min_pool_size,
+                exc_info=True
+            )
             raise
     
     async def disconnect(self) -> None:

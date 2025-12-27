@@ -13,6 +13,7 @@ services:
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:-your-secret-key-change-in-production}
     volumes:
       - ./ai-service:/app
+      - ./outer_api_docs:/outer_api_docs
       - ai-chroma-data:/app/chroma_db
       - ai-logs:/app/logs
     env_file:
