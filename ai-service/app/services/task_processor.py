@@ -371,8 +371,18 @@ class DocumentTaskProcessor:
             
             for idx, faq_data in enumerate(faqs):
                 try:
+                    # Debug: Log FAQ data structure
+                    if idx == 0:
+                        logger.info(f"DEBUG FAQ[0] keys: {list(faq_data.keys())}")
+                        logger.info(f"DEBUG FAQ[0] data: {faq_data}")
+                    
                     # Generate FAQ ID first (needed for both enabled and disabled FAQs)
-                    external_faq_id = faq_data["faq_id"]  # Use new field name (str type)
+                    external_faq_id = faq_data.get("id")  # Try both field names
+                    if not external_faq_id:
+                        logger.error(f"FAQ {idx} missing both 'id' and 'faq_id' fields: {faq_data}")
+                        skipped_count += 1
+                        continue
+                    
                     faq_id = f"faq_{employee_id}_{external_faq_id}"
                     
                     # Handle disabled FAQs - delete from vector stores
@@ -540,6 +550,7 @@ class DocumentTaskProcessor:
                     
                 except Exception as e:
                     logger.error(f"Failed to process FAQ {idx}: {e}", exc_info=True)
+                    logger.exception(e)
                     # Continue processing other FAQs
             
             logger.info(
@@ -550,6 +561,7 @@ class DocumentTaskProcessor:
             
         except Exception as e:
             logger.error(f"FAQ vectorization task failed: task_id={task_id}, error={str(e)}", exc_info=True)
+            logger.exception(e)
             raise
 
 

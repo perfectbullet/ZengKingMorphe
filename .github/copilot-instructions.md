@@ -189,7 +189,7 @@ AI service calls Java backend via `JAVA_API_BASE_URL` for:
   - LLM: DeepSeek-V3 (default) OR qwen2.5:7b (Ollama)
 
 ### Database Schemas
-- **MongoDB Collections**: `conversations`, `sessions`, `employee_configs`, `knowledge_bases`, `documents`
+- **MongoDB Collections**: `conversations`, `sessions`, `digital_employee_configs`, `knowledge_bases`, `documents`
 - **ChromaDB**: Single `"doc"` collection with metadata filters by `kb_id`
 - **ElasticSearch**: Indexes prefixed with `digital_employee_*` (configurable via `es_index_prefix`)
 

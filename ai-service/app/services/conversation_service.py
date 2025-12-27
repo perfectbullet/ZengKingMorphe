@@ -241,7 +241,7 @@ class ConversationWorkflow:
     async def load_employee_config(self, state: ConversationState) -> ConversationState:
         """Load employee configuration (enhanced with full config)."""
         db = await get_database()
-        employee = await db.employee_configs.find_one({"employee_id": state["employee_id"]})
+        employee = await db.digital_employee_configs.find_one({"employee_id": state["employee_id"]})
         logger.info(f"Loading employee config: employee_id={state['employee_id']}")
         if not employee:
             error_msg = f"Employee config not found: employee_id={state['employee_id']}"

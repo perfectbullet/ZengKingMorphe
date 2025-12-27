@@ -25,7 +25,7 @@ async def test_faq_data_in_mongodb():
     
     db = await get_database()
     
-    # 查询digital_employee_configs
+    # 查询  digital_employee_configs
     digital_configs = await db.digital_employee_configs.find().to_list(length=10)
     print(f"✓ 找到 {len(digital_configs)} 个数字员工配置")
     

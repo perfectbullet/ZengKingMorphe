@@ -83,8 +83,8 @@ class MongoDB:
                 IndexModel([("employee_id", ASCENDING), ("status", ASCENDING)]),
             ])
             
-            # Employee configs collection indexes
-            await self.db.employee_configs.create_indexes([
+            # Employee configs collection indexes (legacy, keeping for backward compatibility)
+            await self.db.digital_employee_configs.create_indexes([
                 IndexModel([("employee_id", ASCENDING)], unique=True),
                 IndexModel([("domain", ASCENDING)]),
                 IndexModel([("status", ASCENDING)]),
@@ -131,6 +131,32 @@ class MongoDB:
                 IndexModel([("employee_id", ASCENDING), ("created_at", DESCENDING)]),
                 IndexModel([("chat_id", ASCENDING), ("sequence", ASCENDING)]),
                 IndexModel([("created_at", DESCENDING)]),
+            ])
+            
+            # FAQs collection indexes
+            await self.db.faqs.create_indexes([
+                IndexModel([("faq_id", ASCENDING)], unique=True),
+                IndexModel([("employee_id", ASCENDING), ("is_enable", ASCENDING)]),
+                IndexModel([("employee_id", ASCENDING), ("update_time", DESCENDING)]),
+                IndexModel([("external_faq_id", ASCENDING)]),
+                IndexModel([("team_id", ASCENDING)]),
+                IndexModel([("vector_id", ASCENDING)]),
+                IndexModel([("synced_at", DESCENDING)]),
+            ])
+            
+            # Digital employee configs collection indexes
+            await self.db.digital_employee_configs.create_indexes([
+                IndexModel([("employee_id", ASCENDING)], unique=True),
+                IndexModel([("external_employee_id", ASCENDING)]),
+                IndexModel([("team_id", ASCENDING)]),
+                IndexModel([("onduty_status", ASCENDING)]),
+            ])
+            
+            # Document tasks collection indexes
+            await self.db.document_tasks.create_indexes([
+                IndexModel([("task_id", ASCENDING)], unique=True),
+                IndexModel([("kb_id", ASCENDING), ("status", ASCENDING)]),
+                IndexModel([("status", ASCENDING), ("created_at", DESCENDING)]),
             ])
             
             logger.info("Created MongoDB indexes")

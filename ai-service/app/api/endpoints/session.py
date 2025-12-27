@@ -318,10 +318,7 @@ async def create_session(
             logger.warning(f"Failed to fetch external employee data for {request.employee_id}, using existing config")
         
         # Step 4: Check if employee exists (either from sync or existing)
-        employee = await db.employee_configs.find_one({"employee_id": request.employee_id})
-        if not employee:
-            # Also check digital_employee_configs collection
-            employee = await db.digital_employee_configs.find_one({"employee_id": request.employee_id})
+        employee = await db.digital_employee_configs.find_one({"employee_id": request.employee_id})
             
         if not employee:
             raise HTTPException(
