@@ -311,11 +311,14 @@ class RAGRetrieval:
             
             # Step 3: RRF fusion
             fused_results = self._faq_rrf_fusion(vector_results, keyword_results, k=60)
-            logger.info(f"FAQ RRF fusion done: total_fused={fused_results}")
-            # Step 4: Filter by similarity threshold and return top-k
+            logger.info(f"FAQ RRF fusion done: top_3_rrf_scores={[r['rrf_score'] for r in fused_results[:3]]}, top_3_vector_scores={[r.get('vector_score', 0) for r in fused_results[:3]]}, top_3_keyword_scores={[r.get('keyword_score', 0) for r in fused_results[:3]]}")
+            
+            # Step 4: Filter by similarity threshold (use max of vector/keyword score, NOT rrf_score)
+            # Note: RRF score is for ranking only (range ~0.01-0.05), not for thresholding
+            # Use the higher score between vector similarity and keyword similarity for filtering
             filtered_results = [
                 result for result in fused_results
-                if result["rrf_score"] >= faq_sim_threshold
+                if max(result.get("vector_score", 0.0), result.get("keyword_score", 0.0)) >= faq_sim_threshold
             ]
             
             logger.info(f"FAQ hybrid search completed: total_fused={len(fused_results)}, above_threshold={len(filtered_results)}, returning_top_k={min(faq_top_k, len(filtered_results))}")
