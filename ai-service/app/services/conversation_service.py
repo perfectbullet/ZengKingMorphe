@@ -13,6 +13,7 @@ from langchain_community.chat_models import ChatOllama
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
 from langchain_community.tools.tavily_search import TavilySearchResults
+from langchain_community.tools.bing_search import BingSearchResults
 
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -606,7 +607,43 @@ class ConversationWorkflow:
             "low": "轻松口语化"
         }.get(personality.get("formality", "moderate"), "适度")
         
-        system_prompt = f"""你是 {employee_config.get('name', 'AI助手')}，{role}。
+        # 针对实时查询和网络搜索场景，使用不同的系统提示
+        if state.get("web_search_used", False) and state.get("is_realtime_query", False):
+            # 实时查询场景：强调使用网络搜索结果
+            system_prompt = f"""你是 {employee_config.get('name', 'AI助手')}，{role}。
+
+角色定位：
+{employee_config.get('description', '专业的AI助手')}
+
+个性特征：
+- 语气风格：{tone_desc}
+- 沟通方式：{style_desc}
+- 正式程度：{formality_desc}
+
+开场白：
+{greeting}
+
+**重要提示**：用户询问的是实时信息（如{state.get('realtime_category', '最新动态')}），系统已通过网络搜索获取了最新数据。
+
+回答要求：
+1. **必须基于下方提供的网络资料回答**，这些是通过实时搜索获得的最新信息
+2. 直接提取网络资料中的关键信息，如价格、数据、时间等
+3. 保持{tone_desc}的语气风格
+4. 回答简洁明了，重点突出具体数据
+5. 如果网络资料中有多个相关信息源，整合后给出完整回答
+6. 可在回答末尾简要注明信息来源（如"以上信息来自[来源名称]"）
+7. **不要说"无法提供实时数据"或"知识库不包含"这类话**，因为网络搜索结果就是实时数据
+
+上下文信息{source_indicator}：
+{context_text}
+
+用户问题：
+{state['user_query']}
+
+请基于上述网络资料，提供准确的实时信息回答。"""
+        else:
+            # 常规场景：知识库检索或一般问答
+            system_prompt = f"""你是 {employee_config.get('name', 'AI助手')}，{role}。
 
 角色定位：
 {employee_config.get('description', '专业的AI助手')}
@@ -626,7 +663,6 @@ class ConversationWorkflow:
 4. 回答简洁明了，重点突出
 5. 如有多个信息源，优先使用最相关的内容
 6. 如果使用了网络资料，可在回答末尾注明信息来源
-7. 对于实时性问题（天气、新闻等），优先使用网络资料
 
 上下文信息{source_indicator}：
 {context_text}
@@ -725,38 +761,6 @@ class ConversationWorkflow:
             logger.error(f"Failed to save conversation: error={str(e)}", exc_info=True)
         
         return state
-    
-    async def run(self, state: ConversationState) -> ConversationState:
-        """Run the workflow."""
-        start_time = datetime.now()
-        
-        try:
-            # Execute the workflow， get the final state
-            result = await self.workflow.ainvoke(state)
-            
-            # For non-streaming mode, actually generate the answer
-            if not result.get("final_answer") and not result.get("error"):
-                messages = self.build_generation_messages(result)
-                response = await self.llm.ainvoke(messages)
-                result["final_answer"] = response.content
-                
-                logger.info(
-                    "Answer generated (non-streaming)",
-                    answer_length=len(result["final_answer"]),
-                    confidence=result.get("confidence", 0.0)
-                )
-            
-            # Calculate response time
-            end_time = datetime.now()
-            response_time_ms = int((end_time - start_time).total_seconds() * 1000)
-            result["response_time_ms"] = response_time_ms
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Workflow execution failed: error={str(e)}", exc_info=True)
-            raise
-
 
 # Global workflow instance
 conversation_workflow = ConversationWorkflow()
