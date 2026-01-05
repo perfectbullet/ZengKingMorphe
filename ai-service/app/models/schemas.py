@@ -464,14 +464,27 @@ class CreateRagDocumentRequest(BaseModel):
 
 class CreateRagDocumentResponse(BaseModel):
     """创建RAG文档响应。"""
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "code": 200,
+                "message": "success",
+                "data": {
+                    "task_id": "document_task_202512301645_abc12345",
+                    "status": "processing",
+                    "resource_id": 48907,
+                    "document_name": "首饰雕蜡工艺-全本.txt",
+                    "kb_id": "kb_id_abc123"
+                }
+            }
+        }
+    )
+    
     code: int = 200
     message: str = "success"
     data: Dict[str, Any] = Field(
-        default_factory=lambda: {
-            "task_id": "",
-            "document_id": "",
-            "status": "processing"
-        }
+        ...,
+        description="响应数据，包含task_id（通过查询任务接口获取document_id）、status、resource_id、document_name、kb_id"
     )
 
 

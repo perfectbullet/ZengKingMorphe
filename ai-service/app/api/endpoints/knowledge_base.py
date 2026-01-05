@@ -423,28 +423,46 @@ async def get_document_detail(
                     "description": kb.get("description", "")
                 }
         
-        # Get chunks statistics from Chroma
+        # Get chunks statistics and content from Chroma
         chunks_stats = {
             "total_chunks": doc.get("chunks_count", 0),
             "avg_chunk_size": 0,
             "total_characters": 0
         }
+        full_content = ""
         
         try:
-            # Query chunks from Chroma to get statistics
+            # Query chunks from Chroma to get statistics and content
             if chroma_db.client and doc.get("chunks_count", 0) > 0:
                 results = chroma_db.doc_collection.get(
                     where={"doc_id": doc_id},
-                    limit=1000  # Get all chunks for stats
+                    limit=10000  # Get all chunks
                 )
                 
                 if results and results.get("documents"):
-                    chunks = results["documents"]
+                    documents = results["documents"]
+                    metadatas = results.get("metadatas", [])
+                    
+                    # Build chunk list with indices for proper ordering
+                    chunks_with_index = []
+                    for i, text in enumerate(documents):
+                        metadata = metadatas[i] if i < len(metadatas) else {}
+                        chunk_index = metadata.get("chunk_index", i)
+                        chunks_with_index.append((chunk_index, text))
+                    
+                    # Sort by chunk_index
+                    chunks_with_index.sort(key=lambda x: x[0])
+                    
+                    # Calculate statistics
+                    chunks = [text for _, text in chunks_with_index]
                     total_chars = sum(len(chunk) for chunk in chunks)
                     chunks_stats["total_characters"] = total_chars
                     chunks_stats["avg_chunk_size"] = total_chars // len(chunks) if chunks else 0
+                    
+                    # Concatenate all chunks to form complete content
+                    full_content = "".join(chunks)
         except Exception as e:
-            logger.warning(f"Failed to get chunks statistics: doc_id={doc_id}, error={str(e)}")
+            logger.warning(f"Failed to get chunks statistics and content: doc_id={doc_id}, error={str(e)}")
         
         # Format response
         doc.pop("_id", None)
@@ -458,6 +476,7 @@ async def get_document_detail(
             "uploaded_at": doc["uploaded_at"].isoformat() + "Z",
             "processed_at": doc.get("processed_at").isoformat() + "Z" if doc.get("processed_at") else None,
             "chunks_stats": chunks_stats,
+            "content": full_content,
             "knowledge_base": kb_info
         }
         
@@ -565,6 +584,7 @@ async def get_document_chunks(
         
         # Return empty result if no chunks found
         return {
+            "code": 200,
             "status": "success",
             "doc_id": doc_id,
             "kb_id": kb_id,
@@ -610,8 +630,9 @@ async def get_task_status(
             )
         
         return {
+            "code": 200,
             "status": "success",
-            "task": task
+            "data": task
         }
         
     except HTTPException:
@@ -651,6 +672,7 @@ async def cancel_task(
             )
         
         return {
+            "code": 200,
             "status": "success",
             "message": f"Task {task_id} cancelled"
         }
@@ -756,16 +778,12 @@ async def create_rag_document_with_segment(
             chunk_config=chunk_config
         )
         
-        # Generate document_id (will be replaced by actual doc_id after processing)
-        document_id = f"doc_{hashlib.md5(f'{request.document_name}_{request.kb_id}'.encode()).hexdigest()[:12]}"
-        
         return CreateRagDocumentResponse(
             code=200,
             message="success",
             data={
                 "task_id": task_id,
                 "status": "processing",
-                "document_id": document_id,
                 "resource_id": request.resource_id,
                 "document_name": request.document_name,
                 "kb_id": request.kb_id
