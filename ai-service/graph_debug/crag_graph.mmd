@@ -18,19 +18,19 @@ graph TD;
 	save_conversation(save_conversation)
 	__end__([<p>__end__</p>]):::last
 	__start__ --> load_employee_config;
-	check_realtime_query -.-> intent_recognition;
+	check_realtime_query -.-> match_faq;
 	check_realtime_query -.-> web_search;
 	generate_answer --> save_conversation;
 	grade_documents -.-> generate_answer;
 	grade_documents -.-> web_search;
-	input_validation --> match_faq;
+	input_validation --> check_realtime_query;
 	intent_recognition -.-> generate_answer;
 	intent_recognition -.-> knowledge_retrieval;
 	knowledge_retrieval --> grade_documents;
 	load_employee_config --> load_session_context;
 	load_session_context --> input_validation;
-	match_faq -. &nbsp;check_realtime&nbsp; .-> check_realtime_query;
 	match_faq -. &nbsp;generate&nbsp; .-> generate_answer;
+	match_faq -.-> intent_recognition;
 	web_search --> generate_answer;
 	save_conversation --> __end__;
 	classDef default fill:#f2f0ff,line-height:1.2

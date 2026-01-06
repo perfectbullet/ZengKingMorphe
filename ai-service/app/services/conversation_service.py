@@ -194,8 +194,6 @@ class ConversationWorkflow:
         if dump_flag in {"0", "false", "no"}:
             return
 
-        use_remote = os.getenv("CRAG_RENDER_REMOTE", "0").lower() not in {"0", "false", "no"}
-
         try:
             graph_view = compiled_stateGraph.get_graph(xray=True)
             output_dir = Path(os.getenv("CRAG_GRAPH_DIR", "./graph_debug"))
@@ -224,32 +222,7 @@ class ConversationWorkflow:
                 print("[WARN] Mermaid source unavailable, saved repr to crag_graph_view_repr.txt")
 
             # 尝试远程渲染（如果启用）
-            if use_remote and mermaid_src:
-                try:
-                    from langgraph.graph.graph import MermaidDrawMethod
-                    png_bytes = graph_view.draw_mermaid_png(
-                        draw_method=MermaidDrawMethod.API,  # 使用远程 API
-                        max_retries=3,
-                        retry_delay=1.0
-                    )
-                    (output_dir / "crag_graph.png").write_bytes(png_bytes)
-                    print(f"[OK] Graph PNG rendered at {output_dir / 'crag_graph.png'}")
-                except Exception as remote_exc:
-                    logger.warning(f"Remote PNG rendering failed: {remote_exc}")
-                    (output_dir / "crag_graph_render_error.txt").write_text(
-                        str(remote_exc), encoding="utf-8"
-                    )
-                    print("[WARN] Remote rendering failed (see crag_graph_render_error.txt)")
-                    print("[INFO] Use local rendering: Set CRAG_RENDER_REMOTE=0 or install pyppeteer")
-
-            # 本地渲染建议（如果远程失败）
-            if not use_remote and mermaid_src:
-                print(f"[INFO] Mermaid source available at {mermaid_path}")
-                print("[INFO] To render locally:")
-                print("   1. Install mermaid-cli: npm install -g @mermaid-js/mermaid-cli")
-                print(f"   2. Run: mmdc -i {mermaid_path} -o {output_dir / 'crag_graph.png'}")
-                print("   OR set CRAG_RENDER_REMOTE=1 to use remote API")
-
+            # 渲染在windows开发机上进行
         except Exception as exc:
             logger.error(f"Graph debug dump failed: {exc}", exc_info=True)
             try:
@@ -325,7 +298,6 @@ class ConversationWorkflow:
     async def match_faq(self, state: ConversationState) -> ConversationState:
         """
         Match FAQ using hybrid search (vector + keyword + RRF fusion).
-        
         如果FAQ的RRF分数 >= faq_sim_threshold，直接返回FAQ答案（随机选择），
         跳过后续的RAG检索和LLM生成。
         """
