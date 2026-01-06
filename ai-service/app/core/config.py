@@ -2,6 +2,8 @@
 Configuration settings for the Digital Employee AI Service.
 """
 
+import os
+import sys
 from typing import List, Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
@@ -10,7 +12,41 @@ from pydantic import Field
 # Load environment variables before importing settings
 from dotenv import load_dotenv
 
-load_dotenv()
+# 智能环境变量加载：根据平台和运行环境选择合适的 .env 文件
+def _load_env_file():
+    """
+    根据运行环境自动加载对应的环境变量文件。
+
+    优先级：
+    1. 如果显式指定了 ENV_FILE 环境变量，使用该文件
+    2. Windows 本地开发：尝试加载 .env-win
+    3. Docker/容器环境：使用 .env
+    4. 其他平台：使用 .env
+    """
+    # 检查是否显式指定了环境文件
+    env_file = os.getenv("ENV_FILE")
+    if env_file and os.path.exists(env_file):
+        load_dotenv(env_file, override=True)
+        print(f"[OK] Loaded environment from: {env_file}")
+        return
+
+    # Windows 平台特殊处理
+    if sys.platform == "win32":
+        # 优先尝试 .env-win (Windows本地开发配置)
+        # 从 app/core/config.py 向上两级到 ai-service 目录
+        env_win_path = os.path.join(os.path.dirname(__file__), "..", "..", ".env-win")
+        env_win_path = os.path.abspath(env_win_path)
+        if os.path.exists(env_win_path):
+            load_dotenv(env_win_path, override=True)
+            print(f"[OK] Windows detected: Loaded environment from .env-win")
+            return
+
+    # 默认加载 .env (Docker/容器环境)
+    load_dotenv()
+    print(f"[OK] Loaded default .env file")
+
+# 加载环境变量
+_load_env_file()
 
 
 class Settings(BaseSettings):

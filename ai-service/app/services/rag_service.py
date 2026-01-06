@@ -312,13 +312,22 @@ class RAGRetrieval:
             # Step 3: RRF fusion
             fused_results = self._faq_rrf_fusion(vector_results, keyword_results, k=60)
             logger.info(f"FAQ RRF fusion done: top_3_rrf_scores={[r['rrf_score'] for r in fused_results[:3]]}, top_3_vector_scores={[r.get('vector_score', 0) for r in fused_results[:3]]}, top_3_keyword_scores={[r.get('keyword_score', 0) for r in fused_results[:3]]}")
-            
-            # Step 4: Filter by similarity threshold (use max of vector/keyword score, NOT rrf_score)
-            # Note: RRF score is for ranking only (range ~0.01-0.05), not for thresholding
-            # Use the higher score between vector similarity and keyword similarity for filtering
+
+            # Step 4: Filter by similarity threshold with improved logic
+            # 优先使用 RRF 分数（综合考虑向量和关键词），避免误匹配
             filtered_results = [
                 result for result in fused_results
-                if max(result.get("vector_score", 0.0), result.get("keyword_score", 0.0)) >= faq_sim_threshold
+                if (
+                    # 优先使用 RRF 分数（综合考虑向量和关键词）
+                    (result.get("rrf_score", 0.0) >= faq_sim_threshold) or
+                    # 向量分数单独判断（语义相似度高）
+                    (result.get("vector_score", 0.0) >= faq_sim_threshold) or
+                    # 关键词分数高但向量分数也要有一定匹配度（避免完全无关）
+                    (
+                        result.get("keyword_score", 0.0) >= faq_sim_threshold and
+                        result.get("vector_score", 0.0) >= faq_sim_threshold * 0.7
+                    )
+                )
             ]
             
             logger.info(f"FAQ hybrid search completed: total_fused={len(fused_results)}, above_threshold={len(filtered_results)}, returning_top_k={min(faq_top_k, len(filtered_results))}")

@@ -138,24 +138,24 @@ class ConversationWorkflow:
         # Add edges
         graph.add_edge("load_employee_config", "load_session_context")
         graph.add_edge("load_session_context", "input_validation")
-        graph.add_edge("input_validation", "match_faq")
-        
-        # Conditional: FAQ matched -> generate answer, else -> check realtime
-        graph.add_conditional_edges(
-            "match_faq",
-            lambda state: "generate" if state.get("faq_matched") else "check_realtime",
-            {
-                "generate": "generate_answer",
-                "check_realtime": "check_realtime_query"
-            }
-        )
-        
-        # Conditional: realtime query -> web search, else -> intent recognition
+        graph.add_edge("input_validation", "check_realtime_query")
+
+        # Conditional: realtime query -> web search, else -> match FAQ
         graph.add_conditional_edges(
             "check_realtime_query",
-            lambda state: "web_search" if state.get("is_realtime_query") else "intent_recognition",
+            lambda state: "web_search" if state.get("is_realtime_query") else "match_faq",
             {
                 "web_search": "web_search",
+                "match_faq": "match_faq"
+            }
+        )
+
+        # Conditional: FAQ matched -> generate answer, else -> intent recognition
+        graph.add_conditional_edges(
+            "match_faq",
+            lambda state: "generate" if state.get("faq_matched") else "intent_recognition",
+            {
+                "generate": "generate_answer",
                 "intent_recognition": "intent_recognition"
             }
         )
@@ -201,7 +201,7 @@ class ConversationWorkflow:
             output_dir = Path(os.getenv("CRAG_GRAPH_DIR", "./graph_debug"))
             output_dir.mkdir(parents=True, exist_ok=True)
 
-            # ✅ 正确的 mermaid 提取方式
+            # 正确的 mermaid 提取方式
             mermaid_src = None
             try:
                 mermaid_src = graph_view.draw_mermaid()  # 返回 mermaid 字符串
@@ -216,12 +216,12 @@ class ConversationWorkflow:
             mermaid_path = output_dir / "crag_graph.mmd"
             if mermaid_src:
                 mermaid_path.write_text(mermaid_src, encoding="utf-8")
-                print(f"✓ Mermaid source saved at {mermaid_path}")
+                print(f"[OK] Mermaid source saved at {mermaid_path}")
             else:
                 # 回退：保存 repr 以便调试
                 repr_text = repr(graph_view)
                 (output_dir / "crag_graph_view_repr.txt").write_text(repr_text, encoding="utf-8")
-                print("⚠️ Mermaid source unavailable, saved repr to crag_graph_view_repr.txt")
+                print("[WARN] Mermaid source unavailable, saved repr to crag_graph_view_repr.txt")
 
             # 尝试远程渲染（如果启用）
             if use_remote and mermaid_src:
@@ -233,21 +233,21 @@ class ConversationWorkflow:
                         retry_delay=1.0
                     )
                     (output_dir / "crag_graph.png").write_bytes(png_bytes)
-                    print(f"✓ Graph PNG rendered at {output_dir / 'crag_graph.png'}")
+                    print(f"[OK] Graph PNG rendered at {output_dir / 'crag_graph.png'}")
                 except Exception as remote_exc:
                     logger.warning(f"Remote PNG rendering failed: {remote_exc}")
                     (output_dir / "crag_graph_render_error.txt").write_text(
                         str(remote_exc), encoding="utf-8"
                     )
-                    print("⚠️ Remote rendering failed (see crag_graph_render_error.txt)")
-                    print("💡 Use local rendering: Set CRAG_RENDER_REMOTE=0 or install pyppeteer")
+                    print("[WARN] Remote rendering failed (see crag_graph_render_error.txt)")
+                    print("[INFO] Use local rendering: Set CRAG_RENDER_REMOTE=0 or install pyppeteer")
 
             # 本地渲染建议（如果远程失败）
             if not use_remote and mermaid_src:
-                print("ℹ️ Mermaid source available at {mermaid_path}")
-                print("💡 To render locally:")
+                print(f"[INFO] Mermaid source available at {mermaid_path}")
+                print("[INFO] To render locally:")
                 print("   1. Install mermaid-cli: npm install -g @mermaid-js/mermaid-cli")
-                print("   2. Run: mmdc -i {mermaid_path} -o {output_dir / 'crag_graph.png'}")
+                print(f"   2. Run: mmdc -i {mermaid_path} -o {output_dir / 'crag_graph.png'}")
                 print("   OR set CRAG_RENDER_REMOTE=1 to use remote API")
 
         except Exception as exc:
@@ -260,7 +260,7 @@ class ConversationWorkflow:
                 )
             except Exception:
                 pass
-            print(f"⚠️ Unable to dump graph: {exc}")
+            print(f"[WARN] Unable to dump graph: {exc}")
 
     async def load_employee_config(self, state: ConversationState) -> ConversationState:
         """Load employee configuration (enhanced with full config)."""
@@ -397,7 +397,20 @@ class ConversationWorkflow:
             
             import random
             selected_answer = random.choice(answers)
-            
+
+            # FAQ 质量检查：如果 RRF 分数过低（< 0.02），跳过以避免误匹配
+            # RRF 分数范围通常在 0.01-0.05 之间，低于 0.02 表示相关性很低
+            if rrf_score < 0.02:
+                logger.warning(
+                    f"FAQ RRF score too low ({rrf_score:.4f} < 0.02), skipping FAQ match to avoid false positive",
+                    faq_id=faq_id,
+                    question=faq_doc.get('question_name')[:50],
+                    vector_score=best_faq_result.get('vector_score', 0),
+                    keyword_score=best_faq_result.get('keyword_score', 0)
+                )
+                state["faq_matched"] = None
+                return state
+
             # Set state for direct FAQ answer return
             state["final_answer"] = selected_answer
             state["confidence"] = min(0.95, rrf_score)  # Cap at 0.95
@@ -411,8 +424,12 @@ class ConversationWorkflow:
                 "selected_answer": selected_answer,
                 "total_answers": len(answers)
             }
-            
-            logger.info(f"FAQ answer selected: faq_id={faq_id}, question={faq_doc.get('question_name')[:50]}, answer_length={len(selected_answer)}")
+
+            logger.info(
+                f"FAQ answer selected: faq_id={faq_id}, question={faq_doc.get('question_name')[:50]}, "
+                f"rrf_score={rrf_score:.4f}, vector_score={best_faq_result.get('vector_score', 0):.4f}, "
+                f"keyword_score={best_faq_result.get('keyword_score', 0):.4f}, answer_length={len(selected_answer)}"
+            )
             
         except Exception as e:
             logger.error(f"FAQ matching failed: error={str(e)}", exc_info=True)
@@ -428,12 +445,12 @@ class ConversationWorkflow:
         
         query = state["user_query"].lower()
         
-        # Realtime keywords
+        # Realtime keywords（包含金融价格查询）
         realtime_keywords = {
             "time": ["今天", "明天", "昨天", "最近", "现在", "本周", "本月", "当前"],
             "weather": ["天气", "气温", "降雨", "降水", "温度"],
             "news": ["新闻", "热点", "最新", "资讯", "动态", "头条"],
-            "market": ["股价", "汇率", "行情", "股市"],
+            "market": ["股价", "汇率", "行情", "股市", "价格", "金价", "银价", "油价", "多少钱", "最新价格", "实时价格"],
         }
         
         for category, keywords in realtime_keywords.items():
