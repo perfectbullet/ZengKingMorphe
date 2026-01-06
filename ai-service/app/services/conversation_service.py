@@ -13,7 +13,7 @@ from langchain_community.chat_models import ChatOllama
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
 from langchain_community.tools.tavily_search import TavilySearchResults
-from langchain_community.tools.bing_search import BingSearchResults
+# from langchain_community.tools.bing_search import BingSearchResults
 
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -22,6 +22,21 @@ from app.services.rag_service import rag_retrieval
 from app.models.database import ConversationModel, SessionModel
 
 logger = get_logger(__name__)
+
+# 问候语关键词定义（用于快速检测）
+GREETING_KEYWORDS = {
+    # 基础问候
+    "basic": ["你好", "您好", "hi", "hello", "嗨"],
+    # 时间问候
+    "time": [
+        "早上好", "早", "上午好", "中午好", "下午好",
+        "晚上好", "晚安"
+    ],
+    # 简单打招呼
+    "casual": ["哈喽", "在吗", "在不在", "有人吗"],
+    # 礼貌用语
+    "polite": ["打扰一下", "请问", "不好意思", "劳驾"]
+}
 
 
 # Define conversation state
@@ -145,7 +160,15 @@ class ConversationWorkflow:
             }
         )
         
-        graph.add_edge("intent_recognition", "knowledge_retrieval")
+        # Conditional: greeting -> generate answer directly, else -> knowledge retrieval
+        graph.add_conditional_edges(
+            "intent_recognition",
+            lambda state: "generate_answer" if state.get("intent") == "greeting" else "knowledge_retrieval",
+            {
+                "generate_answer": "generate_answer",
+                "knowledge_retrieval": "knowledge_retrieval"
+            }
+        )
         graph.add_edge("knowledge_retrieval", "grade_documents")
         
         # Conditional: low relevance -> web search, else -> generate answer
@@ -426,10 +449,46 @@ class ConversationWorkflow:
         return state
     
     async def recognize_intent(self, state: ConversationState) -> ConversationState:
-        """Recognize user intent (simplified)."""
-        # Simplified intent recognition - just mark as general_query
+        """
+        识别用户意图（增强版：支持问候检测）。
+
+        检测优先级：
+        1. 问候语检测（关键词匹配）
+        2. 其他意图（保留扩展空间）
+        3. 默认：general_query
+        """
+        query = state["user_query"].strip().lower()
+
+        # 1. 问候语检测
+        for category, keywords in GREETING_KEYWORDS.items():
+            for keyword in keywords:
+                if keyword in query:
+                    state["intent"] = "greeting"
+                    state["entities"] = {"greeting_type": category, "matched_keyword": keyword}
+
+                    logger.info(
+                        "Greeting detected",
+                        employee_id=state["employee_id"],
+                        query=query[:50],
+                        greeting_type=category,
+                        matched_keyword=keyword
+                    )
+                    return state
+
+        # 2. 其他意图识别（保留扩展空间）
+        # 未来可添加：投诉、咨询、预约等
+
+        # 3. 默认：一般查询
         state["intent"] = "general_query"
         state["entities"] = {}
+
+        logger.debug(
+            "Intent recognized",
+            employee_id=state["employee_id"],
+            query=query[:50],
+            intent="general_query"
+        )
+
         return state
     
     async def knowledge_retrieval(self, state: ConversationState) -> ConversationState:
@@ -561,10 +620,16 @@ class ConversationWorkflow:
     def build_generation_messages(self, state: ConversationState) -> List:
         """Build messages for LLM generation (used by streaming methods)."""
         employee_config = state.get("employee_config", {})
+
+        # 针对问候场景的专门处理
+        if state.get("intent") == "greeting":
+            return self._build_greeting_messages(state, employee_config)
+
+        # 原有逻辑：FAQ、实时查询、常规场景
         personality = employee_config.get("personality", {})
         role = employee_config.get("role", "AI助手")
         greeting = employee_config.get("greeting", "您好")
-        
+
         # Build context from retrieved docs
         context_parts = []
         for i, doc in enumerate(state.get("retrieved_docs", [])[:3], 1):
@@ -686,7 +751,94 @@ class ConversationWorkflow:
         messages.append(HumanMessage(content=state["user_query"]))
         
         return messages
-    
+
+    def _build_greeting_messages(
+        self,
+        state: ConversationState,
+        employee_config: Dict[str, Any]
+    ) -> List:
+        """
+        构建问候场景的 LLM 消息。
+
+        特点：
+        - 不依赖任何上下文（无 RAG、无网络搜索）
+        - 基于数字员工个性生成友好回应
+        - 简洁自然，鼓励用户进一步交流
+        """
+        personality = employee_config.get("personality", {})
+        role = employee_config.get("role", "AI助手")
+        greeting = employee_config.get("greeting", "您好")
+
+        # 获取问候类型（从 entities）
+        entities = state.get("entities", {})
+        greeting_type = entities.get("greeting_type", "basic")
+        matched_keyword = entities.get("matched_keyword", "")
+
+        # 构建个性描述
+        tone_desc = {
+            "professional": "专业严谨",
+            "friendly": "友好亲切",
+            "formal": "正式庄重",
+            "casual": "轻松随意"
+        }.get(personality.get("tone", "professional"), "专业")
+
+        # 根据问候类型调整回复风格
+        style_hints = {
+            "time": f"根据时间（{matched_keyword}）给予相应的热情问候，并自然地询问用户今天需要什么帮助",
+            "casual": "用轻松活泼的方式回应，表现出随时准备提供帮助的状态",
+            "polite": "以礼貌、耐心的方式回应，让用户感受到专业和尊重",
+            "basic": "用简洁友好的方式回应，自然地引导用户说明需求"
+        }
+        style_hint = style_hints.get(greeting_type, style_hints["basic"])
+
+        system_prompt = f"""你是 {employee_config.get('name', 'AI助手')}，{role}。
+
+角色定位：
+{employee_config.get('description', '专业的AI助手')}
+
+个性特征：
+- 语气风格：{tone_desc}
+- 正式程度：{'高度正式' if personality.get('formality') == 'high' else '适度正式'}
+
+开场白：
+{greeting}
+
+**当前场景**：用户向你发起问候（"{matched_keyword}"）。
+
+回答要求：
+1. {style_hint}
+2. 回复要简洁（不超过 50 字），不要过度冗长
+3. 保持{tone_desc}的语气风格，符合你的角色设定
+4. 不要提及"我是AI"或"我是机器人"，自然地像真人一样回应
+5. 不要提供任何具体信息或产品介绍（除非用户主动询问）
+6. 可以根据用户的历史对话上下文（如果有）调整问候的个性化程度
+
+用户原话：
+{state['user_query']}
+
+请生成自然、友好的问候回应。"""
+
+        messages = [SystemMessage(content=system_prompt)]
+
+        # 添加历史对话上下文（最近 3 轮）
+        for msg in state.get("context", {}).get("messages", [])[-3:]:
+            if msg.get("role") == "user":
+                messages.append(HumanMessage(content=msg.get("content", "")))
+            elif msg.get("role") == "assistant":
+                messages.append(AIMessage(content=msg.get("content", "")))
+
+        # 当前问候
+        messages.append(HumanMessage(content=state["user_query"]))
+
+        logger.debug(
+            "Greeting messages built",
+            employee_id=state["employee_id"],
+            greeting_type=greeting_type,
+            personality_tone=personality.get("tone", "professional")
+        )
+
+        return messages
+
     async def save_conversation(self, state: ConversationState) -> ConversationState:
         """Save conversation to database."""
         try:

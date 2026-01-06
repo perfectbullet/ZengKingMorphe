@@ -182,6 +182,11 @@ AI service calls Java backend via `JAVA_API_BASE_URL` for:
 
 **Important**: Java platform URLs are hardcoded in config, ensure `.env` has correct `JAVA_API_BASE_URL`.
 
+**Test Mode Pattern** ([session.py:37-51](ai-service/app/api/endpoints/session.py#L37-L51)):
+- For `employee_id="hutao"`, external API calls bypass real requests and load local test data from `outer_api_docs/按员工id返回的数据-hutao.json`
+- Pattern: Check employee_id → load local JSON → parse via Pydantic `ExternalEmployeeAPIResponse`
+- Enables offline development and integration testing without Java backend
+
 ### External APIs
 - **Tavily** (`tavily_api_key`): Web search fully implemented - triggers on realtime queries or low RAG relevance
 - **OpenAI/SiliconFlow**: LLM + Embeddings
@@ -233,6 +238,14 @@ Keyword-based detection using hardcoded categories ([conversation_service.py:291
 When detected, query bypasses RAG and goes directly to web search.
 
 ## Common Modification Patterns
+
+### Querying Conversation Records
+**Historical data access** via [conversation.py](ai-service/app/api/endpoints/conversation.py):
+- Multi-dimensional filtering: date range, user_id, employee_id, session_id, keyword search
+- Pagination support (default 20 per page, max 100)
+- Full-text search across `user_query` and `ai_response` fields
+- Statistics endpoint for conversation analytics (count, avg duration, satisfaction)
+- **MongoDB queries**: Use `$regex` for keyword search, `$gte/$lte` for date range filtering
 
 ### Adding a New LangGraph Node
 1. Define async function in `ConversationWorkflow` class
@@ -308,12 +321,26 @@ The `docs/` folder contains feature-specific documentation:
 ## Key Files Reference
 - [conversation_service.py](ai-service/app/services/conversation_service.py) - LangGraph workflow (12 nodes, 800+ lines)
 - [chat.py](ai-service/app/api/endpoints/chat.py) - Chat endpoints with streaming/sources (800+ lines)
+- [conversation.py](ai-service/app/api/endpoints/conversation.py) - Conversation records query API (350 lines)
+- [session.py](ai-service/app/api/endpoints/session.py) - Session lifecycle management (600+ lines)
 - [rag_service.py](ai-service/app/services/rag_service.py) - Hybrid search (RRF fusion, 300 lines)
 - [task_processor.py](ai-service/app/services/task_processor.py) - Async task queue system
 - [config.py](ai-service/app/core/config.py) - Pydantic settings (50+ env vars)
 - [main.py](ai-service/main.py) - FastAPI app + lifespan management
 - [stream_client.py](ai-service/scripts/stream_client.py) - OpenAI-compatible test client
 - [docker-compose.yml](docker-compose.yml) - 4-service orchestration
+
+## API Surface Reference
+**Core endpoints** (20+ routes across 6 modules):
+- `/api/chat/*` - Chat, streaming, OpenAI-compatible endpoints
+- `/api/conversation/records` - Query conversation history with filters
+- `/api/conversation/statistics` - Conversation analytics
+- `/api/session/*` - Session CRUD and conversation listing
+- `/api/employee/*` - Employee config and FAQ retrieval
+- `/api/knowledge_base/*` - KB management, document upload, task tracking
+- `/webhook/*` - Java platform sync notifications (sensitive words, FAQs)
+
+**Important**: All endpoints use `Depends(get_api_key)` but auth is currently disabled (empty `api_keys` list).
 
 ## Testing Tools & Scripts
 - **Web search**: `python ai-service/tests/test_web_search.py` - Validate Tavily integration
