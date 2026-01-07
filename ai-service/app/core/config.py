@@ -194,6 +194,12 @@ class Settings(BaseSettings):
     )
     cors_allow_credentials: bool = Field(default=True)
 
+    # Test Files Configuration
+    test_files_dir: str = Field(
+        default="./test_files",
+        description="Directory for test files used in file download endpoints"
+    )
+
     @property
     def mongodb_url(self) -> str:
         """Get MongoDB connection URL."""
