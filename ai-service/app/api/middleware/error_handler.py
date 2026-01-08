@@ -142,11 +142,11 @@ async def general_exception_handler(request: Request, exc: Exception) -> JSONRes
         JSON response
     """
     logger.error(
-        """Unhandled exception",
-        error={exc},
-        error_type={type(exc).__name__},
-        path={request.url.path},
-        exc_info=True"""
+        "Unhandled exception",
+        error=str(exc),
+        error_type=type(exc).__name__,
+        path=str(request.url.path),
+        exc_info=True
     )
     
     # 友好的错误提示

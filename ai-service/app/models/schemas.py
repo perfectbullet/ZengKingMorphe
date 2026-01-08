@@ -1,8 +1,8 @@
 """
 API request and response schemas.
 """
-from typing import List, Optional, Dict, Any
-from pydantic import BaseModel, Field, ConfigDict
+from typing import List, Optional, Dict, Any, Union
+from pydantic import BaseModel, Field, ConfigDict, model_validator
 
 
 # Chat API Schemas
@@ -524,7 +524,7 @@ class ExternalRAGDataset(BaseModel):
 
 class ExternalEmployeeInfo(BaseModel):
     """外部API员工信息。"""
-    employee_id: str = Field(..., alias="id", description="员工ID")
+    employee_id: Union[str, int] = Field(..., alias="id", description="员工ID")
     team_id: int = Field(..., alias="teamId", description="Team ID")
     name: str = Field(..., description="员工名称")
     position: str = Field(..., description="职位")
@@ -540,8 +540,18 @@ class ExternalEmployeeInfo(BaseModel):
     portrait: Optional[str] = Field(None, description="头像URL")
     model_image: Optional[str] = Field(None, alias="modelImage", description="模型图片URL")
     digital_code: Optional[str] = Field(None, alias="digitalCode", description="数字代码")
-    
+
     model_config = ConfigDict(populate_by_name=True)
+
+    # Convert employee_id to string for consistency
+    @model_validator(mode='before')
+    @classmethod
+    def convert_employee_id_to_str(cls, data):
+        if isinstance(data, dict):
+            employee_id = data.get('id')
+            if isinstance(employee_id, int):
+                data['id'] = str(employee_id)
+        return data
 
 
 class ExternalKnowledgeConfig(BaseModel):
@@ -594,10 +604,10 @@ class ExternalUnusualRule(BaseModel):
 
 class ExternalRuleConfig(BaseModel):
     """外部API规则配置。"""
-    rule_config_id: str = Field(..., alias="id", description="规则ID")
-    chat_rule: ExternalChatRule = Field(..., alias="chatRule", description="对话规则")
-    unusual_rule: ExternalUnusualRule = Field(..., alias="unusualRule", description="异常规则")
-    
+    rule_config_id: Optional[str] = Field(None, alias="id", description="规则ID")
+    chat_rule: Optional[ExternalChatRule] = Field(None, alias="chatRule", description="对话规则")
+    unusual_rule: Optional[ExternalUnusualRule] = Field(None, alias="unusualRule", description="异常规则")
+
     model_config = ConfigDict(populate_by_name=True)
 
 

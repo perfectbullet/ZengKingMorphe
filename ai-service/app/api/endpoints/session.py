@@ -150,10 +150,11 @@ async def sync_digital_employee_config(db, request_employee_id: str, external_da
         prologue_config = setting_info["prologue"]
         hot_questions = prologue_config.get("my_questions", [])
         
-        # Extract chat rules
-        chat_rule = setting_info["rule"]["chat_rule"]
-        unusual_rule = setting_info["rule"]["unusual_rule"]
-        llm_reply = unusual_rule.get("llm_reply", {})
+        # Extract chat rules (handle optional fields)
+        rule_config = setting_info.get("rule", {})
+        chat_rule = rule_config.get("chat_rule") or {}
+        unusual_rule = rule_config.get("unusual_rule") or {}
+        llm_reply = unusual_rule.get("llm_reply", {}) if unusual_rule else {}
         
         # Build employee config document
         config_doc = DigitalEmployeeConfigModel(
