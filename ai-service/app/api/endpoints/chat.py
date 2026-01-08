@@ -138,6 +138,10 @@ async def generate_openai_stream_response(
             "web_search_used": False,
             "conversation_id": "",
             "response_time_ms": 0,
+            # Performance monitoring
+            "workflow_start_time": time.time(),
+            "node_timings": {},
+            "ttfb_ms": None,
         }
 
         # Save user query chunk to DB
@@ -303,9 +307,17 @@ async def generate_openai_stream_response(
 
                 # TRUE token-level streaming from LLM
                 # 这里是用 conversation_workflow.llm.astream 的流式输出，
+                first_token_received = False
                 async for chunk in conversation_workflow.llm.astream(messages):
                     token = chunk.content
                     if token:
+                        # Track TTFB on first token
+                        if not first_token_received:
+                            first_token_received = True
+                            ttfb_ms = int((time.time() - initial_state["workflow_start_time"]) * 1000)
+                            final_state["ttfb_ms"] = ttfb_ms
+                            logger.info(f"[TTFB] First token received - ttfb: {ttfb_ms}ms")
+
                         full_answer += token
 
                         token_chunk_data = {
@@ -342,6 +354,11 @@ async def generate_openai_stream_response(
                         )
 
                         yield json.dumps(token_chunk_data)
+
+                # Log workflow completion time
+                workflow_end_time = time.time()
+                total_time_ms = int((workflow_end_time - initial_state["workflow_start_time"]) * 1000)
+                logger.info(f"[WORKFLOW] Workflow completed - total: {total_time_ms}ms")
 
                 # Update state with generated answer
                 final_state["final_answer"] = full_answer

@@ -19,3 +19,4 @@ test_files/README.txt
 .env-win
 response_mineru_demo.json
 .claude/settings.local.json
+temp_pdf_chunks

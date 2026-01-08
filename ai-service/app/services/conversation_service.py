@@ -2,10 +2,12 @@
 LangGraph conversation workflow.
 """
 import os
+import time
 from pathlib import Path
 from typing import TypedDict, Annotated, List, Dict, Any, Optional
 from operator import add
 from datetime import datetime
+from contextlib import asynccontextmanager
 
 from langgraph.graph import StateGraph, END
 from langchain_openai import ChatOpenAI
@@ -68,6 +70,10 @@ class ConversationState(TypedDict):
     web_search_used: bool
     conversation_id: str
     response_time_ms: int
+    # Performance monitoring
+    workflow_start_time: float
+    node_timings: Dict[str, float]
+    ttfb_ms: Optional[int]
 
 
 class ConversationWorkflow:
@@ -114,7 +120,30 @@ class ConversationWorkflow:
         # self.web_search_tool = BingSearchResults(k=3)
 
         self.workflow = self._build_workflow()
-    
+
+    @asynccontextmanager
+    async def _time_node(self, node_name: str, state: ConversationState):
+        """
+        Async context manager for timing node execution.
+
+        Usage:
+            async with self._time_node("node_name", state):
+                # node logic here
+        """
+        start_time = time.time()
+        try:
+            yield
+        finally:
+            duration_ms = int((time.time() - start_time) * 1000)
+
+            # Store timing in state
+            if "node_timings" not in state:
+                state["node_timings"] = {}
+            state["node_timings"][node_name] = duration_ms
+
+            # Log timing
+            logger.info(f"[TIMING] {node_name} - {duration_ms}ms")
+
     def _build_workflow(self) -> StateGraph:
         """Build the conversation workflow graph."""
         graph = StateGraph(ConversationState)
@@ -237,62 +266,63 @@ class ConversationWorkflow:
 
     async def load_employee_config(self, state: ConversationState) -> ConversationState:
         """Load employee configuration (enhanced with full config)."""
-        db = await get_database()
-        employee = await db.digital_employee_configs.find_one({"employee_id": state["employee_id"]})
-        logger.info(f"Loading employee config: employee_id={state['employee_id']}")
-        if not employee:
-            error_msg = f"Employee config not found: employee_id={state['employee_id']}"
-            logger.error(error_msg)
-            raise ValueError(error_msg)
-        
-        employee.pop("_id", None)
-        state["employee_config"] = employee
-        
-        logger.info(f"Employee config loaded: {employee}")
+        async with self._time_node("load_employee_config", state):
+            db = await get_database()
+            employee = await db.digital_employee_configs.find_one({"employee_id": state["employee_id"]})
+            logger.info(f"Loading employee config: employee_id={state['employee_id']}")
+            if not employee:
+                error_msg = f"Employee config not found: employee_id={state['employee_id']}"
+                logger.error(error_msg)
+                raise ValueError(error_msg)
+
+            employee.pop("_id", None)
+            state["employee_config"] = employee
+
+            logger.info(f"Employee config loaded: {employee}")
         return state
     
     async def load_session_context(self, state: ConversationState) -> ConversationState:
         """Load session context."""
-        try:
-            db = await get_database()
-            session = await db.sessions.find_one({"session_id": state["session_id"]})
-            
-            if session:
-                # Load recent messages
-                state["context"] = {
-                    "messages": session.get("context_messages", [])[-10:],  # Last 10 messages
-                    "message_count": session.get("message_count", 0)
-                }
-                
-                # Update last activity
-                await db.sessions.update_one(
-                    {"session_id": state["session_id"]},
-                    {"$set": {"last_activity": datetime.now()}}
-                )
-            else:
-                # Create new session
-                session_model = SessionModel(
-                    session_id=state["session_id"],
-                    user_id=state["user_id"],
-                    employee_id=state["employee_id"],
-                    status="active",
-                    message_count=0
-                )
-                await db.sessions.insert_one(session_model.model_dump())
+        async with self._time_node("load_session_context", state):
+            try:
+                db = await get_database()
+                session = await db.sessions.find_one({"session_id": state["session_id"]})
+
+                if session:
+                    # Load recent messages
+                    state["context"] = {
+                        "messages": session.get("context_messages", [])[-10:],  # Last 10 messages
+                        "message_count": session.get("message_count", 0)
+                    }
+
+                    # Update last activity
+                    await db.sessions.update_one(
+                        {"session_id": state["session_id"]},
+                        {"$set": {"last_activity": datetime.now()}}
+                    )
+                else:
+                    # Create new session
+                    session_model = SessionModel(
+                        session_id=state["session_id"],
+                        user_id=state["user_id"],
+                        employee_id=state["employee_id"],
+                        status="active",
+                        message_count=0
+                    )
+                    await db.sessions.insert_one(session_model.model_dump())
+                    state["context"] = {"messages": [], "message_count": 0}
+
+                logger.info(f"Loaded session context: session_id={state['session_id']}")
+            except Exception as e:
+                logger.error(f"Failed to load session context: error={str(e)}", exc_info=True)
                 state["context"] = {"messages": [], "message_count": 0}
-            
-            logger.info(f"Loaded session context: session_id={state['session_id']}")
-            return state
-            
-        except Exception as e:
-            logger.error(f"Failed to load session context: error={str(e)}", exc_info=True)
-            state["context"] = {"messages": [], "message_count": 0}
-            return state
+        return state
     
     async def validate_input(self, state: ConversationState) -> ConversationState:
         """Validate input."""
-        # Simple validation - already done at API level
-        state["has_sensitive"] = False
+        async with self._time_node("validate_input", state):
+            # Simple validation - already done at API level
+            state["has_sensitive"] = False
         return state
     
     async def match_faq(self, state: ConversationState) -> ConversationState:
@@ -301,142 +331,144 @@ class ConversationWorkflow:
         如果FAQ的RRF分数 >= faq_sim_threshold，直接返回FAQ答案（随机选择），
         跳过后续的RAG检索和LLM生成。
         """
-        try:
-            query = state["user_query"]
-            employee_id = state["employee_id"]
-            
-            # Get FAQ configuration from digital_employee_configs
-            db = await get_database()
-            digital_config = await db.digital_employee_configs.find_one({"employee_id": employee_id})
-            
-            if not digital_config:
-                logger.info(f"No digital employee config found for {employee_id}, skipping FAQ matching")
-                state["faq_matched"] = None
-                return state
-            
-            faq_sim_threshold = digital_config.get("faq_sim_threshold", 0.0)
-            faq_top_k = digital_config.get("faq_top_k", 3)
-            
-            logger.info(f"FAQ matching: employee_id={employee_id}, threshold={faq_sim_threshold}, top_k={faq_top_k}")
-            
-            # Perform FAQ hybrid search (vector + keyword + RRF)
-            faq_results = await rag_retrieval.faq_hybrid_search(
-                query=query,
-                employee_id=employee_id,
-                faq_sim_threshold=faq_sim_threshold,
-                faq_top_k=faq_top_k
-            )
-            
-            if not faq_results:
-                logger.info("No FAQ matched above threshold")
-                state["faq_matched"] = None
-                return state
-            
-            # Get the best FAQ (highest RRF score)
-            best_faq_result = faq_results[0]
-            faq_id = best_faq_result["faq_id"]
-            rrf_score = best_faq_result["rrf_score"]
-            
-            logger.info(f"FAQ matched: faq_id={faq_id}, rrf_score={rrf_score:.4f}, vector_score={best_faq_result.get('vector_score', 0):.4f}, keyword_score={best_faq_result.get('keyword_score', 0):.4f}")
-            
-            # Retrieve full FAQ from MongoDB
-            faq_doc = await db.faqs.find_one({"faq_id": faq_id})
-            
-            if not faq_doc:
-                logger.warning(f"FAQ {faq_id} not found in MongoDB, skipping")
-                state["faq_matched"] = None
-                return state
-            
-            # Check if FAQ is enabled and within time range
-            if faq_doc.get("is_enable", 0) != 1:
-                logger.info(f"FAQ {faq_id} is disabled, skipping")
-                state["faq_matched"] = None
-                return state
-            
-            # Check time range (optional: add time validation logic here)
-            # start_time = faq_doc.get("start_time")
-            # end_time = faq_doc.get("end_time")
-            # now = datetime.utcnow().isoformat()
-            # if start_time and now < start_time: ...
-            # if end_time and now > end_time: ...
-            
-            # Select answer randomly from answers array
-            answers = faq_doc.get("answers", [])
-            if not answers:
-                logger.warning(f"FAQ {faq_id} has no answers, skipping")
-                state["faq_matched"] = None
-                return state
-            
-            import random
-            selected_answer = random.choice(answers)
+        async with self._time_node("match_faq", state):
+            try:
+                query = state["user_query"]
+                employee_id = state["employee_id"]
 
-            # FAQ 质量检查：如果 RRF 分数过低（< 0.02），跳过以避免误匹配
-            # RRF 分数范围通常在 0.01-0.05 之间，低于 0.02 表示相关性很低
-            if rrf_score < 0.02:
-                logger.warning(
-                    f"FAQ RRF score too low ({rrf_score:.4f} < 0.02), skipping FAQ match to avoid false positive",
-                    faq_id=faq_id,
-                    question=faq_doc.get('question_name')[:50],
-                    vector_score=best_faq_result.get('vector_score', 0),
-                    keyword_score=best_faq_result.get('keyword_score', 0)
+                # Get FAQ configuration from digital_employee_configs
+                db = await get_database()
+                digital_config = await db.digital_employee_configs.find_one({"employee_id": employee_id})
+
+                if not digital_config:
+                    logger.info(f"No digital employee config found for {employee_id}, skipping FAQ matching")
+                    state["faq_matched"] = None
+                    return state
+
+                faq_sim_threshold = digital_config.get("faq_sim_threshold", 0.0)
+                faq_top_k = digital_config.get("faq_top_k", 3)
+
+                logger.info(f"FAQ matching: employee_id={employee_id}, threshold={faq_sim_threshold}, top_k={faq_top_k}")
+
+                # Perform FAQ hybrid search (vector + keyword + RRF)
+                faq_results = await rag_retrieval.faq_hybrid_search(
+                    query=query,
+                    employee_id=employee_id,
+                    faq_sim_threshold=faq_sim_threshold,
+                    faq_top_k=faq_top_k
                 )
+
+                if not faq_results:
+                    logger.info("No FAQ matched above threshold")
+                    state["faq_matched"] = None
+                    return state
+
+                # Get the best FAQ (highest RRF score)
+                best_faq_result = faq_results[0]
+                faq_id = best_faq_result["faq_id"]
+                rrf_score = best_faq_result["rrf_score"]
+
+                logger.info(f"FAQ matched: faq_id={faq_id}, rrf_score={rrf_score:.4f}, vector_score={best_faq_result.get('vector_score', 0):.4f}, keyword_score={best_faq_result.get('keyword_score', 0):.4f}")
+
+                # Retrieve full FAQ from MongoDB
+                faq_doc = await db.faqs.find_one({"faq_id": faq_id})
+
+                if not faq_doc:
+                    logger.warning(f"FAQ {faq_id} not found in MongoDB, skipping")
+                    state["faq_matched"] = None
+                    return state
+
+                # Check if FAQ is enabled and within time range
+                if faq_doc.get("is_enable", 0) != 1:
+                    logger.info(f"FAQ {faq_id} is disabled, skipping")
+                    state["faq_matched"] = None
+                    return state
+
+                # Check time range (optional: add time validation logic here)
+                # start_time = faq_doc.get("start_time")
+                # end_time = faq_doc.get("end_time")
+                # now = datetime.utcnow().isoformat()
+                # if start_time and now < start_time: ...
+                # if end_time and now > end_time: ...
+
+                # Select answer randomly from answers array
+                answers = faq_doc.get("answers", [])
+                if not answers:
+                    logger.warning(f"FAQ {faq_id} has no answers, skipping")
+                    state["faq_matched"] = None
+                    return state
+
+                import random
+                selected_answer = random.choice(answers)
+
+                # FAQ 质量检查：如果 RRF 分数过低（< 0.02），跳过以避免误匹配
+                # RRF 分数范围通常在 0.01-0.05 之间，低于 0.02 表示相关性很低
+                if rrf_score < 0.02:
+                    logger.warning(
+                        f"FAQ RRF score too low ({rrf_score:.4f} < 0.02), skipping FAQ match to avoid false positive",
+                        faq_id=faq_id,
+                        question=faq_doc.get('question_name')[:50],
+                        vector_score=best_faq_result.get('vector_score', 0),
+                        keyword_score=best_faq_result.get('keyword_score', 0)
+                    )
+                    state["faq_matched"] = None
+                    return state
+
+                # Set state for direct FAQ answer return
+                state["final_answer"] = selected_answer
+                state["confidence"] = min(0.95, rrf_score)  # Cap at 0.95
+                state["intent"] = "faq_match"
+                state["faq_matched"] = {
+                    "faq_id": faq_id,
+                    "question_name": faq_doc.get("question_name"),
+                    "rrf_score": rrf_score,
+                    "vector_score": best_faq_result.get("vector_score"),
+                    "keyword_score": best_faq_result.get("keyword_score"),
+                    "selected_answer": selected_answer,
+                    "total_answers": len(answers)
+                }
+
+                logger.info(
+                    f"FAQ answer selected: faq_id={faq_id}, question={faq_doc.get('question_name')[:50]}, "
+                    f"rrf_score={rrf_score:.4f}, vector_score={best_faq_result.get('vector_score', 0):.4f}, "
+                    f"keyword_score={best_faq_result.get('keyword_score', 0):.4f}, answer_length={len(selected_answer)}"
+                )
+
+            except Exception as e:
+                logger.error(f"FAQ matching failed: error={str(e)}", exc_info=True)
                 state["faq_matched"] = None
-                return state
 
-            # Set state for direct FAQ answer return
-            state["final_answer"] = selected_answer
-            state["confidence"] = min(0.95, rrf_score)  # Cap at 0.95
-            state["intent"] = "faq_match"
-            state["faq_matched"] = {
-                "faq_id": faq_id,
-                "question_name": faq_doc.get("question_name"),
-                "rrf_score": rrf_score,
-                "vector_score": best_faq_result.get("vector_score"),
-                "keyword_score": best_faq_result.get("keyword_score"),
-                "selected_answer": selected_answer,
-                "total_answers": len(answers)
-            }
-
-            logger.info(
-                f"FAQ answer selected: faq_id={faq_id}, question={faq_doc.get('question_name')[:50]}, "
-                f"rrf_score={rrf_score:.4f}, vector_score={best_faq_result.get('vector_score', 0):.4f}, "
-                f"keyword_score={best_faq_result.get('keyword_score', 0):.4f}, answer_length={len(selected_answer)}"
-            )
-            
-        except Exception as e:
-            logger.error(f"FAQ matching failed: error={str(e)}", exc_info=True)
-            state["faq_matched"] = None
-        
         return state
     
     async def check_realtime_query(self, state: ConversationState) -> ConversationState:
         """Check if query needs realtime information."""
-        if not settings.realtime_query_enabled:
+        async with self._time_node("check_realtime_query", state):
+            if not settings.realtime_query_enabled:
+                state["is_realtime_query"] = False
+                return state
+
+            query = state["user_query"].lower()
+
+            # Realtime keywords（包含金融价格查询）
+            realtime_keywords = {
+                "time": ["今天", "明天", "昨天", "最近", "现在", "本周", "本月", "当前"],
+                "weather": ["天气", "气温", "降雨", "降水", "温度"],
+                "news": ["新闻", "热点", "最新", "资讯", "动态", "头条"],
+                "market": ["股价", "汇率", "行情", "股市", "价格", "金价", "银价", "油价", "多少钱", "最新价格", "实时价格"],
+            }
+
+            for category, keywords in realtime_keywords.items():
+                for keyword in keywords:
+                    if keyword in query:
+                        state["is_realtime_query"] = True
+                        state["realtime_category"] = category
+                        state['realtime_detect_reason'] = f"keyword:{keyword}"
+                        logger.info(f"Realtime query detected: category={category}, keyword={keyword}")
+                        return state
+
             state["is_realtime_query"] = False
-            return state
-        
-        query = state["user_query"].lower()
-        
-        # Realtime keywords（包含金融价格查询）
-        realtime_keywords = {
-            "time": ["今天", "明天", "昨天", "最近", "现在", "本周", "本月", "当前"],
-            "weather": ["天气", "气温", "降雨", "降水", "温度"],
-            "news": ["新闻", "热点", "最新", "资讯", "动态", "头条"],
-            "market": ["股价", "汇率", "行情", "股市", "价格", "金价", "银价", "油价", "多少钱", "最新价格", "实时价格"],
-        }
-        
-        for category, keywords in realtime_keywords.items():
-            for keyword in keywords:
-                if keyword in query:
-                    state["is_realtime_query"] = True
-                    state["realtime_category"] = category
-                    state['realtime_detect_reason'] = f"keyword:{keyword}"
-                    logger.info(f"Realtime query detected: category={category}, keyword={keyword}")
-                    return state
-        
-        state["is_realtime_query"] = False
         return state
-    
+
     async def recognize_intent(self, state: ConversationState) -> ConversationState:
         """
         识别用户意图（增强版：支持问候检测）。
@@ -446,164 +478,172 @@ class ConversationWorkflow:
         2. 其他意图（保留扩展空间）
         3. 默认：general_query
         """
-        query = state["user_query"].strip().lower()
+        async with self._time_node("recognize_intent", state):
+            query = state["user_query"].strip().lower()
 
-        # 1. 问候语检测
-        for category, keywords in GREETING_KEYWORDS.items():
-            for keyword in keywords:
-                if keyword in query:
-                    state["intent"] = "greeting"
-                    state["entities"] = {"greeting_type": category, "matched_keyword": keyword}
+            # 1. 问候语检测
+            for category, keywords in GREETING_KEYWORDS.items():
+                for keyword in keywords:
+                    if keyword in query:
+                        state["intent"] = "greeting"
+                        state["entities"] = {"greeting_type": category, "matched_keyword": keyword}
 
-                    logger.info(
-                        "Greeting detected",
-                        employee_id=state["employee_id"],
-                        query=query[:50],
-                        greeting_type=category,
-                        matched_keyword=keyword
-                    )
-                    return state
+                        logger.info(
+                            "Greeting detected",
+                            employee_id=state["employee_id"],
+                            query=query[:50],
+                            greeting_type=category,
+                            matched_keyword=keyword
+                        )
+                        return state
 
-        # 2. 其他意图识别（保留扩展空间）
-        # 未来可添加：投诉、咨询、预约等
+            # 2. 其他意图识别（保留扩展空间）
+            # 未来可添加：投诉、咨询、预约等
 
-        # 3. 默认：一般查询
-        state["intent"] = "general_query"
-        state["entities"] = {}
+            # 3. 默认：一般查询
+            state["intent"] = "general_query"
+            state["entities"] = {}
 
-        logger.debug(
-            "Intent recognized",
-            employee_id=state["employee_id"],
-            query=query[:50],
-            intent="general_query"
-        )
-
+            logger.debug(
+                "Intent recognized",
+                employee_id=state["employee_id"],
+                query=query[:50],
+                intent="general_query"
+            )
         return state
     
     async def knowledge_retrieval(self, state: ConversationState) -> ConversationState:
         """Retrieve relevant knowledge."""
-        try:
-            # Get KB IDs from employee config
-            kb_ids = state["employee_config"].get("capabilities", {}).get("kb_ids", [])
-            
-            # Search using RAG
-            results = await rag_retrieval.search(
-                query=state["user_query"],
-                kb_ids=kb_ids if kb_ids else None,
-                top_k=5,
-                use_hybrid=True
-            )
-            
-            state["retrieved_docs"] = results
-            state["kb_used"] = list(set([doc.get("kb_id") for doc in results if doc.get("kb_id")]))
-            
-            logger.info(f"Knowledge retrieval completed: results_count={len(results)}, kb_used={state['kb_used']}")
-            
-        except Exception as e:
-            logger.error(f"Knowledge retrieval failed: error={str(e)}", exc_info=True)
-            state["retrieved_docs"] = []
-            state["kb_used"] = []
-        
+        async with self._time_node("knowledge_retrieval", state):
+            try:
+                # Get KB IDs from employee config (at root level, not in capabilities)
+                kb_ids = state["employee_config"].get("kb_ids", [])
+
+                logger.info(
+                    "Retrieving knowledge from KB",
+                    employee_id=state["employee_id"],
+                    kb_ids=kb_ids,
+                    kb_count=len(kb_ids)
+                )
+
+                # Search using RAG
+                results = await rag_retrieval.search(
+                    query=state["user_query"],
+                    kb_ids=kb_ids if kb_ids else None,
+                    top_k=5,
+                    use_hybrid=True
+                )
+
+                state["retrieved_docs"] = results
+                state["kb_used"] = list(set([doc.get("kb_id") for doc in results if doc.get("kb_id")]))
+
+                logger.info(f"Knowledge retrieval completed: results_count={len(results)}, kb_used={state['kb_used']}")
+
+            except Exception as e:
+                logger.error(f"Knowledge retrieval failed: error={str(e)}", exc_info=True)
+                state["retrieved_docs"] = []
+                state["kb_used"] = []
         return state
     
     async def grade_documents(self, state: ConversationState) -> ConversationState:
         """Grade document relevance."""
-        docs = state.get("retrieved_docs", [])
-        
-        if not docs:
-            state["relevance_score"] = 0.0
-            return state
-        
-        # Use the top document's score as relevance score
-        state["relevance_score"] = docs[0].get("rrf_score", 0.0) if docs else 0.0
-        
-        logger.info(f"Document grading completed: relevance_score={state['relevance_score']}")
+        async with self._time_node("grade_documents", state):
+            docs = state.get("retrieved_docs", [])
+
+            if not docs:
+                state["relevance_score"] = 0.0
+                return state
+
+            # Use the top document's score as relevance score
+            state["relevance_score"] = docs[0].get("rrf_score", 0.0) if docs else 0.0
+
+            logger.info(f"Document grading completed: relevance_score={state['relevance_score']}")
         return state
     
     async def web_search(self, state: ConversationState) -> ConversationState:
         """Perform web search using Tavily."""
-        try:
-            # Check if web search is enabled
-            if not settings.web_search_enabled:
-                logger.info("Web search disabled in settings")
+        async with self._time_node("web_search", state):
+            try:
+                # Check if web search is enabled
+                if not settings.web_search_enabled:
+                    logger.info("Web search disabled in settings")
+                    state["web_search_results"] = []
+                    state["web_search_used"] = False
+                    return state
+
+                # Check if Tavily API key is configured
+                if not settings.tavily_api_key:
+                    logger.warning("Tavily API key not configured, skipping web search")
+                    state["web_search_results"] = []
+                    state["web_search_used"] = False
+                    return state
+
+                # Check employee config for web search permission
+                employee_config = state.get("employee_config", {})
+                capabilities = employee_config.get("capabilities", {})
+                web_search_enabled = capabilities.get("web_search_enabled", True)
+
+                if not web_search_enabled:
+                    logger.info(f"Web search disabled for employee: employee_id={state.get('employee_id')}")
+                    state["web_search_results"] = []
+                    state["web_search_used"] = False
+                    return state
+
+                query = state["user_query"]
+
+                # Perform web search
+                logger.info(f"Performing web search: query={query[:100]}, is_realtime={state.get('is_realtime_query')}, realtime_category={state.get('realtime_category')}")
+
+                # Call Tavily search tool
+                search_results = await self.web_search_tool.ainvoke({"query": query})
+
+                # Format results
+                formatted_results = []
+                if search_results:
+                    for i, result in enumerate(search_results[:settings.web_search_max_results], 1):
+                        formatted_result = {
+                            "rank": i,
+                            "title": result.get("title", ""),
+                            "url": result.get("url", ""),
+                            "content": result.get("content", "")[:500],  # Truncate to 500 chars
+                            "score": result.get("score", 0.0)
+                        }
+                        formatted_results.append(formatted_result)
+
+                state["web_search_results"] = formatted_results
+                state["web_search_used"] = len(formatted_results) > 0
+
+                logger.info(f"Web search completed: results_count={len(formatted_results)}, has_results={state['web_search_used']}")
+
+            except Exception as e:
+                logger.error(f"Web search failed: error={str(e)}, query={state.get('user_query', '')[:100]}", exc_info=True)
+                # Don't fail the entire workflow, just continue without web results
                 state["web_search_results"] = []
                 state["web_search_used"] = False
-                return state
-            
-            # Check if Tavily API key is configured
-            if not settings.tavily_api_key:
-                logger.warning("Tavily API key not configured, skipping web search")
-                state["web_search_results"] = []
-                state["web_search_used"] = False
-                return state
-            
-            # Check employee config for web search permission
-            employee_config = state.get("employee_config", {})
-            capabilities = employee_config.get("capabilities", {})
-            web_search_enabled = capabilities.get("web_search_enabled", True)
-            
-            if not web_search_enabled:
-                logger.info(f"Web search disabled for employee: employee_id={state.get('employee_id')}")
-                state["web_search_results"] = []
-                state["web_search_used"] = False
-                return state
-            
-            query = state["user_query"]
-            
-            # Perform web search
-            logger.info(f"Performing web search: query={query[:100]}, is_realtime={state.get('is_realtime_query')}, realtime_category={state.get('realtime_category')}")
-            
-            # Call Tavily search tool
-            search_results = await self.web_search_tool.ainvoke({"query": query})
-            
-            # Format results
-            formatted_results = []
-            if search_results:
-                for i, result in enumerate(search_results[:settings.web_search_max_results], 1):
-                    formatted_result = {
-                        "rank": i,
-                        "title": result.get("title", ""),
-                        "url": result.get("url", ""),
-                        "content": result.get("content", "")[:500],  # Truncate to 500 chars
-                        "score": result.get("score", 0.0)
-                    }
-                    formatted_results.append(formatted_result)
-            
-            state["web_search_results"] = formatted_results
-            state["web_search_used"] = len(formatted_results) > 0
-            
-            logger.info(f"Web search completed: results_count={len(formatted_results)}, has_results={state['web_search_used']}")
-            
-        except Exception as e:
-            logger.error(f"Web search failed: error={str(e)}, query={state.get('user_query', '')[:100]}", exc_info=True)
-            # Don't fail the entire workflow, just continue without web results
-            state["web_search_results"] = []
-            state["web_search_used"] = False
-        
         return state
     
     async def generate_answer(self, state: ConversationState) -> ConversationState:
         """Prepare for answer generation (placeholder for streaming)."""
-        # This node only prepares metadata, no actual LLM call
-        # Real generation happens in streaming methods for token-level streaming
-        
-        # Calculate confidence based on available information sources
-        confidence = 0.5  # Base confidence
-        if state.get("faq_matched"):
-            confidence = 0.95
-        elif state.get("web_search_used", False):
-            web_results = state.get("web_search_results", [])
-            if web_results:
-                avg_web_score = sum(r.get("score", 0.5) for r in web_results) / len(web_results)
-                confidence = max(0.75, avg_web_score)
-        elif state.get("retrieved_docs"):
-            confidence = max(0.6, state.get("relevance_score", 0.7))
-        
-        state["confidence"] = confidence
-        state["final_answer"] = ""  # Placeholder
-        
-        logger.info(f"Ready for answer generation: confidence={confidence}, web_search_used={state.get('web_search_used')}, kb_docs_count={len(state.get('retrieved_docs', []))}")
-        
+        async with self._time_node("generate_answer", state):
+            # This node only prepares metadata, no actual LLM call
+            # Real generation happens in streaming methods for token-level streaming
+
+            # Calculate confidence based on available information sources
+            confidence = 0.5  # Base confidence
+            if state.get("faq_matched"):
+                confidence = 0.95
+            elif state.get("web_search_used", False):
+                web_results = state.get("web_search_results", [])
+                if web_results:
+                    avg_web_score = sum(r.get("score", 0.5) for r in web_results) / len(web_results)
+                    confidence = max(0.75, avg_web_score)
+            elif state.get("retrieved_docs"):
+                confidence = max(0.6, state.get("relevance_score", 0.7))
+
+            state["confidence"] = confidence
+            state["final_answer"] = ""  # Placeholder
+
+            logger.info(f"Ready for answer generation: confidence={confidence}, web_search_used={state.get('web_search_used')}, kb_docs_count={len(state.get('retrieved_docs', []))}")
         return state
     
     def build_generation_messages(self, state: ConversationState) -> List:
@@ -830,77 +870,94 @@ class ConversationWorkflow:
 
     async def save_conversation(self, state: ConversationState) -> ConversationState:
         """Save conversation to database."""
-        try:
-            db = await get_database()
-            
-            # Generate conversation ID
-            import hashlib
-            session_id = state["session_id"]
-            timestamp = datetime.now().timestamp()
-            conv_id = f"conv_{hashlib.md5(f'{session_id}_{timestamp}'.encode()).hexdigest()[:12]}"
-            state["conversation_id"] = conv_id
-            
-            # Create conversation record
-            employee_config = state.get("employee_config", {})
-            conversation = ConversationModel(
-                conversation_id=conv_id,
-                session_id=state["session_id"],
-                user_id=state["user_id"],
-                employee_id=state["employee_id"],
-                employee_name=employee_config.get("name", ""),
-                user_query=state["user_query"],
-                ai_response=state["final_answer"],
-                is_realtime_query=state.get("is_realtime_query", False),
-                realtime_category=state.get("realtime_category"),
-                intent=state.get("intent"),
-                kb_used=state.get("kb_used", []),
-                web_search_used=state.get("web_search_used", False),
-                web_search_results=[
-                    {
-                        "rank": result.get("rank"),
-                        "title": result.get("title"),
-                        "url": result.get("url"),
-                        "score": result.get("score", 0.0)
-                    }
-                    for result in state.get("web_search_results", [])[:5]
-                ],
-                retrieved_docs=[
-                    {
-                        "doc_id": doc.get("doc_id"),
-                        "kb_id": doc.get("kb_id"),
-                        "score": doc.get("rrf_score", 0.0)
-                    }
-                    for doc in state.get("retrieved_docs", [])[:3]
-                ],
-                relevance_score=state.get("relevance_score", 0.0),
-                confidence=state.get("confidence", 0.0),
-                response_time_ms=state.get("response_time_ms", 0)
-            )
-            
-            await db.conversations.insert_one(conversation.model_dump())
-            
-            # Update session context
-            await db.sessions.update_one(
-                {"session_id": state["session_id"]},
-                {
-                    "$push": {
-                        "context_messages": {
-                            "$each": [
-                                {"role": "user", "content": state["user_query"]},
-                                {"role": "assistant", "content": state["final_answer"]}
-                            ],
-                            "$slice": -20  # Keep last 20 messages
+        async with self._time_node("save_conversation", state):
+            try:
+                db = await get_database()
+
+                # Generate conversation ID
+                import hashlib
+                session_id = state["session_id"]
+                timestamp = datetime.now().timestamp()
+                conv_id = f"conv_{hashlib.md5(f'{session_id}_{timestamp}'.encode()).hexdigest()[:12]}"
+                state["conversation_id"] = conv_id
+
+                # Calculate total response time
+                workflow_start_time = state.get("workflow_start_time", time.time())
+                total_time_ms = int((time.time() - workflow_start_time) * 1000)
+                state["response_time_ms"] = total_time_ms
+
+                # Create conversation record
+                employee_config = state.get("employee_config", {})
+                conversation = ConversationModel(
+                    conversation_id=conv_id,
+                    session_id=state["session_id"],
+                    user_id=state["user_id"],
+                    employee_id=state["employee_id"],
+                    employee_name=employee_config.get("name", ""),
+                    user_query=state["user_query"],
+                    ai_response=state["final_answer"],
+                    is_realtime_query=state.get("is_realtime_query", False),
+                    realtime_category=state.get("realtime_category"),
+                    intent=state.get("intent"),
+                    kb_used=state.get("kb_used", []),
+                    web_search_used=state.get("web_search_used", False),
+                    web_search_results=[
+                        {
+                            "rank": result.get("rank"),
+                            "title": result.get("title"),
+                            "url": result.get("url"),
+                            "score": result.get("score", 0.0)
                         }
-                    },
-                    "$inc": {"message_count": 1}
-                }
-            )
-            
-            logger.info(f"Conversation saved: conversation_id={conv_id}")
-            
-        except Exception as e:
-            logger.error(f"Failed to save conversation: error={str(e)}", exc_info=True)
-        
+                        for result in state.get("web_search_results", [])[:5]
+                    ],
+                    retrieved_docs=[
+                        {
+                            "doc_id": doc.get("doc_id"),
+                            "kb_id": doc.get("kb_id"),
+                            "score": doc.get("rrf_score", 0.0)
+                        }
+                        for doc in state.get("retrieved_docs", [])[:3]
+                    ],
+                    relevance_score=state.get("relevance_score", 0.0),
+                    confidence=state.get("confidence", 0.0),
+                    response_time_ms=total_time_ms
+                )
+
+                await db.conversations.insert_one(conversation.model_dump())
+
+                # Update session context
+                await db.sessions.update_one(
+                    {"session_id": state["session_id"]},
+                    {
+                        "$push": {
+                            "context_messages": {
+                                "$each": [
+                                    {"role": "user", "content": state["user_query"]},
+                                    {"role": "assistant", "content": state["final_answer"]}
+                                ],
+                                "$slice": -20  # Keep last 20 messages
+                            }
+                        },
+                        "$inc": {"message_count": 1}
+                    }
+                )
+
+                logger.info(f"Conversation saved: conversation_id={conv_id}")
+
+                # Log timing summary
+                node_timings = state.get("node_timings", {})
+                ttfb_ms = state.get("ttfb_ms")
+
+                logger.info(
+                    f"[TIMING_SUMMARY] Conversation completed - "
+                    f"total: {total_time_ms}ms, "
+                    f"ttfb: {ttfb_ms}ms, "
+                    f"nodes: {node_timings}"
+                )
+
+            except Exception as e:
+                logger.error(f"Failed to save conversation: error={str(e)}", exc_info=True)
+
         return state
 
 # Global workflow instance
