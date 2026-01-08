@@ -14,6 +14,7 @@ from app.core.database import mongodb
 from app.core.chroma import chroma_db
 from app.core.elasticsearch import es_db
 from app.services.task_processor import task_processor
+from app.services.ollama_keepalive import ollama_keep_alive
 from app.api.middleware.error_handler import (
     http_exception_handler,
     validation_exception_handler,
@@ -44,7 +45,10 @@ async def lifespan(app: FastAPI):
         
         # Start task processor
         await task_processor.start()
-        
+
+        # Start Ollama keep-alive service
+        await ollama_keep_alive.start()
+
         logger.info("All databases connected and task processor started successfully")
         
     except Exception as e:
@@ -59,7 +63,10 @@ async def lifespan(app: FastAPI):
     try:
         # Stop task processor
         await task_processor.stop()
-        
+
+        # Stop Ollama keep-alive service
+        await ollama_keep_alive.stop()
+
         await mongodb.disconnect()
         chroma_db.disconnect()
         await es_db.disconnect()

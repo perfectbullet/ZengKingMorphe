@@ -264,8 +264,54 @@ Two SSE streaming modes ([ai-service/app/api/endpoints/chat.py](ai-service/app/a
 | Schemas | [ai-service/app/models/schemas.py](ai-service/app/models/schemas.py) |
 | App entry point | [ai-service/main.py](ai-service/main.py) (lifespan management) |
 | Task processor | [ai-service/app/services/task_processor.py](ai-service/app/services/task_processor.py) |
+| **Embedding cache** | [ai-service/app/services/embedding_cache.py](ai-service/app/services/embedding_cache.py) (LRU cache, performance optimization) |
+| **Ollama keep-alive** | [ai-service/app/services/ollama_keepalive.py](ai-service/app/services/ollama_keepalive.py) (model retention service) |
+| Embedding utilities | [ai-service/app/utils/embeddings.py](ai-service/app/utils/embeddings.py) (Ollama/OpenAI/SiliconFlow adapters) |
 | Docker orchestration | [docker-compose.yml](docker-compose.yml) (4 services) |
 | Streaming test client | [ai-service/scripts/stream_client.py](ai-service/scripts/stream_client.py) |
+| **Performance testing** | [ai-service/scripts/performance_test.py](ai-service/scripts/performance_test.py) (benchmarking tool) |
+
+---
+
+## Performance Optimization
+
+### Implemented Optimizations (as of 2026-01-08)
+
+**1. Embedding Cache Service** ([app/services/embedding_cache.py](ai-service/app/services/embedding_cache.py))
+- LRU cache with automatic eviction (max 1000 entries)
+- Thread-safe, supports concurrent access
+- Integrated into Ollama embedding pipeline
+- **Result**: Cache hits reduce embedding time from 1000ms+ to <10ms (-99%)
+
+**2. Ollama Keep-Alive Service** ([app/services/ollama_keepalive.py](ai-service/app/services/ollama_keepalive.py))
+- Background task sends health check every 3 minutes (configurable via `OLLAMA_KEEP_ALIVE_INTERVAL`)
+- Prevents model unloading during idle periods
+- Auto-starts in FastAPI lifespan, auto-stops on shutdown
+- **Result**: TTFB improved from 4087ms to 587ms (-85.6%) on subsequent requests
+
+**3. keep_alive Parameter**
+- All Ollama API calls (LLM and embedding) include `keep_alive=-1`
+- Configured in [embeddings.py:58](ai-service/app/utils/embeddings.py#L58) and [conversation_service.py:92](ai-service/app/services/conversation_service.py#L92)
+- Extends model retention time in memory
+
+### Performance Metrics (Verified)
+
+| Metric | Before | After | Improvement |
+|--------|--------|-------|-------------|
+| TTFB (cold start) | 4087ms | 4087ms | 0% (baseline) |
+| TTFB (warm) | 4087ms | 587ms | **-85.6%** |
+| FAQ matching | 1075ms | 88ms | **-91.8%** |
+| Knowledge retrieval | 283ms | 18ms | **-93.6%** |
+| Total response (warm) | 7821ms | 2424ms | **-69.0%** |
+
+### Optimization Opportunities
+
+**High Priority**:
+1. **Switch to faster LLM** - Use SiliconFlow DeepSeek-V3 (~50 tok/s vs Ollama's 18 tok/s)
+2. **FAQ embedding pre-computation** - Batch compute FAQ embeddings on employee load
+3. **Parallel FAQ + knowledge retrieval** - Run retrievals concurrently instead of serially
+
+See detailed analysis in: [性能优化总结.md](docs/性能优化总结.md), [性能优化效果验证.md](docs/性能优化效果验证.md)
 
 ---
 
@@ -281,10 +327,19 @@ Two SSE streaming modes ([ai-service/app/api/endpoints/chat.py](ai-service/app/a
 
 ## Documentation Reference
 
-Detailed feature documentation in `docs/`:
+**Core Features**:
 - [联网检索功能使用指南.md](docs/联网检索功能使用指南.md)
 - [FAQ多路召回功能实现总结.md](docs/FAQ多路召回功能实现总结.md)
 - [异步文档上传使用说明.md](docs/异步文档上传使用说明.md)
+
+**Performance**:
+- [Ollama模型保活方案.md](docs/Ollama模型保活方案.md)
+- [性能优化总结.md](docs/性能优化总结.md)
+- [性能优化效果验证.md](docs/性能优化效果验证.md)
+- [性能优化方案-第二阶段.md](docs/性能优化方案-第二阶段.md)
+
+**Architecture**:
+- [ConversationWorkflow流程图与架构图.md](docs/ConversationWorkflow流程图与架构图.md) - Complete workflow diagrams and node descriptions
 - [API使用文档.md](docs/API使用文档.md)
 - [部署指南.md](docs/部署指南.md)
 

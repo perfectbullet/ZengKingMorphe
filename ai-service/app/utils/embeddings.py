@@ -7,6 +7,7 @@ import requests
 from langchain_core.embeddings import Embeddings
 import numpy as np
 from app.core.logging import get_logger
+from app.services.embedding_cache import embedding_cache
 
 logger = get_logger(__name__)
 
@@ -43,11 +44,20 @@ class OllamaEmbeddings(Embeddings):
     def _embed_single(self, text: str) -> List[float]:
         """Embed a single text using Ollama API."""
 
+        # Check cache first
+        cached = embedding_cache.get(text, self.model)
+        if cached is not None:
+            return cached
+
         # Truncate if needed
         truncated_text = self._truncate_text(text)
 
         url = f"{self.base_url}/api/embeddings"
-        payload = {"model": self.model, "prompt": truncated_text}
+        payload = {
+            "model": self.model,
+            "prompt": truncated_text,
+            "keep_alive": -1  # Keep model loaded indefinitely
+        }
 
         try:
             response = requests.post(url, json=payload, timeout=30.0)
@@ -57,7 +67,12 @@ class OllamaEmbeddings(Embeddings):
             if "embedding" not in result:
                 raise ValueError(f"No embedding in response: {result}")
 
-            return result["embedding"]
+            embedding = result["embedding"]
+
+            # Cache the result
+            embedding_cache.set(text, self.model, embedding)
+
+            return embedding
         except Exception as e:
             logger.error(f"Ollama embedding failed: url={url}, model={self.model}, error={str(e)}", exc_info=True)
             raise
@@ -72,12 +87,24 @@ class OllamaEmbeddings(Embeddings):
         logger.info(f"Ollama embedding request: url={self.base_url}, model={self.model}, texts_count={len(texts)}")
 
         embeddings = []
+        cache_hits = 0
         for text in texts:
-            embedding = self._embed_single(text)
-            # Convert to numpy array for ChromaDB compatibility
-            embeddings.append(np.array(embedding, dtype=float))
+            # Check if cached (already done in _embed_single, but track stats here)
+            cached = embedding_cache.get(text, self.model)
+            if cached is not None:
+                cache_hits += 1
+                embeddings.append(np.array(cached, dtype=float))
+            else:
+                embedding = self._embed_single(text)
+                embeddings.append(np.array(embedding, dtype=float))
 
-        logger.info(f"Ollama request successful: received {len(embeddings)} embeddings")
+        logger.info(f"Ollama request successful: received {len(embeddings)} embeddings, cache_hits={cache_hits}")
+
+        # Log cache stats periodically
+        stats = embedding_cache.get_stats()
+        if int(stats["hits"]) % 100 == 0:  # Every 100 cache hits
+            logger.info("Embedding cache statistics", **stats)
+
         return embeddings
 
     def embed_query(self, text: str) -> List[float]:

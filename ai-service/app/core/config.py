@@ -68,6 +68,10 @@ class Settings(BaseSettings):
     ollama_base_url: str = Field(default="http://localhost:11434")
     ollama_model: str = Field(default="qwen2.5:7b")
     ollama_grader_model: str = Field(default="qwen2.5:7b")
+    ollama_keep_alive_interval: int = Field(
+        default=180,
+        description="Interval in seconds between Ollama keep-alive requests (0 to disable)"
+    )
 
     # OpenAI-style API Configuration (used when use_ollama=False)
     openai_api_key: str = Field(

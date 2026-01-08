@@ -83,18 +83,20 @@ class ConversationWorkflow:
         # Initialize LLM based on configuration
         if settings.use_ollama:
             logger.info(f"Ollama configuration detected, initializing Ollama LLMs,model= {settings.ollama_model}")
-            # Use Ollama
+            # Use Ollama with keep_alive to prevent model unloading
             self.llm = ChatOllama(
                 base_url=settings.ollama_base_url,
                 model=settings.ollama_model,
                 temperature=0,
                 streaming=True,
+                keep_alive=-1  # Keep model loaded indefinitely
             )
             self.grader_llm = ChatOllama(
                 base_url=settings.ollama_base_url,
                 model=settings.ollama_grader_model,
                 temperature=0,
                 format="json",  # 强制 JSON
+                keep_alive=-1  # Keep model loaded indefinitely
             )
             logger.info(f"Using Ollama LLM: model={settings.ollama_model}")
         else:
