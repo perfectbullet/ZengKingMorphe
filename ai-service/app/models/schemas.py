@@ -491,51 +491,71 @@ class CreateRagDocumentResponse(BaseModel):
 # External API Data Schemas (Java Platform Integration)
 class ExternalFAQItem(BaseModel):
     """外部API FAQ项（来自Java平台）。"""
-    faq_id: str = Field(..., alias="id", description="FAQ ID")
-    team_id: int = Field(..., alias="teamId", description="Team ID")
+    faq_id: Union[str, int] = Field(..., alias="id", description="FAQ ID")
+    team_id: Optional[int] = Field(None, alias="teamId", description="Team ID")
     question_name: str = Field(..., alias="questionName", description="主问题")
     start_time: Optional[str] = Field(None, alias="startTime", description="生效开始时间")
     end_time: Optional[str] = Field(None, alias="endTime", description="生效结束时间")
-    is_enable: int = Field(..., alias="isEnable", description="是否启用：0=禁用，1=启用")
-    is_clear: int = Field(..., alias="isClear", description="是否清除：0=不清除，1=清除")
-    create_user_id: int = Field(..., alias="createUserId", description="创建用户ID")
-    update_time: str = Field(..., alias="updateTime", description="更新时间")
-    create_time: str = Field(..., alias="createTime", description="创建时间")
+    is_enable: Optional[int] = Field(None, alias="isEnable", description="是否启用：0=禁用，1=启用")
+    is_clear: Optional[int] = Field(None, alias="isClear", description="是否清除：0=不清除，1=清除")
+    create_user_id: Optional[int] = Field(None, alias="createUserId", description="创建用户ID")
+    update_time: Optional[str] = Field(None, alias="updateTime", description="更新时间")
+    create_time: Optional[str] = Field(None, alias="createTime", description="创建时间")
     similar_questions: List[str] = Field(default_factory=list, alias="similarQuestions", description="相似问题列表")
     answers: List[str] = Field(default_factory=list, description="答案列表")
-    
+
     model_config = ConfigDict(populate_by_name=True)
+
+    # Convert faq_id to string for consistency
+    @model_validator(mode='before')
+    @classmethod
+    def convert_faq_id_to_str(cls, data):
+        if isinstance(data, dict):
+            faq_id = data.get('id')
+            if isinstance(faq_id, int):
+                data['id'] = str(faq_id)
+        return data
 
 
 class ExternalRAGDataset(BaseModel):
     """外部API RAG数据集（知识库）。"""
-    kb_id: str = Field(..., alias="id", description="Dataset ID")
-    team_id: int = Field(..., alias="teamId", description="Team ID")
-    rag_dataset_id: str = Field(..., alias="ragDatasetId", description="RAG数据集ID（映射为kb_id）")
-    name: str = Field(..., description="数据集名称")
-    is_enable: int = Field(..., alias="isEnable", description="是否启用：0=禁用，1=启用")
-    is_publish: int = Field(..., alias="isPublish", description="是否发布：0=未发布，1=已发布")
-    create_user_id: int = Field(..., alias="createUserId", description="创建用户ID")
-    flag: int = Field(..., description="标志位")
-    create_time: str = Field(..., alias="createTime", description="创建时间")
-    
+    kb_id: Union[str, int] = Field(..., alias="id", description="Dataset ID")
+    team_id: Optional[int] = Field(None, alias="teamId", description="Team ID")
+    rag_dataset_id: Optional[str] = Field(None, alias="ragDatasetId", description="RAG数据集ID（映射为kb_id）")
+    name: Optional[str] = Field(None, description="数据集名称")
+    is_enable: Optional[int] = Field(None, alias="isEnable", description="是否启用：0=禁用，1=启用")
+    is_publish: Optional[int] = Field(None, alias="isPublish", description="是否发布：0=未发布，1=已发布")
+    create_user_id: Optional[int] = Field(None, alias="createUserId", description="创建用户ID")
+    flag: Optional[int] = Field(None, description="标志位")
+    create_time: Optional[str] = Field(None, alias="createTime", description="创建时间")
+
     model_config = ConfigDict(populate_by_name=True)
+
+    # Convert kb_id to string for consistency
+    @model_validator(mode='before')
+    @classmethod
+    def convert_kb_id_to_str(cls, data):
+        if isinstance(data, dict):
+            kb_id = data.get('id')
+            if isinstance(kb_id, int):
+                data['id'] = str(kb_id)
+        return data
 
 
 class ExternalEmployeeInfo(BaseModel):
     """外部API员工信息。"""
     employee_id: Union[str, int] = Field(..., alias="id", description="员工ID")
-    team_id: int = Field(..., alias="teamId", description="Team ID")
-    name: str = Field(..., description="员工名称")
-    position: str = Field(..., description="职位")
-    type: str = Field(..., description="类型：AVATAR等")
-    tone: str = Field(..., description="语气风格")
-    language: str = Field(..., description="语言")
-    create_user_id: int = Field(..., alias="createUserId", description="创建用户ID")
-    onduty_status: int = Field(..., alias="ondutyStatus", description="在岗状态")
-    update_time: str = Field(..., alias="updateTime", description="更新时间")
-    create_time: str = Field(..., alias="createTime", description="创建时间")
-    gender: int = Field(..., description="性别：0=女，1=男")
+    team_id: Optional[int] = Field(None, alias="teamId", description="Team ID")
+    name: Optional[str] = Field(None, description="员工名称")
+    position: Optional[str] = Field(None, description="职位")
+    type: Optional[str] = Field(None, description="类型：AVATAR等")
+    tone: Optional[str] = Field(None, description="语气风格")
+    language: Optional[str] = Field(None, description="语言")
+    create_user_id: Optional[int] = Field(None, alias="createUserId", description="创建用户ID")
+    onduty_status: Optional[int] = Field(None, alias="ondutyStatus", description="在岗状态")
+    update_time: Optional[str] = Field(None, alias="updateTime", description="更新时间")
+    create_time: Optional[str] = Field(None, alias="createTime", description="创建时间")
+    gender: Optional[int] = Field(None, description="性别：0=女，1=男")
     intro: Optional[str] = Field(None, description="简介")
     portrait: Optional[str] = Field(None, description="头像URL")
     model_image: Optional[str] = Field(None, alias="modelImage", description="模型图片URL")
@@ -604,11 +624,21 @@ class ExternalUnusualRule(BaseModel):
 
 class ExternalRuleConfig(BaseModel):
     """外部API规则配置。"""
-    rule_config_id: Optional[str] = Field(None, alias="id", description="规则ID")
+    rule_config_id: Optional[Union[str, int]] = Field(None, alias="id", description="规则ID")
     chat_rule: Optional[ExternalChatRule] = Field(None, alias="chatRule", description="对话规则")
     unusual_rule: Optional[ExternalUnusualRule] = Field(None, alias="unusualRule", description="异常规则")
 
     model_config = ConfigDict(populate_by_name=True)
+
+    # Convert rule_config_id to string for consistency
+    @model_validator(mode='before')
+    @classmethod
+    def convert_rule_id_to_str(cls, data):
+        if isinstance(data, dict):
+            rule_id = data.get('id')
+            if isinstance(rule_id, int):
+                data['id'] = str(rule_id)
+        return data
 
 
 class ExternalRoleConfig(BaseModel):

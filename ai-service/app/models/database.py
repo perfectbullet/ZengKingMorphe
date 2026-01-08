@@ -237,8 +237,8 @@ class DigitalEmployeeConfigModel(BaseModel):
     style_desc: Optional[str] = None
     # Status and timestamps
     status: str = "active"
-    external_update_time: str  # From external employee.updateTime
-    external_create_time: str  # From external employee.createTime
+    external_update_time: Optional[str] = None  # From external employee.updateTime
+    external_create_time: Optional[str] = None  # From external employee.createTime
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
     synced_at: datetime = Field(default_factory=datetime.utcnow)

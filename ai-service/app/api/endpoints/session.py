@@ -93,25 +93,27 @@ async def fetch_external_employee_data(employee_id: str) -> Optional[dict]:
             return api_response.data.model_dump()
             
     except httpx.HTTPError as e:
+        error_message = str(e).replace('{', '{{').replace('}', '}}')
         logger.error(
             f"{'!' * 100}\n"
             f"外部API HTTP请求失败！强烈谴责！\n"
             f"API URL: {external_api_url}\n"
             f"Employee ID: {employee_id}\n"
             f"Error Type: {type(e).__name__}\n"
-            f"Error Details: {str(e)}\n"
+            f"Error Details: {error_message}\n"
             f"{'!' * 100}",
             exc_info=True
         )
         return None
     except Exception as e:
+        error_message = str(e).replace('{', '{{').replace('}', '}}')
         logger.error(
             f"{'!' * 100}\n"
             f"外部API调用发生未知错误！强烈谴责！\n"
             f"API URL: {external_api_url}\n"
             f"Employee ID: {employee_id}\n"
             f"Error Type: {type(e).__name__}\n"
-            f"Error Details: {str(e)}\n"
+            f"Error Details: {error_message}\n"
             f"{'!' * 100}",
             exc_info=True
         )
@@ -192,9 +194,9 @@ async def sync_digital_employee_config(db, request_employee_id: str, external_da
             persona=setting_info["role"].get("persona"),
             style=setting_info["role"].get("style"),
             style_desc=setting_info["role"].get("style_desc"),
-            # Timestamps
-            external_update_time=employee_info["update_time"],
-            external_create_time=employee_info["create_time"],
+            # Timestamps (handle None values)
+            external_update_time=employee_info.get("update_time"),
+            external_create_time=employee_info.get("create_time"),
         ).model_dump()
         
         # Upsert to MongoDB
@@ -412,6 +414,7 @@ async def create_session(
     except Exception as e:
         # Use keyword args to avoid Loguru format issues with curly braces in error messages
         logger.error("Failed to create session", error=str(e), exc_info=True)
+        logger.exception(e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create session"
