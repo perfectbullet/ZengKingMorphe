@@ -14,3 +14,6 @@ ai-service/.env-win
 outer_api_docs/按员工id返回的数据-hutao.json
 test_files/首饰雕蜡工艺-全本.pdf
 test_files/README.txt
+*.pdf
+.env
+.env-win

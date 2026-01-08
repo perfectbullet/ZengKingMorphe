@@ -175,6 +175,32 @@ class Settings(BaseSettings):
     summary_max_tokens: int = Field(default=200, ge=1)
     summary_batch_size: int = Field(default=10, ge=1)
 
+    # MinerU PDF Parsing Configuration
+    mineru_api_url: str = Field(
+        default="http://192.168.8.231:8000/file_parse",
+        description="MinerU API endpoint URL for enhanced PDF parsing"
+    )
+    mineru_enabled: bool = Field(
+        default=False,
+        description="Enable MinerU API for PDF parsing (better table/formula extraction)"
+    )
+    mineru_pages_per_chunk: int = Field(
+        default=8,
+        ge=1,
+        le=20,
+        description="Number of pages to process per chunk when using MinerU"
+    )
+    mineru_timeout: int = Field(
+        default=600,
+        ge=60,
+        description="API request timeout in seconds for MinerU calls"
+    )
+    mineru_cache_ttl_days: int = Field(
+        default=30,
+        ge=1,
+        description="Cache time-to-live in days for MinerU results"
+    )
+
     # JWT Configuration
     jwt_secret_key: str = Field(..., description="JWT secret key for token signing")
     jwt_algorithm: str = Field(default="HS256", description="JWT signing algorithm")

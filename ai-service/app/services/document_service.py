@@ -85,8 +85,9 @@ class DocumentProcessor:
             
             logger.info(f"Started processing document: doc_id={doc_id}, filename={filename}, kb_id={kb_id}, custom_chunking={bool(chunk_config)}")
             
-            # Extract text
-            text_content = await self._extract_text(file_path, file_ext)
+            # Extract text (check if we should use MinerU for PDFs)
+            use_mineru = metadata.get('use_mineru', False) if metadata else False
+            text_content = await self._extract_text(file_path, file_ext, use_mineru=use_mineru)
             
             # Preprocess text if chunk_config specifies
             if chunk_config:
@@ -147,25 +148,51 @@ class DocumentProcessor:
             
             raise
     
-    async def _extract_text(self, file_path: str, file_ext: str) -> str:
+    async def _extract_text(
+        self,
+        file_path: str,
+        file_ext: str,
+        use_mineru: bool = False
+    ) -> str:
         """
         Extract text from document.
-        
+
         Args:
             file_path: Path to file
             file_ext: File extension
-            
+            use_mineru: Whether to use MinerU API for PDF parsing (only for .pdf files)
+
         Returns:
             Extracted text content
         """
         if file_ext not in self.supported_formats:
             raise ValueError(f"Unsupported file format: {file_ext}")
-        
-        extractor = self.supported_formats[file_ext]
-        return await extractor(file_path)
+
+        # Call extractor with use_mineru parameter for PDF files
+        if file_ext == '.pdf' and use_mineru:
+            return await self._extract_pdf(file_path, use_mineru=True)
+        else:
+            extractor = self.supported_formats[file_ext]
+            return await extractor(file_path)
     
-    async def _extract_pdf(self, file_path: str) -> str:
-        """Extract text from PDF."""
+    async def _extract_pdf(self, file_path: str, use_mineru: bool = False) -> str:
+        """
+        Extract text from PDF.
+
+        Args:
+            file_path: Path to PDF file
+            use_mineru: Whether to use MinerU API for enhanced PDF parsing
+
+        Returns:
+            Extracted text content
+        """
+        if use_mineru:
+            return await self._extract_pdf_with_mineru(file_path)
+        else:
+            return await self._extract_pdf_basic(file_path)
+
+    async def _extract_pdf_basic(self, file_path: str) -> str:
+        """Extract text from PDF using basic PyPDF extraction."""
         try:
             reader = PdfReader(file_path)
             text_parts = []
@@ -177,6 +204,80 @@ class DocumentProcessor:
         except Exception as e:
             logger.error(f"Failed to extract PDF: file={file_path}, error={str(e)}")
             raise
+
+    async def _extract_pdf_with_mineru(self, file_path: str) -> str:
+        """
+        Extract text from PDF using MinerU API with enhanced parsing.
+
+        This method uses the MinerU client which provides:
+        - Better table extraction
+        - Formula parsing
+        - Multi-column layout handling
+        - Automatic caching for faster reprocessing
+
+        Args:
+            file_path: Path to PDF file
+
+        Returns:
+            Extracted text content
+        """
+        try:
+            # Import here to avoid circular dependencies
+            from app.services.mineru_client import get_mineru_client
+
+            logger.info(f"Using MinerU API for PDF extraction: {file_path}")
+
+            # Get client and process PDF with MinerU
+            client = get_mineru_client()
+            async with client:
+                result = await client.process_pdf(file_path, use_cache=True)
+
+            # Extract text content from result
+            if result.get("status") == "success" and "content" in result:
+                # Merge all content items
+                text_parts = []
+                content_items = result["content"]
+
+                if isinstance(content_items, list):
+                    for item in content_items:
+                        if isinstance(item, dict):
+                            # Extract text from structured content
+                            text = item.get("text", "") or item.get("content", "")
+                            if text:
+                                text_parts.append(text)
+                        elif isinstance(item, str):
+                            text_parts.append(item)
+
+                extracted_text = "\n\n".join(text_parts)
+
+                logger.info(
+                    "Successfully extracted text with MinerU",
+                    file=file_path,
+                    content_length=len(extracted_text)
+                )
+
+                return extracted_text
+            else:
+                # Fallback to basic extraction if MinerU fails
+                logger.warning(
+                    "MinerU extraction failed or returned no content, falling back to basic extraction",
+                    file=file_path,
+                    status=result.get("status")
+                )
+                return await self._extract_pdf_basic(file_path)
+
+        except ImportError:
+            logger.warning("MinerU client not available, using basic PDF extraction")
+            return await self._extract_pdf_basic(file_path)
+        except Exception as e:
+            logger.error(
+                f"Failed to extract PDF with MinerU: {file_path}",
+                error=str(e),
+                exc_info=True
+            )
+            # Fallback to basic extraction
+            logger.info(f"Falling back to basic PDF extraction: {file_path}")
+            return await self._extract_pdf_basic(file_path)
     
     async def _extract_docx(self, file_path: str) -> str:
         """Extract text from Word document."""
