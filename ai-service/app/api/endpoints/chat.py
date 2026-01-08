@@ -205,6 +205,50 @@ async def generate_openai_stream_response(
 
         yield json.dumps(role_chunk_data)
 
+        # Quick check for realtime query BEFORE workflow starts
+        # This allows immediate feedback to user before slow web search
+        query_lower = user_query.lower()
+        is_likely_realtime = any(keyword in query_lower for keyword in
+                                  ['天气', '气温', '温度', '下雨', '下雪', '刮风',
+                                   '股价', '股票', '汇率', '金价', '银价',
+                                   '新闻', '今日', '最新', '实时'])
+
+        if is_likely_realtime:
+            # Send immediate search status indicator
+            search_token = "正在进行网络搜索..."
+            search_chunk_data = {
+                "id": chat_id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": "status",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"content": search_token},
+                        "finish_reason": None,
+                    }
+                ],
+            }
+
+            # Save search status chunk to DB
+            chunk_sequence += 1
+            search_status_record = StreamChunkModel(
+                chunk_id=f"{chat_id}_chunk_{chunk_sequence}",
+                conversation_id=None,
+                session_id=session_id,
+                user_id=request.user_id,
+                employee_id=request.employee_id,
+                chat_id=chat_id,
+                chunk_type="status",
+                chunk_data=search_chunk_data,
+                sequence=chunk_sequence,
+                timestamp=datetime.utcnow(),
+                created_at=datetime.utcnow(),
+            )
+            await db.stream_chunks.insert_one(search_status_record.model_dump())
+
+            yield json.dumps(search_chunk_data)
+
         # Stream workflow execution and monitor for generate stage
         should_generate = False
         final_state = None
@@ -226,41 +270,6 @@ async def generate_openai_stream_response(
                     "object": "chat.completion.chunk",
                     "created": created,
                     "model": "knowledge_retrieval",
-                    "choices": [
-                        {
-                            "index": 0,
-                            "delta": {"content": status_token},
-                            "finish_reason": None,
-                        }
-                    ],
-                }
-
-                # 保存状态 chunk 到数据库
-                chunk_sequence += 1
-                status_chunk_record = StreamChunkModel(
-                    chunk_id=f"{chat_id}_chunk_{chunk_sequence}",
-                    conversation_id=None,
-                    session_id=session_id,
-                    user_id=request.user_id,
-                    employee_id=request.employee_id,
-                    chat_id=chat_id,
-                    chunk_type="token",
-                    chunk_data=status_chunk_data,
-                    sequence=chunk_sequence,
-                    timestamp=datetime.utcnow(),
-                    created_at=datetime.utcnow(),
-                )
-                await db.stream_chunks.insert_one(status_chunk_record.model_dump())
-
-                yield json.dumps(status_chunk_data)
-            # 检测 web_search 节点并发送状态提示
-            elif node_name == "web_search":
-                status_token = "正在进行网络搜索。"
-                status_chunk_data = {
-                    "id": chat_id,
-                    "object": "chat.completion.chunk",
-                    "created": created,
-                    "model": "web_search",
                     "choices": [
                         {
                             "index": 0,
