@@ -1,0 +1,30 @@
+{
+  "test_time": "2026-01-09T14:13:48.920195",
+  "file_path": "D:\\zenking_work\\期刊文件\\高品质生态环境会提升企业全要素生产率吗？.pdf",
+  "configs": [
+    {
+      "config_name": "默认配置(256/50)",
+      "chunk_size": 256,
+      "chunk_overlap": 50,
+      "metrics": {
+        "text_length": 32554,
+        "parse_time_ms": 757,
+        "chunk_count": 184,
+        "avg_chunk_size": 181.5923913043478,
+        "min_chunk_size": 6,
+        "max_chunk_size": 256,
+        "chunk_time_ms": 0,
+        "quality_metrics": {
+          "std_dev": 81.1,
+          "too_short_ratio": 0.12,
+          "too_long_ratio": 0.0,
+          "uniformity_score": 0.6913
+        },
+        "embedding_dim": 1024,
+        "avg_embed_time_ms": 75
+      },
+      "success": true
+    }
+  ],
+  "summary": {}
+}

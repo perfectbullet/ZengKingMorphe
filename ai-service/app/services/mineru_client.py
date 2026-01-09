@@ -454,18 +454,46 @@ class MineruClient:
             }
 
             # Merge content from each chunk
+            # MinerU API returns: {backend, version, results: {chunk_X_Y: {md_content, ...}}}
+            all_md_content = []
+            total_pages = 0
+
             for result in sorted_results:
                 chunk_data = result.get("result", {})
-                if "content" in chunk_data:
+
+                # Check for MinerU API format: {results: {chunk_id: {md_content}}}
+                if "results" in chunk_data:
+                    chunk_results = chunk_data.get("results", {})
+                    for chunk_id, chunk_content in chunk_results.items():
+                        if isinstance(chunk_content, dict):
+                            md_content = chunk_content.get("md_content", "")
+                            if md_content:
+                                all_md_content.append(md_content)
+                            # Get pages processed if available
+                            total_pages += chunk_content.get("pages_processed", 0)
+
+                # Check for legacy format: {content: [...]}
+                elif "content" in chunk_data:
                     if isinstance(chunk_data["content"], list):
                         merged["content"].extend(chunk_data["content"])
                     else:
                         merged["content"].append(chunk_data["content"])
 
-            logger.info(
-                f"Merged {len(sorted_results)} chunk results",
-                total_content_items=len(merged["content"])
-            )
+            # If we found md_content, create content items for document_service
+            if all_md_content:
+                # Combine all markdown content and create content items
+                combined_md = "\n\n".join(all_md_content)
+                merged["content"] = [{"text": combined_md}]
+                merged["metadata"]["total_pages"] = total_pages or len(sorted_results)
+                logger.info(
+                    f"Merged {len(sorted_results)} chunk results with md_content",
+                    total_chars=len(combined_md)
+                )
+            else:
+                logger.info(
+                    f"Merged {len(sorted_results)} chunk results",
+                    total_content_items=len(merged["content"])
+                )
 
             return merged
 

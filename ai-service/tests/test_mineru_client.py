@@ -4,11 +4,34 @@ MinerU 客户端测试脚本
 用于测试 MinerU PDF 解析功能。
 
 使用方法：
+    # 处理 PDF 文件（使用缓存）
+    python tests/test_mineru_client.py process --file path/to/document.pdf
+
+    # 处理 PDF 文件（禁用缓存）
+    python tests/test_mineru_client.py process --file path/to/document.pdf --no-cache
+
+    # 处理 PDF 并保存 Markdown 结果到文件
+    python tests/test_mineru_client.py process --file path/to/document.pdf --save-md
+    # Markdown 文件保存到: ai-service/docs/mineru_output/<文件名>.md
+
+    # 查询任务状态
+    python tests/test_mineru_client.py status --job-id job_id_here
+
+    # 清理缓存（默认清理30天前的）
+    python tests/test_mineru_client.py clear-cache
+    python tests/test_mineru_client.py clear-cache --days 7
+
+    # 通过 DocumentProcessor 上传文档
+    python tests/test_mineru_client.py upload --file path/to/document.pdf --kb-id test_kb
+
+示例：
     cd ai-service
-    python scripts/test_mineru_client.py --file path/to/document.pdf
-    python scripts/test_mineru_client.py --file path/to/document.pdf --use-cache
-    python scripts/test_mineru_client.py --job-id job_id_here
-    python scripts/test_mineru_client.py --file ../test_files/首饰雕蜡工艺-全本.pdf
+    python tests/test_mineru_client.py process --file "../test_files/首饰雕蜡工艺-全本.pdf"
+    python tests/test_mineru_client.py process --file "D:\\zenking_work\\期刊文件\\高品质生态环境会提升企业全要素生产率吗？.pdf" --save-md
+
+结果存储位置：
+    - MongoDB 缓存: mineru_cache, mineru_jobs 集合
+    - Markdown 输出: ai-service/docs/mineru_output/ (使用 --save-md 时)
 """
 import asyncio
 import argparse
@@ -20,8 +43,14 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 
-async def test_mineru_processing(file_path: str, use_cache: bool = True):
-    """测试 MinerU PDF 处理"""
+async def test_mineru_processing(file_path: str, use_cache: bool = True, save_md: bool = False):
+    """测试 MinerU PDF 处理
+
+    Args:
+        file_path: PDF 文件路径
+        use_cache: 是否使用缓存
+        save_md: 是否保存 Markdown 结果到文件
+    """
     from app.services.mineru_client import get_mineru_client
     from app.core.logging import get_logger
     from app.core.database import mongodb
@@ -60,6 +89,8 @@ async def test_mineru_processing(file_path: str, use_cache: bool = True):
 
             # 显示前 3 个内容项的预览
             content_items = result.get('content', [])
+            full_text = ""
+
             if content_items:
                 print("\n内容预览（前 3 项）:")
                 for i, item in enumerate(content_items[:3], 1):
@@ -70,6 +101,31 @@ async def test_mineru_processing(file_path: str, use_cache: bool = True):
 
                     preview = text[:200] + "..." if len(text) > 200 else text
                     print(f"\n[{i}] {preview}\n")
+
+                # 合并所有内容用于保存
+                for item in content_items:
+                    if isinstance(item, dict):
+                        full_text += item.get('text', '') or item.get('content', '')
+                    else:
+                        full_text += str(item)
+
+            # 保存到 Markdown 文件
+            if save_md and full_text:
+                output_dir = Path(project_root) / "docs" / "mineru_output"
+                output_dir.mkdir(parents=True, exist_ok=True)
+                output_file = output_dir / f"{Path(file_path).stem}.md"
+
+                with open(output_file, 'w', encoding='utf-8') as f:
+                    f.write(f"# {Path(file_path).name}\n\n")
+                    f.write(f"**来源**: {file_path}\n\n")
+                    f.write(f"**状态**: {result.get('status')}\n\n")
+                    f.write(f"**总页数**: {result['metadata'].get('total_pages')}\n\n")
+                    f.write(f"**处理时间**: {result['metadata'].get('merged_at')}\n\n")
+                    f.write("---\n\n")
+                    f.write(full_text)
+
+                print(f"\nMarkdown 已保存到: {output_file}")
+                print(f"文件大小: {len(full_text)} 字符\n")
 
             print("="*60 + "\n")
 
@@ -237,6 +293,7 @@ def main():
     process_parser = subparsers.add_parser("process", help="处理 PDF 文件")
     process_parser.add_argument("--file", required=True, help="PDF 文件路径")
     process_parser.add_argument("--no-cache", action="store_true", help="禁用缓存")
+    process_parser.add_argument("--save-md", action="store_true", help="保存 Markdown 结果到文件")
 
     # 查询任务命令
     status_parser = subparsers.add_parser("status", help="查询任务状态")
@@ -255,7 +312,8 @@ def main():
 
     # 执行对应命令
     if args.command == "process":
-        asyncio.run(test_mineru_processing(args.file, use_cache=not args.no_cache))
+        save_md = getattr(args, 'save_md', False)
+        asyncio.run(test_mineru_processing(args.file, use_cache=not args.no_cache, save_md=save_md))
     elif args.command == "status":
         asyncio.run(test_job_status(args.job_id))
     elif args.command == "clear-cache":

@@ -20,3 +20,6 @@ test_files/README.txt
 response_mineru_demo.json
 .claude/settings.local.json
 temp_pdf_chunks
+ai-service/rag_baseline_report_20260109_112728.json
+ai-service/docs
+ai-service/temp_pdf_chunks
