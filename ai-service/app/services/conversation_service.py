@@ -74,6 +74,14 @@ class ConversationState(TypedDict):
     workflow_start_time: float
     node_timings: Dict[str, float]
     ttfb_ms: Optional[int]
+    # Query optimization
+    rewritten_query: str
+    query_rewritten: bool
+    # Context compression
+    compressed_context: Optional[str]
+    # Answer verification
+    answer_verified: bool
+    verification_result: Optional[Dict[str, Any]]
 
 
 class ConversationWorkflow:
@@ -149,27 +157,32 @@ class ConversationWorkflow:
     def _build_workflow(self) -> StateGraph:
         """Build the conversation workflow graph."""
         graph = StateGraph(ConversationState)
-        
+
         # Add nodes
         graph.add_node("load_employee_config", self.load_employee_config)
         graph.add_node("load_session_context", self.load_session_context)
         graph.add_node("input_validation", self.validate_input)
+        graph.add_node("rewrite_query", self.rewrite_query)
         graph.add_node("match_faq", self.match_faq)
         graph.add_node("check_realtime_query", self.check_realtime_query)
         graph.add_node("intent_recognition", self.recognize_intent)
         graph.add_node("knowledge_retrieval", self.knowledge_retrieval)
         graph.add_node("grade_documents", self.grade_documents)
+        graph.add_node("rerank_documents", self.rerank_documents)
+        graph.add_node("compress_context", self.compress_context)
         graph.add_node("web_search", self.web_search)
         graph.add_node("generate_answer", self.generate_answer)
+        graph.add_node("verify_answer", self.verify_answer)
         graph.add_node("save_conversation", self.save_conversation)
-        
+
         # Set entry point
         graph.set_entry_point("load_employee_config")
-        
+
         # Add edges
         graph.add_edge("load_employee_config", "load_session_context")
         graph.add_edge("load_session_context", "input_validation")
-        graph.add_edge("input_validation", "check_realtime_query")
+        graph.add_edge("input_validation", "rewrite_query")
+        graph.add_edge("rewrite_query", "check_realtime_query")
 
         # Conditional: realtime query -> web search, else -> match FAQ
         graph.add_conditional_edges(
@@ -190,7 +203,7 @@ class ConversationWorkflow:
                 "intent_recognition": "intent_recognition"
             }
         )
-        
+
         # Conditional: greeting -> generate answer directly, else -> knowledge retrieval
         graph.add_conditional_edges(
             "intent_recognition",
@@ -201,19 +214,22 @@ class ConversationWorkflow:
             }
         )
         graph.add_edge("knowledge_retrieval", "grade_documents")
-        
-        # Conditional: low relevance -> web search, else -> generate answer
+        graph.add_edge("grade_documents", "rerank_documents")
+        graph.add_edge("rerank_documents", "compress_context")
+
+        # Conditional: low relevance -> web search, else -> compress_context
         graph.add_conditional_edges(
-            "grade_documents",
+            "compress_context",
             lambda state: "web_search" if state.get("relevance_score", 0) < settings.relevance_threshold else "generate_answer",
             {
                 "web_search": "web_search",
                 "generate_answer": "generate_answer"
             }
         )
-        
+
         graph.add_edge("web_search", "generate_answer")
-        graph.add_edge("generate_answer", "save_conversation")
+        graph.add_edge("generate_answer", "verify_answer")
+        graph.add_edge("verify_answer", "save_conversation")
         graph.add_edge("save_conversation", END)
         compiled_stateGraph = graph.compile()
         self._dump_graph_debug(compiled_stateGraph)
@@ -326,7 +342,85 @@ class ConversationWorkflow:
             # Simple validation - already done at API level
             state["has_sensitive"] = False
         return state
-    
+
+    async def rewrite_query(self, state: ConversationState) -> ConversationState:
+        """
+        Query Rewriting - 使用LLM重写用户查询,提升检索准确度。
+
+        策略:
+        - 对短查询(<20字)进行扩展
+        - 保持原意,增加关键词
+        - 使用快速模型减少延迟
+
+        配置: 通过环境变量 QUERY_REWRITE_ENABLED 控制
+        """
+        async with self._time_node("rewrite_query", state):
+            state["query_rewritten"] = False
+            state["rewritten_query"] = state["user_query"]
+
+            # 检查是否启用查询重写
+            rewrite_enabled = getattr(settings, 'query_rewrite_enabled', False)
+            if not rewrite_enabled:
+                logger.debug("Query rewriting disabled")
+                return state
+
+            query = state["user_query"].strip()
+
+            # 只重写短查询 (少于20字)
+            if len(query) >= 20:
+                logger.debug(f"Query too long for rewriting, using original: {len(query)} chars")
+                return state
+
+            # 问候语不需要重写
+            query_lower = query.lower()
+            for keywords in GREETING_KEYWORDS.values():
+                if any(kw in query_lower for kw in keywords):
+                    logger.debug("Greeting detected, skipping query rewrite")
+                    return state
+
+            try:
+                # 构造重写prompt
+                rewrite_prompt = f"""你是一个查询优化助手。请将用户查询重写为更具体的搜索语句,用于知识库检索。
+
+原查询: {query}
+
+要求:
+1. 保持原意不变
+2. 增加相关关键词和同义词
+3. 使查询更具体、更完整
+4. 只返回重写后的查询,不要解释
+5. 长度控制在50字以内
+
+重写后的查询:"""
+
+                # 使用LLM重写 (非流式,速度快)
+                response = await self.llm.ainvoke(rewrite_prompt)
+                rewritten = response.content.strip()
+
+                # 验证重写结果
+                if rewritten and len(rewritten) > len(query) and len(rewritten) < 100:
+                    state["rewritten_query"] = rewritten
+                    state["query_rewritten"] = True
+                    logger.info(
+                        f"Query rewritten successfully",
+                        original=query[:50],
+                        rewritten=rewritten[:50],
+                        original_len=len(query),
+                        rewritten_len=len(rewritten)
+                    )
+                else:
+                    logger.warning(
+                        f"Query rewrite result invalid, using original",
+                        rewritten=rewritten[:50] if rewritten else "empty"
+                    )
+
+            except Exception as e:
+                logger.error(f"Query rewriting failed, using original query: {str(e)}", exc_info=True)
+                # 失败时使用原始查询
+                state["rewritten_query"] = state["user_query"]
+
+        return state
+
     async def match_faq(self, state: ConversationState) -> ConversationState:
         """
         Match FAQ using hybrid search (vector + keyword + RRF fusion).
@@ -521,16 +615,22 @@ class ConversationWorkflow:
                 # Get KB IDs from employee config (at root level, not in capabilities)
                 kb_ids = state["employee_config"].get("kb_ids", [])
 
+                # 使用重写后的查询进行检索 (如果有的话)
+                search_query = state.get("rewritten_query", state["user_query"])
+
                 logger.info(
                     "Retrieving knowledge from KB",
                     employee_id=state["employee_id"],
                     kb_ids=kb_ids,
-                    kb_count=len(kb_ids)
+                    kb_count=len(kb_ids),
+                    query_rewritten=state.get("query_rewritten", False),
+                    original_query=state["user_query"][:50],
+                    search_query=search_query[:50]
                 )
 
                 # Search using RAG
                 results = await rag_retrieval.search(
-                    query=state["user_query"],
+                    query=search_query,
                     kb_ids=kb_ids if kb_ids else None,
                     top_k=5,
                     use_hybrid=True
@@ -561,7 +661,101 @@ class ConversationWorkflow:
 
             logger.info(f"Document grading completed: relevance_score={state['relevance_score']}")
         return state
-    
+
+    async def rerank_documents(self, state: ConversationState) -> ConversationState:
+        """
+        Reranking - 使用Grader LLM对检索到的文档重新评分和排序。
+
+        策略:
+        - 只对检索到3-10个文档时进行rerank
+        - 使用Grader LLM的JSON模式强制输出结构化评分
+        - 根据用户查询的语义相关性评分
+
+        配置: 通过环境变量 RERANK_ENABLED 控制
+        """
+        async with self._time_node("rerank_documents", state):
+            docs = state.get("retrieved_docs", [])
+
+            # 检查是否启用rerank
+            rerank_enabled = getattr(settings, 'rerank_enabled', False)
+            if not rerank_enabled:
+                logger.debug("Reranking disabled")
+                return state
+
+            # 文档太少或太多时不rerank
+            if len(docs) <= 2:
+                logger.debug(f"Too few documents for reranking: {len(docs)}")
+                return state
+            if len(docs) > 10:
+                logger.debug(f"Too many documents for reranking: {len(docs)}, skipping")
+                return state
+
+            try:
+                # 构造rerank prompt
+                docs_text = "\n\n".join([
+                    f"[文档{i+1}]\n{doc.get('content', '')[:300]}"
+                    for i, doc in enumerate(docs[:5])  # 最多rerank前5个
+                ])
+
+                rerank_prompt = f"""请根据用户问题对以下文档进行相关性评分。
+
+用户问题: {state["user_query"]}
+
+{docs_text}
+
+评分标准:
+- 1.0: 完全相关,直接回答了问题
+- 0.7-0.9: 高度相关,包含答案的关键信息
+- 0.4-0.6: 部分相关,需要推理才能回答
+- 0.1-0.3: 低相关,仅提及相关主题
+- 0.0: 不相关
+
+请以JSON格式返回评分,格式如下:
+{{"scores": [0.9, 0.7, 0.5, 0.2, 0.0]}}
+
+只返回JSON,不要有其他内容:"""
+
+                # 使用Grader LLM评分
+                response = await self.grader_llm.ainvoke(rerank_prompt)
+                response_text = response.content.strip()
+
+                # 解析JSON响应
+                import json
+                try:
+                    result = json.loads(response_text)
+                    scores = result.get("scores", [])
+
+                    if len(scores) == len(docs[:5]):
+                        # 根据新分数重新排序
+                        indexed_docs = list(enumerate(docs[:5]))
+                        indexed_docs.sort(key=lambda x: scores[x[0]], reverse=True)
+
+                        # 更新docs顺序
+                        reranked_docs = [doc for _, doc in indexed_docs]
+                        if len(docs) > 5:
+                            reranked_docs.extend(docs[5:])
+
+                        state["retrieved_docs"] = reranked_docs
+
+                        logger.info(
+                            f"Documents reranked successfully",
+                            original_scores=[f"{d.get('rrf_score', 0):.3f}" for d in docs[:3]],
+                            new_scores=[f"{s:.3f}" for s in scores[:3]],
+                            doc_order_changed=True
+                        )
+                    else:
+                        logger.warning(
+                            f"Rerank scores count mismatch: expected {len(docs[:5])}, got {len(scores)}"
+                        )
+
+                except json.JSONDecodeError as e:
+                    logger.warning(f"Failed to parse rerank JSON response: {e}, using original order")
+
+            except Exception as e:
+                logger.error(f"Document reranking failed, using original order: {str(e)}", exc_info=True)
+
+        return state
+
     async def web_search(self, state: ConversationState) -> ConversationState:
         """Perform web search using Tavily."""
         async with self._time_node("web_search", state):
@@ -623,7 +817,86 @@ class ConversationWorkflow:
                 state["web_search_results"] = []
                 state["web_search_used"] = False
         return state
-    
+
+    async def compress_context(self, state: ConversationState) -> ConversationState:
+        """
+        Context Compression - 智能压缩检索到的上下文,减少token使用。
+
+        策略:
+        - 当上下文超过1500字时进行压缩
+        - 保留与用户问题最相关的信息
+        - 去除冗余和无关内容
+
+        配置: 通过环境变量 CONTEXT_COMPRESSION_ENABLED 控制
+        """
+        async with self._time_node("compress_context", state):
+            state["compressed_context"] = None
+
+            # 检查是否启用上下文压缩
+            compression_enabled = getattr(settings, 'context_compression_enabled', False)
+            if not compression_enabled:
+                logger.debug("Context compression disabled")
+                return state
+
+            # 获取所有上下文内容
+            docs = state.get("retrieved_docs", [])
+            web_results = state.get("web_search_results", [])
+
+            # 计算总上下文长度
+            total_context_length = sum(len(doc.get('content', '')) for doc in docs)
+            total_context_length += sum(len(r.get('content', '')) for r in web_results)
+
+            # 只有上下文超过1500字时才压缩
+            if total_context_length < 1500:
+                logger.debug(f"Context too short for compression: {total_context_length} chars")
+                return state
+
+            try:
+                # 构造压缩prompt
+                docs_text = "\n\n".join([
+                    f"[文档{i+1}] {doc.get('content', '')[:400]}"
+                    for i, doc in enumerate(docs[:3])
+                ])
+
+                compress_prompt = f"""请将以下文档内容压缩成最精炼的关键信息。
+
+用户问题: {state["user_query"]}
+
+{docs_text}
+
+压缩要求:
+1. 只保留与用户问题相关的信息
+2. 去除重复和冗余内容
+3. 使用简洁的语言
+4. 压缩后的内容不超过500字
+5. 保留关键数据和事实
+
+压缩后的内容:"""
+
+                # 使用LLM压缩
+                response = await self.llm.ainvoke(compress_prompt)
+                compressed = response.content.strip()
+
+                if len(compressed) > 100 and len(compressed) < total_context_length:
+                    state["compressed_context"] = compressed
+                    logger.info(
+                        f"Context compressed successfully",
+                        original_length=total_context_length,
+                        compressed_length=len(compressed),
+                        compression_ratio=f"{(1 - len(compressed) / total_context_length) * 100:.1f}%"
+                    )
+                else:
+                    logger.warning(
+                        f"Compression result invalid, using original context",
+                        compressed_len=len(compressed),
+                        original_len=total_context_length
+                    )
+
+            except Exception as e:
+                logger.error(f"Context compression failed, using original: {str(e)}", exc_info=True)
+
+        return state
+
     async def generate_answer(self, state: ConversationState) -> ConversationState:
         """Prepare for answer generation (placeholder for streaming)."""
         async with self._time_node("generate_answer", state):
@@ -661,20 +934,25 @@ class ConversationWorkflow:
         role = employee_config.get("role", "AI助手")
         greeting = employee_config.get("greeting", "您好")
 
-        # Build context from retrieved docs
-        context_parts = []
-        for i, doc in enumerate(state.get("retrieved_docs", [])[:3], 1):
-            context_parts.append(f"[知识库参考{i}]\n{doc.get('content', '')[:500]}")
-        
-        # Add web search results if available
-        web_results = state.get("web_search_results", [])
-        if web_results and state.get("web_search_used", False):
-            for i, web_result in enumerate(web_results[:3], 1):
-                web_context = f"[网络资料{i}]\n标题: {web_result.get('title', '')}\n内容: {web_result.get('content', '')[:400]}\n来源: {web_result.get('url', '')}"
-                context_parts.append(web_context)
-        
-        context_text = "\n\n".join(context_parts) if context_parts else "（暂无相关参考资料）"
-        
+        # 优先使用压缩后的上下文
+        if state.get("compressed_context"):
+            context_text = f"[压缩后的参考信息]\n{state['compressed_context']}"
+            logger.debug("Using compressed context for generation")
+        else:
+            # Build context from retrieved docs
+            context_parts = []
+            for i, doc in enumerate(state.get("retrieved_docs", [])[:3], 1):
+                context_parts.append(f"[知识库参考{i}]\n{doc.get('content', '')[:500]}")
+
+            # Add web search results if available
+            web_results = state.get("web_search_results", [])
+            if web_results and state.get("web_search_used", False):
+                for i, web_result in enumerate(web_results[:3], 1):
+                    web_context = f"[网络资料{i}]\n标题: {web_result.get('title', '')}\n内容: {web_result.get('content', '')[:400]}\n来源: {web_result.get('url', '')}"
+                    context_parts.append(web_context)
+
+            context_text = "\n\n".join(context_parts) if context_parts else "（暂无相关参考资料）"
+
         # Add information source indicator
         source_indicator = ""
         if state.get("web_search_used", False):
@@ -869,6 +1147,113 @@ class ConversationWorkflow:
         )
 
         return messages
+
+    async def verify_answer(self, state: ConversationState) -> ConversationState:
+        """
+        Answer Consistency Check - 验证生成的答案是否与源文档一致。
+
+        策略:
+        - 使用Grader LLM检查答案与源文档的一致性
+        - 如果检测到不一致,记录警告但不修改答案(避免延迟)
+        - 保存验证结果到conversation记录
+
+        配置: 通过环境变量 ANSWER_VERIFICATION_ENABLED 控制
+        """
+        async with self._time_node("verify_answer", state):
+            state["answer_verified"] = False
+            state["verification_result"] = None
+
+            # 检查是否启用答案验证
+            verification_enabled = getattr(settings, 'answer_verification_enabled', False)
+            if not verification_enabled:
+                logger.debug("Answer verification disabled")
+                return state
+
+            # FAQ匹配和问候语不需要验证
+            if state.get("faq_matched") or state.get("intent") == "greeting":
+                logger.debug("Skipping answer verification for FAQ/greeting")
+                return state
+
+            # 获取答案和源文档
+            answer = state.get("final_answer", "")
+            docs = state.get("retrieved_docs", [])
+
+            if not answer or len(answer) < 20:
+                logger.debug("Answer too short for verification")
+                return state
+
+            if not docs:
+                logger.debug("No source documents for verification")
+                return state
+
+            try:
+                # 构造验证prompt
+                docs_text = "\n\n".join([
+                    f"[源文档{i+1}] {doc.get('content', '')[:400]}"
+                    for i, doc in enumerate(docs[:3])
+                ])
+
+                verify_prompt = f"""请检查以下生成的答案是否与源文档一致。
+
+用户问题: {state["user_query"]}
+
+源文档:
+{docs_text}
+
+生成的答案:
+{answer}
+
+验证要求:
+1. 检查答案中的关键信息是否在源文档中
+2. 检查是否有幻觉或编造的内容
+3. 检查是否有与源文档矛盾的陈述
+
+请以JSON格式返回验证结果:
+{{
+    "is_consistent": true/false,
+    "confidence": 0.0-1.0,
+    "issues": ["不一致点1", "不一致点2"],
+    "summary": "验证总结"
+}}
+
+只返回JSON,不要有其他内容:"""
+
+                # 使用Grader LLM验证
+                response = await self.grader_llm.ainvoke(verify_prompt)
+                response_text = response.content.strip()
+
+                # 解析JSON响应
+                import json
+                try:
+                    result = json.loads(response_text)
+
+                    state["answer_verified"] = True
+                    state["verification_result"] = result
+
+                    is_consistent = result.get("is_consistent", True)
+                    confidence = result.get("confidence", 0.8)
+
+                    if not is_consistent:
+                        logger.warning(
+                            f"Answer inconsistency detected",
+                            confidence=confidence,
+                            issues=result.get("issues", [])[:3],
+                            summary=result.get("summary", "")[:100]
+                        )
+                    else:
+                        logger.info(
+                            f"Answer verification passed",
+                            confidence=confidence,
+                            summary=result.get("summary", "")[:100]
+                        )
+
+                except json.JSONDecodeError as e:
+                    logger.warning(f"Failed to parse verification JSON: {e}")
+
+            except Exception as e:
+                logger.error(f"Answer verification failed: {str(e)}", exc_info=True)
+
+        return state
 
     async def save_conversation(self, state: ConversationState) -> ConversationState:
         """Save conversation to database."""

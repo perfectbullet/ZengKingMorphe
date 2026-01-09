@@ -8,22 +8,27 @@ graph TD;
 	load_employee_config(load_employee_config)
 	load_session_context(load_session_context)
 	input_validation(input_validation)
+	rewrite_query(rewrite_query)
 	match_faq(match_faq)
 	check_realtime_query(check_realtime_query)
 	intent_recognition(intent_recognition)
 	knowledge_retrieval(knowledge_retrieval)
 	grade_documents(grade_documents)
+	rerank_documents(rerank_documents)
+	compress_context(compress_context)
 	web_search(web_search)
 	generate_answer(generate_answer)
+	verify_answer(verify_answer)
 	save_conversation(save_conversation)
 	__end__([<p>__end__</p>]):::last
 	__start__ --> load_employee_config;
 	check_realtime_query -.-> match_faq;
 	check_realtime_query -.-> web_search;
-	generate_answer --> save_conversation;
-	grade_documents -.-> generate_answer;
-	grade_documents -.-> web_search;
-	input_validation --> check_realtime_query;
+	compress_context -.-> generate_answer;
+	compress_context -.-> web_search;
+	generate_answer --> verify_answer;
+	grade_documents --> rerank_documents;
+	input_validation --> rewrite_query;
 	intent_recognition -.-> generate_answer;
 	intent_recognition -.-> knowledge_retrieval;
 	knowledge_retrieval --> grade_documents;
@@ -31,6 +36,9 @@ graph TD;
 	load_session_context --> input_validation;
 	match_faq -. &nbsp;generate&nbsp; .-> generate_answer;
 	match_faq -.-> intent_recognition;
+	rerank_documents --> compress_context;
+	rewrite_query --> check_realtime_query;
+	verify_answer --> save_conversation;
 	web_search --> generate_answer;
 	save_conversation --> __end__;
 	classDef default fill:#f2f0ff,line-height:1.2

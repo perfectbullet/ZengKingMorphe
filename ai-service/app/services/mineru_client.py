@@ -71,6 +71,47 @@ class MineruClient:
         if self.client:
             await self.client.aclose()
 
+    def _clean_mineru_markdown(self, markdown_text: str) -> str:
+        """
+        清理MinerU输出的markdown噪音,提升embedding质量。
+
+        清理规则:
+        - 移除表格竖线 `|`
+        - 移除markdown加粗标记 `**`
+        - 移除markdown标题标记 `#`
+        - 规范化连续空格和换行
+
+        Args:
+            markdown_text: 原始markdown文本
+
+        Returns:
+            清理后的文本
+        """
+        import re
+
+        if not markdown_text:
+            return ""
+
+        # 移除表格竖线 (保留表格内容,只移除分隔符)
+        text = re.sub(r'\|', ' ', markdown_text)
+
+        # 移除markdown加粗标记
+        text = re.sub(r'\*\*', '', text)
+
+        # 移除markdown标题(但保留标题文本)
+        text = re.sub(r'^#+\s+', '', text, flags=re.MULTILINE)
+
+        # 规范化连续空格为单个空格
+        text = re.sub(r' {2,}', ' ', text)
+
+        # 规范化连续换行(最多保留2个)
+        text = re.sub(r'\n{3,}', '\n\n', text)
+
+        # 移除制表符
+        text = re.sub(r'\t+', ' ', text)
+
+        return text.strip()
+
     def _calculate_md5(self, file_path: str, start_page: int, end_page: int) -> str:
         """
         Calculate MD5 hash for a PDF chunk.
@@ -483,11 +524,21 @@ class MineruClient:
             if all_md_content:
                 # Combine all markdown content and create content items
                 combined_md = "\n\n".join(all_md_content)
-                merged["content"] = [{"text": combined_md}]
+
+                # 清理markdown噪音,提升embedding质量
+                cleaned_md = self._clean_mineru_markdown(combined_md)
+
+                # 同时返回原始内容和清理后的内容
+                merged["content"] = [{"text": cleaned_md}]
+                merged["metadata"]["original_markdown"] = combined_md  # 保留原始内容供调试
+                merged["metadata"]["cleaned_markdown"] = cleaned_md  # 清理后的内容
                 merged["metadata"]["total_pages"] = total_pages or len(sorted_results)
+
                 logger.info(
                     f"Merged {len(sorted_results)} chunk results with md_content",
-                    total_chars=len(combined_md)
+                    total_chars_original=len(combined_md),
+                    total_chars_cleaned=len(cleaned_md),
+                    chars_removed=len(combined_md) - len(cleaned_md)
                 )
             else:
                 logger.info(

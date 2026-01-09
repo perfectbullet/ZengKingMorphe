@@ -359,6 +359,47 @@ class DocumentProcessor:
         
         return text.strip()
     
+    def _calculate_dynamic_chunk_params(self, total_chars: int, file_ext: str = '.txt') -> tuple[int, int]:
+        """
+        根据文档长度动态计算chunk_size和overlap。
+
+        策略:
+        - 短文档 (<1000字): 减少分段,保持完整性
+        - 中等文档 (1000-5000字): 标准分段
+        - 长文档 (5000-20000字): 加大overlap保证上下文连贯
+        - 超长文档 (>20000字): 更小的chunk,更大的overlap
+
+        Args:
+            total_chars: 文档总字符数
+            file_ext: 文件扩展名
+
+        Returns:
+            (chunk_size, chunk_overlap) 元组
+        """
+        # PDF使用MinerU时,由于markdown格式需要更大的chunk
+        is_markdown_based = file_ext in ['.md', '.pdf']
+
+        if total_chars < 1000:
+            # 短文档: 保持完整性,减少分段
+            if is_markdown_based:
+                return 600, 60
+            return 500, 50
+        elif total_chars < 5000:
+            # 中等文档: 标准分段
+            if is_markdown_based:
+                return 500, 80
+            return 400, 60
+        elif total_chars < 20000:
+            # 长文档: 加大overlap保证上下文连贯
+            if is_markdown_based:
+                return 400, 100
+            return 350, 80
+        else:
+            # 超长文档: 更小的chunk,更大的overlap
+            if is_markdown_based:
+                return 300, 120
+            return 256, 100
+
     def _chunk_text(
         self,
         text: str,
@@ -371,14 +412,14 @@ class DocumentProcessor:
         Split text into chunks using RecursiveCharacterTextSplitter.
         Uses language-specific separators for markdown/html, custom for txt.
         Supports custom chunk configuration from Java platform.
-        
+
         Args:
             text: Text content
             doc_id: Document ID
             kb_id: Knowledge base ID
             file_ext: File extension (e.g., '.md', '.html', '.txt', '.pdf')
             chunk_config: Custom chunking configuration (optional)
-            
+
         Returns:
             List of document chunks
         """
@@ -388,9 +429,17 @@ class DocumentProcessor:
             chunk_overlap = min(chunk_size // 10, 50)  # 10% overlap, max 50
             segment_type = chunk_config.get('segment_type', 0)
         else:
-            chunk_size = settings.chunk_size
-            chunk_overlap = settings.chunk_overlap
+            # 使用动态分段策略
+            chunk_size, chunk_overlap = self._calculate_dynamic_chunk_params(len(text), file_ext or '.txt')
             segment_type = -1  # Use default logic
+
+            logger.info(
+                "Using dynamic chunking params",
+                doc_id=doc_id,
+                total_chars=len(text),
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap
+            )
         
         # Determine separators
         separators = None

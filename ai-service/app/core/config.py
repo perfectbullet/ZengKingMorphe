@@ -205,6 +205,24 @@ class Settings(BaseSettings):
         description="Cache time-to-live in days for MinerU results"
     )
 
+    # RAG Optimization Configuration
+    query_rewrite_enabled: bool = Field(
+        default=False,
+        description="Enable query rewriting using LLM for better retrieval"
+    )
+    rerank_enabled: bool = Field(
+        default=False,
+        description="Enable document reranking using Grader LLM"
+    )
+    context_compression_enabled: bool = Field(
+        default=False,
+        description="Enable context compression to reduce token usage"
+    )
+    answer_verification_enabled: bool = Field(
+        default=False,
+        description="Enable answer consistency checking with source documents"
+    )
+
     # JWT Configuration
     jwt_secret_key: str = Field(..., description="JWT secret key for token signing")
     jwt_algorithm: str = Field(default="HS256", description="JWT signing algorithm")
