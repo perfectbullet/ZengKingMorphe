@@ -159,6 +159,39 @@ deleted_count = await client.clear_cache(older_than_days=30)
 print(f"已清理 {deleted_count} 条缓存记录")
 ```
 
+### 方式三：通过测试脚本
+
+```bash
+# 处理 PDF 文件
+python tests/test_mineru_client.py process --file path/to/document.pdf
+
+# 处理并保存 Markdown 结果
+python tests/test_mineru_client.py process --file path/to/document.pdf --save-md
+# Markdown 文件保存到: ai-service/docs/mineru_output/<文件名>.md
+
+# 查询任务状态
+python tests/test_mineru_client.py status --job-id job_id_here
+
+# 清理缓存
+python tests/test_mineru_client.py clear-cache --days 30
+```
+
+### 方式四：通过 Web API
+
+```bash
+# 获取最近的任务列表
+GET /api/mineru/jobs?limit=10
+
+# 获取任务详情
+GET /api/mineru/jobs/{job_id}
+
+# 获取任务的 Markdown 内容
+GET /api/mineru/jobs/{job_id}/markdown
+
+# 访问 Web 管理页面
+GET /api/mineru/view
+```
+
 ## 工作流程
 
 ```

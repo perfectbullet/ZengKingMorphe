@@ -126,14 +126,35 @@ async with client:
 ### 测试脚本
 ```bash
 # 处理 PDF
-python scripts/test_mineru_client.py process --file path/to/file.pdf
+python tests/test_mineru_client.py process --file path/to/file.pdf
+
+# 处理并保存 Markdown
+python tests/test_mineru_client.py process --file path/to/file.pdf --save-md
 
 # 查询任务状态
-python scripts/test_mineru_client.py status --job-id job_id_here
+python tests/test_mineru_client.py status --job-id job_id_here
 
 # 清理缓存
-python scripts/test_mineru_client.py clear-cache --days 30
+python tests/test_mineru_client.py clear-cache --days 30
 ```
+
+### Web API 接口
+```bash
+# 获取最近的任务列表
+GET /api/mineru/jobs?limit=10
+
+# 获取任务详情
+GET /api/mineru/jobs/{job_id}
+
+# 获取任务的 Markdown 内容
+GET /api/mineru/jobs/{job_id}/markdown
+
+# Web 管理页面（浏览器访问）
+GET /api/mineru/view
+```
+
+**新增文件**:
+- [ai-service/app/api/endpoints/mineru.py](ai-service/app/api/endpoints/mineru.py) - Web API 接口实现
 
 ## 工作流程
 
@@ -243,10 +264,11 @@ except Exception as e:
 | 文件 | 说明 |
 |------|------|
 | [ai-service/app/services/mineru_client.py](ai-service/app/services/mineru_client.py) | MinerU 客户端实现 |
+| [ai-service/app/api/endpoints/mineru.py](ai-service/app/api/endpoints/mineru.py) | Web API 接口 |
 | [ai-service/app/services/document_service.py](ai-service/app/services/document_service.py) | DocumentProcessor 集成（修改） |
 | [ai-service/app/core/config.py](ai-service/app/core/config.py) | 配置项（新增） |
+| [ai-service/tests/test_mineru_client.py](ai-service/tests/test_mineru_client.py) | 测试脚本 |
 | [docs/MinerU客户端使用指南.md](docs/MinerU客户端使用指南.md) | 详细使用文档 |
-| [scripts/test_mineru_client.py](ai-service/scripts/test_mineru_client.py) | 测试脚本 |
 
 ## 依赖项
 
