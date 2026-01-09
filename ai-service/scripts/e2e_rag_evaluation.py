@@ -19,6 +19,7 @@ import aiohttp
 import json
 import time
 import sys
+import logging
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Any, Optional
@@ -28,19 +29,127 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 
+class E2ELogger:
+    """端到端评估专用日志记录器"""
+
+    def __init__(self, log_dir: Path = None):
+        """
+        初始化日志记录器
+
+        Args:
+            log_dir: 日志目录,默认为脚本目录下的logs文件夹
+        """
+        if log_dir is None:
+            log_dir = Path(__file__).parent / "logs"
+
+        log_dir.mkdir(exist_ok=True)
+
+        # 创建日志文件名(带时间戳)
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        log_file = log_dir / f"rag_eval_{timestamp}.log"
+
+        # 配置日志格式
+        self.logger = logging.getLogger("E2ERAGEvaluation")
+        self.logger.setLevel(logging.DEBUG)  # 设置为DEBUG级别以支持debug日志
+
+        # 清除已有的handlers
+        self.logger.handlers.clear()
+
+        # 创建格式化器
+        formatter = logging.Formatter(
+            fmt='%(asctime)s | %(levelname)-8s | %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+
+        # 文件Handler - 记录所有日志
+        file_handler = logging.FileHandler(log_file, encoding='utf-8')
+        file_handler.setLevel(logging.INFO)
+        file_handler.setFormatter(formatter)
+        self.logger.addHandler(file_handler)
+
+        # 控制台Handler - 只显示重要信息
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setLevel(logging.INFO)
+        console_handler.setFormatter(formatter)
+        self.logger.addHandler(console_handler)
+
+        self.log_file = log_file
+        self.logger.info("=" * 80)
+        self.logger.info("RAG端到端评估测试 - 日志系统初始化完成")
+        self.logger.info(f"日志文件: {log_file}")
+        self.logger.info("=" * 80)
+
+    def info(self, msg: str, **kwargs):
+        """记录信息级别日志"""
+        # 格式化额外的键值对参数
+        extra_info = " | ".join([f"{k}={v}" for k, v in kwargs.items()])
+        if extra_info:
+            msg = f"{msg} | {extra_info}"
+        self.logger.info(msg)
+
+    def warning(self, msg: str, **kwargs):
+        """记录警告级别日志"""
+        extra_info = " | ".join([f"{k}={v}" for k, v in kwargs.items()])
+        if extra_info:
+            msg = f"{msg} | {extra_info}"
+        self.logger.warning(msg)
+
+    def error(self, msg: str, **kwargs):
+        """记录错误级别日志"""
+        extra_info = " | ".join([f"{k}={v}" for k, v in kwargs.items()])
+        if extra_info:
+            msg = f"{msg} | {extra_info}"
+        self.logger.error(msg)
+
+    def success(self, msg: str, **kwargs):
+        """记录成功信息"""
+        extra_info = " | ".join([f"{k}={v}" for k, v in kwargs.items()])
+        if extra_info:
+            msg = f"✓ {msg} | {extra_info}"
+        else:
+            msg = f"✓ {msg}"
+        self.logger.info(msg)
+
+    def step(self, step_num: int, step_name: str):
+        """记录步骤信息"""
+        self.logger.info("")
+        self.logger.info("=" * 80)
+        self.logger.info(f"[步骤 {step_num}] {step_name}")
+        self.logger.info("=" * 80)
+
+    def debug(self, msg: str, **kwargs):
+        """记录调试级别日志"""
+        extra_info = " | ".join([f"{k}={v}" for k, v in kwargs.items()])
+        if extra_info:
+            msg = f"{msg} | {extra_info}"
+        self.logger.debug(msg)
+
+    def close(self):
+        """关闭日志系统"""
+        self.logger.info("=" * 80)
+        self.logger.info("日志记录完成")
+        self.logger.info("=" * 80)
+        for handler in self.logger.handlers:
+            handler.close()
+            self.logger.removeHandler(handler)
+
+
 class E2ERAGEvaluation:
     """RAG端到端评估"""
 
     def __init__(
         self,
         base_url: str = "http://localhost:8000",
-        pdf_dir: str = r"D:\zenking_work\期刊文件",
+        pdf_dir: str = r"D:\\zenking_work\\期刊文件",
         api_key: str = "y2tJW3P0bvZIxw6pGuV2FrcT0C1wyUfg2ldweEaDYN4"
     ):
         self.base_url = base_url
         self.pdf_dir = Path(pdf_dir)
         self.api_key = api_key
         self.headers = {"X-API-Key": api_key}
+
+        # 初始化日志系统
+        self.logger = E2ELogger()
 
         # 测试结果
         self.test_run_id = f"rag_eval_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -57,6 +166,9 @@ class E2ERAGEvaluation:
             "chat_responses": [],
             "evaluation": {}
         }
+
+        self.logger.info("初始化RAG端到端评估", test_run_id=self.test_run_id)
+        self.logger.info("配置信息", base_url=base_url, pdf_dir=pdf_dir)
 
     async def _request(
         self,
@@ -80,42 +192,23 @@ class E2ERAGEvaluation:
 
     async def create_knowledge_base(
         self,
+        kb_id: str = "kb_e2bc0ea588c4",
         name: str = "RAG端到端评估知识库",
-        description: str = "用于RAG端到端评估的测试知识库",
-        category: str = "测试"
+        description: str = "用于RAG端到端评估的测试知识库"
     ) -> str:
-        """1. 创建知识库"""
-        print(f"\n[1] 创建知识库: {name}")
+        """1. 使用现有知识库"""
+        self.logger.step(1, "使用现有知识库")
+        self.logger.info("知识库信息", kb_id=kb_id, name=name, description=description)
 
-        url = f"{self.base_url}/api/knowledge-base/create"
+        # 直接使用现有的知识库
+        self.results["kb_info"] = {
+            "kb_id": kb_id,
+            "name": name,
+            "description": description,
+            "existing": True
+        }
 
-        data = aiohttp.FormData()
-        data.add_field("name", name)
-        data.add_field("description", description)
-        data.add_field("category", category)
-
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                url,
-                headers=self.headers,
-                data=data
-            ) as response:
-                if response.status >= 400:
-                    error_text = await response.text()
-                    raise Exception(f"创建知识库失败: {error_text}")
-
-                result = await response.json()
-                kb_id = result.get("data", {}).get("kb_id") or result.get("kb_id")
-
-                self.results["kb_info"] = {
-                    "kb_id": kb_id,
-                    "name": name,
-                    "description": description,
-                    "category": category
-                }
-
-                print(f"    知识库创建成功: {kb_id}")
-                return kb_id
+        return kb_id
 
     async def upload_documents(
         self,
@@ -123,37 +216,48 @@ class E2ERAGEvaluation:
         use_mineru: bool = True
     ) -> List[str]:
         """2. 上传所有PDF文档"""
-        print(f"\n[2] 上传文档到知识库: {kb_id}")
-        print(f"    PDF目录: {self.pdf_dir}")
+        self.logger.step(2, "上传文档到知识库")
+        self.logger.info("开始上传文档", kb_id=kb_id, pdf_dir=str(self.pdf_dir), use_mineru=use_mineru)
 
         pdf_files = list(self.pdf_dir.glob("*.pdf"))
         if not pdf_files:
-            print(f"    警告: 没有找到PDF文件")
+            self.logger.warning("没有找到PDF文件", pdf_dir=str(self.pdf_dir))
             return []
 
-        print(f"    找到 {len(pdf_files)} 个PDF文件")
+        self.logger.info(f"找到PDF文件", count=len(pdf_files))
 
         uploaded_files = []
         url = f"{self.base_url}/api/knowledge-base/documents/upload"
 
-        for i, pdf_file in enumerate(pdf_files, 1):
-            print(f"    [{i}/{len(pdf_files)}] 上传: {pdf_file.name}")
+        # 创建单个session用于所有上传
+        async with aiohttp.ClientSession() as session:
+            for i, pdf_file in enumerate(pdf_files, 1):
+                self.logger.info(f"开始上传", file_name=pdf_file.name, index=i, total=len(pdf_files))
 
-            data = aiohttp.FormData()
-            data.add_field("kb_id", kb_id)
-            data.add_field("category", "测试文档")
-            data.add_field("use_mineru", "true" if use_mineru else "false")
+                try:
+                    # 读取文件内容
+                    with open(pdf_file, "rb") as f:
+                        file_content = f.read()
 
-            with open(pdf_file, "rb") as f:
-                data.add_field(
-                    "files",
-                    f,
-                    filename=pdf_file.name,
-                    content_type="application/pdf"
-                )
+                    self.logger.debug(f"读取文件成功", file_name=pdf_file.name, size=len(file_content))
 
-            try:
-                async with aiohttp.ClientSession() as session:
+                    # 创建FormData
+                    data = aiohttp.FormData()
+                    data.add_field("kb_id", kb_id)
+                    data.add_field("category", "测试文档")
+                    data.add_field("use_mineru", "true" if use_mineru else "false")
+
+                    # 添加文件(使用BytesIO)
+                    from io import BytesIO
+                    file_buffer = BytesIO(file_content)
+                    data.add_field(
+                        "files",
+                        file_buffer.getvalue(),
+                        filename=pdf_file.name,
+                        content_type="application/pdf"
+                    )
+
+                    # 发送请求
                     async with session.post(
                         url,
                         headers=self.headers,
@@ -162,7 +266,7 @@ class E2ERAGEvaluation:
                     ) as response:
                         if response.status >= 400:
                             error_text = await response.text()
-                            print(f"        失败: {error_text}")
+                            self.logger.error(f"上传失败", file_name=pdf_file.name, status=response.status, error=error_text[:200])
                             continue
 
                         result = await response.json()
@@ -174,60 +278,52 @@ class E2ERAGEvaluation:
                             "doc_id": doc_id,
                             "task_id": task_id
                         })
-                        print(f"        成功: doc_id={doc_id}")
+                        self.logger.success(f"上传成功", file_name=pdf_file.name, doc_id=doc_id)
 
-            except Exception as e:
-                print(f"        异常: {e}")
+                except Exception as e:
+                    self.logger.error(f"上传异常", file_name=pdf_file.name, error=str(e))
+                    import traceback
+                    self.logger.error(f"详细错误", file_name=pdf_file.name, traceback=traceback.format_exc()[:500])
 
         self.results["uploaded_files"] = uploaded_files
-        print(f"\n    成功上传 {len(uploaded_files)}/{len(pdf_files)} 个文档")
+        self.logger.info(f"上传完成", success_count=len(uploaded_files), total_count=len(pdf_files))
         return [f["doc_id"] for f in uploaded_files]
 
-    async def create_employee(
+    async def load_employee(
         self,
-        kb_id: str,
-        employee_id: str = "rag_eval_employee",
-        name: str = "RAG评估助手"
+        employee_id: str = "financial_analyst"
     ) -> Dict[str, Any]:
-        """3. 创建数字员工并绑定知识库"""
-        print(f"\n[3] 创建数字员工并绑定知识库")
+        """3. 加载现有数字员工"""
+        self.logger.step(3, "加载现有数字员工")
 
-        url = f"{self.base_url}/api/ai/digital-employee/create"
+        url = f"{self.base_url}/api/ai/digital-employee/detail/{employee_id}"
 
-        employee_data = {
-            "employee_id": employee_id,
-            "name": name,
-            "domain": "测试评估",
-            "role": "RAG评估测试助手",
-            "description": "用于RAG端到端评估的测试数字员工",
-            "personality": {
-                "tone": "professional",
-                "style": "friendly",
-                "language": "zh-CN",
-                "formality": "moderate"
-            },
-            "capabilities": {
-                "kb_ids": [kb_id],
-                "web_search_enabled": False,  # 禁用网络搜索,只测试知识库
-                "max_context_turns": 10
-            },
-            "greeting": "您好！我是RAG评估测试助手，请问有什么可以帮助您？",
-            "hot_questions": [
-                "知识库中有哪些文档？",
-                "请简要介绍一下这些文档的主要内容"
-            ]
-        }
+        self.logger.info("获取数字员工信息", employee_id=employee_id)
 
-        response = await self._request("POST", url, json=employee_data)
+        response = await self._request("GET", url)
+        employee_data = response.get("data", {})
+
+        if not employee_data:
+            raise Exception(f"Employee not found: {employee_id}")
 
         self.results["employee_info"] = {
-            "employee_id": employee_id,
-            "name": name,
-            "kb_id": kb_id
+            "employee_id": employee_data.get("employee_id"),
+            "name": employee_data.get("name"),
+            "domain": employee_data.get("domain"),
+            "role": employee_data.get("role"),
+            "description": employee_data.get("description"),
+            "kb_ids": employee_data.get("kb_ids", employee_data.get("capabilities", {}).get("kb_ids", [])),
+            "web_search_enabled": employee_data.get("capabilities", {}).get("web_search_enabled", False),
+            "greeting": employee_data.get("greeting"),
+            "hot_questions": employee_data.get("hot_questions", [])
         }
 
-        print(f"    数字员工创建成功: {employee_id}")
-        print(f"    绑定知识库: {kb_id}")
+        self.logger.success(
+            "数字员工加载成功",
+            employee_id=employee_id,
+            name=employee_data.get("name"),
+            kb_ids=self.results["employee_info"]["kb_ids"]
+        )
         return self.results["employee_info"]
 
     async def wait_for_documents_completion(
@@ -237,10 +333,12 @@ class E2ERAGEvaluation:
         check_interval: int = 10  # 每10秒检查一次
     ) -> bool:
         """4. 等待所有文档处理完成"""
-        print(f"\n[4] 等待文档处理完成...")
+        self.logger.step(4, "等待文档处理完成")
 
         start_time = time.time()
         last_doc_count = 0
+
+        self.logger.info("开始轮询文档状态", kb_id=kb_id, timeout=timeout, check_interval=check_interval)
 
         while time.time() - start_time < timeout:
             url = f"{self.base_url}/api/knowledge-base/documents/list"
@@ -260,28 +358,37 @@ class E2ERAGEvaluation:
                 total = len(documents)
 
                 if total > last_doc_count:
-                    print(f"    检测到 {total} 个文档")
+                    self.logger.info("检测到新文档", total=total)
 
                 last_doc_count = total
 
-                print(f"    进度: {completed}/{total} 完成, {processing} 处理中, {failed} 失败", end="\r")
+                # 使用日志记录进度（不带\r，因为日志系统会自动处理）
+                elapsed = int(time.time() - start_time)
+                self.logger.info(
+                    "文档处理进度",
+                    completed=completed,
+                    total=total,
+                    processing=processing,
+                    failed=failed,
+                    elapsed=f"{elapsed}s"
+                )
 
-                if completed + failed >= total:
-                    print(f"\n    所有文档处理完成! (成功: {completed}, 失败: {failed})")
+                if completed + failed >= total and total > 0:
+                    self.logger.success("所有文档处理完成", completed=completed, failed=failed, total=total)
                     return True
 
                 await asyncio.sleep(check_interval)
 
             except Exception as e:
-                print(f"\n    检查文档状态失败: {e}")
+                self.logger.error("检查文档状态失败", error=str(e))
                 await asyncio.sleep(check_interval)
 
-        print(f"\n    超时! 部分文档未完成处理")
+        self.logger.warning("文档处理超时", timeout=timeout)
         return False
 
     async def get_mineru_jobs_and_content(self) -> List[Dict[str, Any]]:
         """5. 获取MinerU任务和markdown内容"""
-        print(f"\n[5] 获取MinerU任务和markdown内容")
+        self.logger.step(5, "获取MinerU任务和markdown内容")
 
         # 获取任务列表
         jobs_url = f"{self.base_url}/api/mineru/jobs"
@@ -291,10 +398,10 @@ class E2ERAGEvaluation:
             jobs = response.get("data", [])
 
             if not jobs:
-                print(f"    没有找到MinerU任务")
+                self.logger.warning("没有找到MinerU任务")
                 return []
 
-            print(f"    找到 {len(jobs)} 个MinerU任务")
+            self.logger.info("找到MinerU任务", count=len(jobs))
 
             job_contents = []
 
@@ -304,7 +411,7 @@ class E2ERAGEvaluation:
                 status = job.get("status", "unknown")
 
                 if status != "completed":
-                    print(f"    跳过未完成的任务: {file_name} ({status})")
+                    self.logger.warning("跳过未完成的任务", file_name=file_name, status=status)
                     continue
 
                 # 获取任务的markdown内容
@@ -321,16 +428,17 @@ class E2ERAGEvaluation:
                         "status": status,
                         "content_length": len(markdown_content)
                     })
-                    print(f"    获取 {file_name}: {len(markdown_content)} 字符")
+                    self.logger.info("获取markdown成功", file_name=file_name, content_length=len(markdown_content))
 
                 except Exception as e:
-                    print(f"    获取 {file_name} 失败: {e}")
+                    self.logger.error("获取markdown失败", file_name=file_name, error=str(e))
 
             self.results["mineru_jobs"] = job_contents
+            self.logger.success("MinerU任务获取完成", total=len(job_contents))
             return job_contents
 
         except Exception as e:
-            print(f"    获取MinerU任务失败: {e}")
+            self.logger.error("获取MinerU任务失败", error=str(e))
             return []
 
     async def generate_qa_pairs(
@@ -339,7 +447,7 @@ class E2ERAGEvaluation:
         questions_per_doc: int = 3
     ) -> List[Dict[str, Any]]:
         """6. 基于文档内容生成问答对"""
-        print(f"\n[6] 基于文档内容生成问答对")
+        self.logger.step(6, "基于文档内容生成问答对")
 
         from app.core.config import settings
         from langchain_openai import ChatOpenAI
@@ -362,9 +470,11 @@ class E2ERAGEvaluation:
 
         qa_pairs = []
 
+        self.logger.info("开始生成问答对", total_docs=len(job_contents), questions_per_doc=questions_per_doc)
+
         for i, doc in enumerate(job_contents, 1):
             if not doc.get("markdown") or len(doc["markdown"]) < 500:
-                print(f"    [{i}/{len(job_contents)}] 跳过内容过短的文档: {doc['file_name']}")
+                self.logger.warning("跳过内容过短的文档", index=i, total=len(job_contents), file_name=doc['file_name'])
                 continue
 
             # 截取部分内容生成问题
@@ -415,10 +525,10 @@ class E2ERAGEvaluation:
                         "source_job_id": doc["job_id"]
                     })
 
-                print(f"    [{i}/{len(job_contents)}] {doc['file_name']}: 生成 {len(doc_qa_pairs)} 个问答对")
+                self.logger.info("生成问答对成功", index=i, total=len(job_contents), file_name=doc['file_name'], count=len(doc_qa_pairs))
 
             except Exception as e:
-                print(f"    [{i}/{len(job_contents)}] {doc['file_name']}: 生成失败 - {e}")
+                self.logger.error("生成问答对失败", index=i, total=len(job_contents), file_name=doc['file_name'], error=str(e))
                 # 手动创建通用问答对
                 qa_pairs.append({
                     "question": f"请简要介绍《{doc['file_name'].replace('.pdf', '')}》的主要内容",
@@ -428,13 +538,13 @@ class E2ERAGEvaluation:
                 })
 
         self.results["qa_pairs"] = qa_pairs
-        print(f"\n    总共生成 {len(qa_pairs)} 个问答对")
+        self.logger.success("问答对生成完成", total=len(qa_pairs))
 
         # 保存问答对到文件
         qa_file = Path(__file__).parent / f"rag_eval_qa_{self.test_run_id}.json"
         with open(qa_file, "w", encoding="utf-8") as f:
             json.dump(qa_pairs, f, ensure_ascii=False, indent=2)
-        print(f"    问答对已保存到: {qa_file}")
+        self.logger.info("问答对已保存", file_path=str(qa_file))
 
         return qa_pairs
 
@@ -483,13 +593,15 @@ class E2ERAGEvaluation:
         employee_id: str
     ) -> List[Dict[str, Any]]:
         """7. 测试问答对并收集响应"""
-        print(f"\n[7] 测试问答接口...")
+        self.logger.step(7, "测试问答接口")
 
         session_id = f"rag_eval_{int(time.time())}"
         chat_responses = []
 
+        self.logger.info("开始测试问答", total_qa=len(qa_pairs), session_id=session_id, employee_id=employee_id)
+
         for i, qa in enumerate(qa_pairs, 1):
-            print(f"    [{i}/{len(qa_pairs)}] {qa['question'][:50]}...")
+            self.logger.info("测试问题", index=i, total=len(qa_pairs), question=qa['question'][:50])
 
             try:
                 start_time = time.time()
@@ -508,10 +620,10 @@ class E2ERAGEvaluation:
                     "response_time_ms": int(elapsed * 1000)
                 })
 
-                print(f"        答案长度: {len(answer)} 字符, 耗时: {elapsed:.2f}s")
+                self.logger.info("回答成功", index=i, answer_length=len(answer), elapsed=f"{elapsed:.2f}s")
 
             except Exception as e:
-                print(f"        失败: {e}")
+                self.logger.error("问答失败", index=i, error=str(e))
                 chat_responses.append({
                     "question": qa["question"],
                     "reference_answer": qa["reference_answer"],
@@ -522,7 +634,7 @@ class E2ERAGEvaluation:
                 })
 
         self.results["chat_responses"] = chat_responses
-        print(f"\n    完成 {len(chat_responses)} 个问答测试")
+        self.logger.success("问答测试完成", total=len(chat_responses))
         return chat_responses
 
     async def evaluate_rag_quality(
@@ -530,7 +642,7 @@ class E2ERAGEvaluation:
         chat_responses: List[Dict[str, Any]]
     ) -> Dict[str, Any]:
         """8. 评估RAG质量"""
-        print(f"\n[8] 评估RAG质量...")
+        self.logger.step(8, "评估RAG质量")
 
         from app.core.config import settings
         from langchain_openai import ChatOpenAI
@@ -562,8 +674,11 @@ class E2ERAGEvaluation:
 
         detailed_evaluations = []
 
+        self.logger.info("开始评估问答质量", total_responses=len(chat_responses))
+
         for response in chat_responses:
             if "error" in response:
+                self.logger.warning("跳过错误响应", question=response.get("question", "unknown")[:50])
                 continue
 
             eval_prompt = f"""请评估以下问答的质量。
@@ -615,11 +730,17 @@ class E2ERAGEvaluation:
                     "reasoning": eval_result.get("reasoning", "")
                 })
 
-                print(f"    评分: 相关={relevance:.2f}, 准确={accuracy:.2f}, "
-                      f"完整={completeness:.2f}, 综合={overall:.2f}")
+                self.logger.info(
+                    "质量评分",
+                    question=response["question"][:40],
+                    relevance=f"{relevance:.2f}",
+                    accuracy=f"{accuracy:.2f}",
+                    completeness=f"{completeness:.2f}",
+                    overall=f"{overall:.2f}"
+                )
 
             except Exception as e:
-                print(f"    评估失败: {e}")
+                self.logger.error("评估失败", question=response.get("question", "unknown")[:50], error=str(e))
 
         # 计算平均分
         evaluation = {}
@@ -634,13 +755,14 @@ class E2ERAGEvaluation:
 
         self.results["evaluation"] = evaluation
 
-        print(f"\n    === RAG质量评估报告 ===")
+        # 输出评估报告
+        self.logger.info("RAG质量评估报告")
         if evaluation:
-            print(f"    评估数量: {evaluation['total_evaluated']}")
-            print(f"    平均相关性: {evaluation['avg_relevance']:.3f}")
-            print(f"    平均准确性: {evaluation['avg_accuracy']:.3f}")
-            print(f"    平均完整性: {evaluation['avg_completeness']:.3f}")
-            print(f"    综合得分: {evaluation['avg_overall']:.3f}")
+            self.logger.info("评估统计", total=evaluation['total_evaluated'])
+            self.logger.info("平均相关性", score=f"{evaluation['avg_relevance']:.3f}")
+            self.logger.info("平均准确性", score=f"{evaluation['avg_accuracy']:.3f}")
+            self.logger.info("平均完整性", score=f"{evaluation['avg_completeness']:.3f}")
+            self.logger.info("综合得分", score=f"{evaluation['avg_overall']:.3f}")
 
             # 评估等级
             overall = evaluation['avg_overall']
@@ -653,19 +775,20 @@ class E2ERAGEvaluation:
             else:
                 grade = "不及格"
 
-            print(f"    评估等级: {grade}")
+            self.logger.success("RAG质量评估完成", grade=grade, score=f"{overall:.3f}")
 
         return evaluation
 
     async def save_results(self):
         """9. 保存完整测试结果"""
+        self.logger.step(9, "保存测试结果")
+
         results_file = Path(__file__).parent / f"rag_eval_results_{self.test_run_id}.json"
 
         with open(results_file, "w", encoding="utf-8") as f:
             json.dump(self.results, f, ensure_ascii=False, indent=2)
 
-        print(f"\n[9] 完整结果已保存到: {results_file}")
-        print(f"    测试ID: {self.test_run_id}")
+        self.logger.success("完整结果已保存", file_path=str(results_file), test_id=self.test_run_id)
 
         # 同时保存一份简化的报告
         summary_file = Path(__file__).parent / f"rag_eval_summary_{self.test_run_id}.txt"
@@ -708,23 +831,24 @@ class E2ERAGEvaluation:
                     f.write(f"  综合: {item['overall']:.2f}\n")
                     f.write(f"  理由: {item['reasoning'][:100]}\n")
 
-        print(f"    简化报告已保存到: {summary_file}")
+        self.logger.success("简化报告已保存", file_path=str(summary_file))
 
     async def run_full_evaluation(self):
         """运行完整的端到端评估"""
-        print("=" * 60)
-        print("RAG端到端评估测试")
-        print("=" * 60)
+        self.logger.info("")
+        self.logger.info("=" * 60)
+        self.logger.info("RAG端到端评估测试")
+        self.logger.info("=" * 60)
 
         try:
-            # 1. 创建知识库
+            # 1. 使用现有知识库
             kb_id = await self.create_knowledge_base()
 
             # 2. 上传文档
             await self.upload_documents(kb_id)
 
-            # 3. 创建数字员工
-            await self.create_employee(kb_id)
+            # 3. 加载现有数字员工
+            await self.load_employee()
 
             # 4. 等待文档处理完成
             await self.wait_for_documents_completion(kb_id)
@@ -733,14 +857,14 @@ class E2ERAGEvaluation:
             job_contents = await self.get_mineru_jobs_and_content()
 
             if not job_contents:
-                print("\n    没有可用的文档内容,测试终止")
+                self.logger.warning("没有可用的文档内容,测试终止")
                 return
 
             # 6. 生成问答对
             qa_pairs = await self.generate_qa_pairs(job_contents)
 
             if not qa_pairs:
-                print("\n    没有生成问答对,测试终止")
+                self.logger.warning("没有生成问答对,测试终止")
                 return
 
             # 7. 测试问答
@@ -753,13 +877,13 @@ class E2ERAGEvaluation:
             await self.save_results()
 
         except Exception as e:
-            print(f"\n错误: {e}")
-            import traceback
-            traceback.print_exc()
+            self.logger.error("评估过程中发生错误", error=str(e), exc_info=True)
 
-        print("\n" + "=" * 60)
-        print("测试完成!")
-        print("=" * 60)
+        self.logger.info("")
+        self.logger.info("=" * 60)
+        self.logger.success("测试完成!")
+        self.logger.info("=" * 60)
+        self.logger.info("")
 
 
 async def main():
@@ -768,15 +892,18 @@ async def main():
 
     # 检查PDF目录
     if not test.pdf_dir.exists():
-        print(f"错误: PDF目录不存在: {test.pdf_dir}")
-        print(f"当前目录: {Path.cwd()}")
+        test.logger.error("PDF目录不存在", pdf_dir=str(test.pdf_dir))
+        test.logger.error("当前目录", cwd=str(Path.cwd()))
+        test.logger.close()
         return
 
-    print(f"PDF目录: {test.pdf_dir}")
-    print(f"Base URL: {test.base_url}")
+    test.logger.info("配置验证", pdf_dir=str(test.pdf_dir), base_url=test.base_url)
 
     # 运行完整评估
     await test.run_full_evaluation()
+
+    # 关闭日志系统
+    test.logger.close()
 
 
 if __name__ == "__main__":
