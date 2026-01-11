@@ -207,6 +207,33 @@ class RAGRetrieval:
             # Fallback to vector search only
             return await self._vector_search(query, kb_ids, top_k)
     
+    def _create_doc_fusion_entry(
+        self,
+        result: Dict[str, Any],
+        score: float,
+        rank: int,
+        source_type: str
+    ) -> Dict[str, Any]:
+        """Create a new entry for document RRF fusion."""
+        entry = {
+            "content": result.get("content", ""),
+            "doc_id": result.get("doc_id"),
+            "kb_id": result.get("kb_id"),
+            "chunk_index": result.get("chunk_index"),
+            "rrf_score": 0.0,
+            "vector_rank": None,
+            "keyword_rank": None
+        }
+        if source_type == "vector":
+            entry["vector_score"] = score
+            entry["keyword_score"] = 0.0
+            entry["vector_rank"] = rank
+        else:
+            entry["vector_score"] = 0.0
+            entry["keyword_score"] = score
+            entry["keyword_rank"] = rank
+        return entry
+
     def _rrf_fusion(
         self,
         vector_results: List[Dict[str, Any]],
@@ -215,70 +242,50 @@ class RAGRetrieval:
     ) -> List[Dict[str, Any]]:
         """
         Reciprocal Rank Fusion algorithm.
-        
+
         RRF formula: score(d) = Σ 1 / (k + rank_i(d))
-        
+
         Args:
             vector_results: Results from vector search
             keyword_results: Results from keyword search
             k: RRF constant (default 60)
-            
+
         Returns:
             Fused and ranked results
         """
-        # Create document score map
         doc_scores: Dict[str, Dict[str, Any]] = {}
-        
+
         # Add vector search scores
         for rank, result in enumerate(vector_results, start=1):
             chunk_id = f"{result['doc_id']}_{result['chunk_index']}"
             if chunk_id not in doc_scores:
-                doc_scores[chunk_id] = {
-                    "content": result["content"],
-                    "doc_id": result["doc_id"],
-                    "kb_id": result["kb_id"],
-                    "chunk_index": result["chunk_index"],
-                    "rrf_score": 0.0,
-                    "vector_score": result["score"],
-                    "keyword_score": 0.0,
-                    "vector_rank": rank,
-                    "keyword_rank": None
-                }
-            
-            # Add RRF score
+                doc_scores[chunk_id] = self._create_doc_fusion_entry(result, result["score"], rank, "vector")
             doc_scores[chunk_id]["rrf_score"] += 1.0 / (k + rank)
-        
+
         # Add keyword search scores
         for rank, result in enumerate(keyword_results, start=1):
             chunk_id = f"{result['doc_id']}_{result['chunk_index']}"
             if chunk_id not in doc_scores:
-                doc_scores[chunk_id] = {
-                    "content": result["content"],
-                    "doc_id": result["doc_id"],
-                    "kb_id": result["kb_id"],
-                    "chunk_index": result["chunk_index"],
-                    "rrf_score": 0.0,
-                    "vector_score": 0.0,
-                    "keyword_score": result["score"],
-                    "vector_rank": None,
-                    "keyword_rank": rank
-                }
+                doc_scores[chunk_id] = self._create_doc_fusion_entry(result, result["score"], rank, "keyword")
             else:
                 doc_scores[chunk_id]["keyword_score"] = result["score"]
                 doc_scores[chunk_id]["keyword_rank"] = rank
-            
-            # Add RRF score
             doc_scores[chunk_id]["rrf_score"] += 1.0 / (k + rank)
-        
+
         # Sort by RRF score
         sorted_docs = sorted(
             doc_scores.values(),
             key=lambda x: x["rrf_score"],
             reverse=True
         )
-        
-        logger.info(f"RRF fusion completed: vector_count={len(vector_results)}", keyword_count=len(keyword_results), fused_count=len(sorted_docs))
-        
+
+        logger.info(
+            "RRF fusion completed",
+            vector_count=len(vector_results),
+            keyword_count=len(keyword_results),
+            fused_count=len(sorted_docs)
+        )
+
         return sorted_docs
     
     async def faq_hybrid_search(
@@ -471,6 +478,32 @@ class RAGRetrieval:
             logger.error(f"FAQ keyword search failed: query={query}, error={str(e)}", exc_info=True)
             return []
     
+    def _create_faq_fusion_entry(
+        self,
+        result: Dict[str, Any],
+        score: float,
+        rank: int,
+        source_type: str
+    ) -> Dict[str, Any]:
+        """Create a new entry for FAQ RRF fusion."""
+        entry = {
+            "faq_id": result["faq_id"],
+            "question_name": result["question_name"],
+            "combined_text": result["combined_text"],
+            "rrf_score": 0.0,
+            "vector_rank": None,
+            "keyword_rank": None
+        }
+        if source_type == "vector":
+            entry["vector_score"] = score
+            entry["keyword_score"] = 0.0
+            entry["vector_rank"] = rank
+        else:
+            entry["vector_score"] = 0.0
+            entry["keyword_score"] = score
+            entry["keyword_rank"] = rank
+        return entry
+
     def _faq_rrf_fusion(
         self,
         vector_results: List[Dict[str, Any]],
@@ -479,63 +512,48 @@ class RAGRetrieval:
     ) -> List[Dict[str, Any]]:
         """
         FAQ结果的RRF融合。
-        
+
         Args:
             vector_results: 向量搜索结果
             keyword_results: 关键词搜索结果
             k: RRF常数（默认60）
-            
+
         Returns:
             融合后的排序结果
         """
         faq_scores: Dict[str, Dict[str, Any]] = {}
-        
+
         # Add vector search scores
         for rank, result in enumerate(vector_results, start=1):
             faq_id = result["faq_id"]
             if faq_id not in faq_scores:
-                faq_scores[faq_id] = {
-                    "faq_id": faq_id,
-                    "question_name": result["question_name"],
-                    "combined_text": result["combined_text"],
-                    "rrf_score": 0.0,
-                    "vector_score": result["score"],
-                    "keyword_score": 0.0,
-                    "vector_rank": rank,
-                    "keyword_rank": None
-                }
-            
+                faq_scores[faq_id] = self._create_faq_fusion_entry(result, result["score"], rank, "vector")
             faq_scores[faq_id]["rrf_score"] += 1.0 / (k + rank)
-        
+
         # Add keyword search scores
         for rank, result in enumerate(keyword_results, start=1):
             faq_id = result["faq_id"]
             if faq_id not in faq_scores:
-                faq_scores[faq_id] = {
-                    "faq_id": faq_id,
-                    "question_name": result["question_name"],
-                    "combined_text": result["combined_text"],
-                    "rrf_score": 0.0,
-                    "vector_score": 0.0,
-                    "keyword_score": result["score"],
-                    "vector_rank": None,
-                    "keyword_rank": rank
-                }
+                faq_scores[faq_id] = self._create_faq_fusion_entry(result, result["score"], rank, "keyword")
             else:
                 faq_scores[faq_id]["keyword_score"] = result["score"]
                 faq_scores[faq_id]["keyword_rank"] = rank
-            
             faq_scores[faq_id]["rrf_score"] += 1.0 / (k + rank)
-        
+
         # Sort by RRF score
         sorted_faqs = sorted(
             faq_scores.values(),
             key=lambda x: x["rrf_score"],
             reverse=True
         )
-        
-        logger.debug(f"FAQ RRF fusion: vector_count={len(vector_results)}, keyword_count={len(keyword_results)}, fused_count={len(sorted_faqs)}")
-        
+
+        logger.debug(
+            "FAQ RRF fusion",
+            vector_count=len(vector_results),
+            keyword_count=len(keyword_results),
+            fused_count=len(sorted_faqs)
+        )
+
         return sorted_faqs
 
 

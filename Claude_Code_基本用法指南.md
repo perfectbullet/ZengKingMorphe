@@ -417,6 +417,9 @@ source D:/zenking_work/metahuman_work/ZengKingMorphe/.venv/Scripts/activate
 
 # 如果执行策略阻止，使用完整路径调用 Python
 D:\zenking_work\metahuman_work\ZengKingMorphe\.venv\Scripts\python.exe script.py
+
+# WSL 环境（推荐）使用以下路径
+/mnt/d/zenking_work/metahuman_work/ZengKingMorphe/.venv/bin/python script.py
 ```
 
 **问题 3**: 路径中的空格和特殊字符
@@ -767,13 +770,13 @@ ls -la
 ```bash
 cd /mnt/d/zenking_work/metahuman_work/ZengKingMorphe
 
-# 创建虚拟环境
-python3 -m venv .venv
-
-# 激活虚拟环境（Linux 方式，更简单）
+# 虚拟环境已存在，直接激活
 source .venv/bin/activate
 
-# 安装依赖
+# 或直接使用项目 Python 解释器
+/mnt/d/zenking_work/metahuman_work/ZengKingMorphe/.venv/bin/python --version
+
+# 安装依赖（如需要）
 pip install -r ai-service/requirements.txt
 ```
 
@@ -855,6 +858,7 @@ export PYTHONPATH="${PYTHONPATH}:/mnt/d/zenking_work/metahuman_work/ZengKingMorp
 # 项目别名
 alias morphe="cd /mnt/d/zenking_work/metahuman_work/ZengKingMorphe"
 alias activate_morphe="cd /mnt/d/zenking_work/metahuman_work/ZengKingMorphe && source .venv/bin/activate"
+alias pymorphe="/mnt/d/zenking_work/metahuman_work/ZengKingMorphe/.venv/bin/python"
 
 # 保存并退出（Ctrl+X, Y, Enter）
 

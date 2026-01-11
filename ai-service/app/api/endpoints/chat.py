@@ -75,6 +75,47 @@ def format_sources(
     return sources
 
 
+async def save_stream_chunk(
+    db,
+    chat_id: str,
+    chunk_sequence: int,
+    session_id: str,
+    user_id: str,
+    employee_id: str,
+    chunk_type: str,
+    chunk_data: dict,
+    conversation_id: Optional[str] = None,
+) -> None:
+    """
+    Save a stream chunk to MongoDB.
+
+    Args:
+        db: Database instance
+        chat_id: Chat completion ID
+        chunk_sequence: Chunk sequence number
+        session_id: Session ID
+        user_id: User ID
+        employee_id: Employee ID
+        chunk_type: Type of chunk (user_query, role, token, done, error, status)
+        chunk_data: Chunk data to save
+        conversation_id: Optional conversation ID
+    """
+    chunk_record = StreamChunkModel(
+        chunk_id=f"{chat_id}_chunk_{chunk_sequence}",
+        conversation_id=conversation_id,
+        session_id=session_id,
+        user_id=user_id,
+        employee_id=employee_id,
+        chat_id=chat_id,
+        chunk_type=chunk_type,
+        chunk_data=chunk_data,
+        sequence=chunk_sequence,
+        timestamp=datetime.utcnow(),
+        created_at=datetime.utcnow(),
+    )
+    await db.stream_chunks.insert_one(chunk_record.model_dump())
+
+
 async def generate_openai_stream_response(
     request: OpenAIChatRequest,
 ) -> AsyncGenerator[str, None]:
@@ -156,20 +197,10 @@ async def generate_openai_stream_response(
                 {"role": msg.role, "content": msg.content} for msg in request.messages
             ],
         }
-        user_query_chunk_record = StreamChunkModel(
-            chunk_id=f"{chat_id}_chunk_{chunk_sequence}",
-            conversation_id=None,  # Will be updated later
-            session_id=session_id,
-            user_id=request.user_id,
-            employee_id=request.employee_id,
-            chat_id=chat_id,
-            chunk_type="user_query",
-            chunk_data=user_query_chunk_data,
-            sequence=chunk_sequence,
-            timestamp=datetime.utcnow(),
-            created_at=datetime.utcnow(),
+        await save_stream_chunk(
+            db, chat_id, chunk_sequence, session_id, request.user_id,
+            request.employee_id, "user_query", user_query_chunk_data
         )
-        await db.stream_chunks.insert_one(user_query_chunk_record.model_dump())
 
         # Send initial role chunk
         role_chunk_data = {
@@ -188,20 +219,10 @@ async def generate_openai_stream_response(
 
         # Save initial role chunk to DB
         chunk_sequence += 1
-        role_chunk_record = StreamChunkModel(
-            chunk_id=f"{chat_id}_chunk_{chunk_sequence}",
-            conversation_id=None,  # Will be updated later
-            session_id=session_id,
-            user_id=request.user_id,
-            employee_id=request.employee_id,
-            chat_id=chat_id,
-            chunk_type="role",
-            chunk_data=role_chunk_data,
-            sequence=chunk_sequence,
-            timestamp=datetime.utcnow(),
-            created_at=datetime.utcnow(),
+        await save_stream_chunk(
+            db, chat_id, chunk_sequence, session_id, request.user_id,
+            request.employee_id, "role", role_chunk_data
         )
-        await db.stream_chunks.insert_one(role_chunk_record.model_dump())
 
         yield json.dumps(role_chunk_data)
 
@@ -232,20 +253,10 @@ async def generate_openai_stream_response(
 
             # Save search status chunk to DB
             chunk_sequence += 1
-            search_status_record = StreamChunkModel(
-                chunk_id=f"{chat_id}_chunk_{chunk_sequence}",
-                conversation_id=None,
-                session_id=session_id,
-                user_id=request.user_id,
-                employee_id=request.employee_id,
-                chat_id=chat_id,
-                chunk_type="status",
-                chunk_data=search_chunk_data,
-                sequence=chunk_sequence,
-                timestamp=datetime.utcnow(),
-                created_at=datetime.utcnow(),
+            await save_stream_chunk(
+                db, chat_id, chunk_sequence, session_id, request.user_id,
+                request.employee_id, "status", search_chunk_data
             )
-            await db.stream_chunks.insert_one(search_status_record.model_dump())
 
             yield json.dumps(search_chunk_data)
 
@@ -281,20 +292,10 @@ async def generate_openai_stream_response(
 
                 # 保存状态 chunk 到数据库
                 chunk_sequence += 1
-                status_chunk_record = StreamChunkModel(
-                    chunk_id=f"{chat_id}_chunk_{chunk_sequence}",
-                    conversation_id=None,
-                    session_id=session_id,
-                    user_id=request.user_id,
-                    employee_id=request.employee_id,
-                    chat_id=chat_id,
-                    chunk_type="token",
-                    chunk_data=status_chunk_data,
-                    sequence=chunk_sequence,
-                    timestamp=datetime.utcnow(),
-                    created_at=datetime.utcnow(),
+                await save_stream_chunk(
+                    db, chat_id, chunk_sequence, session_id, request.user_id,
+                    request.employee_id, "token", status_chunk_data
                 )
-                await db.stream_chunks.insert_one(status_chunk_record.model_dump())
 
                 yield json.dumps(status_chunk_data)
 
@@ -345,21 +346,10 @@ async def generate_openai_stream_response(
 
                         # Save token chunk to DB
                         chunk_sequence += 1
-                        token_chunk_record = StreamChunkModel(
-                            chunk_id=f"{chat_id}_chunk_{chunk_sequence}",
-                            conversation_id=final_state.get("conversation_id"),
-                            session_id=session_id,
-                            user_id=request.user_id,
-                            employee_id=request.employee_id,
-                            chat_id=chat_id,
-                            chunk_type="token",
-                            chunk_data=token_chunk_data,
-                            sequence=chunk_sequence,
-                            timestamp=datetime.utcnow(),
-                            created_at=datetime.utcnow(),
-                        )
-                        await db.stream_chunks.insert_one(
-                            token_chunk_record.model_dump()
+                        await save_stream_chunk(
+                            db, chat_id, chunk_sequence, session_id, request.user_id,
+                            request.employee_id, "token", token_chunk_data,
+                            final_state.get("conversation_id")
                         )
 
                         yield json.dumps(token_chunk_data)
@@ -412,20 +402,11 @@ async def generate_openai_stream_response(
 
         # Save finish chunk to DB
         chunk_sequence += 1
-        finish_chunk_record = StreamChunkModel(
-            chunk_id=f"{chat_id}_chunk_{chunk_sequence}",
-            conversation_id=final_state.get("conversation_id", ""),
-            session_id=session_id,
-            user_id=request.user_id,
-            employee_id=request.employee_id,
-            chat_id=chat_id,
-            chunk_type="done",
-            chunk_data=finish_chunk_data,
-            sequence=chunk_sequence,
-            timestamp=datetime.utcnow(),
-            created_at=datetime.utcnow(),
+        await save_stream_chunk(
+            db, chat_id, chunk_sequence, session_id, request.user_id,
+            request.employee_id, "done", finish_chunk_data,
+            final_state.get("conversation_id", "")
         )
-        await db.stream_chunks.insert_one(finish_chunk_record.model_dump())
 
         yield json.dumps(finish_chunk_data)
 
@@ -448,20 +429,10 @@ async def generate_openai_stream_response(
         try:
             db = await get_database()
             chunk_sequence += 1
-            error_chunk_record = StreamChunkModel(
-                chunk_id=f"{chat_id}_chunk_{chunk_sequence}",
-                conversation_id=None,
-                session_id=session_id,
-                user_id=request.user_id,
-                employee_id=request.employee_id,
-                chat_id=chat_id,
-                chunk_type="error",
-                chunk_data=error_chunk_data,
-                sequence=chunk_sequence,
-                timestamp=datetime.utcnow(),
-                created_at=datetime.utcnow(),
+            await save_stream_chunk(
+                db, chat_id, chunk_sequence, session_id, request.user_id,
+                request.employee_id, "error", error_chunk_data
             )
-            await db.stream_chunks.insert_one(error_chunk_record.model_dump())
         except Exception as db_error:
             logger.error(f"Failed to save error chunk to DB: error={str(db_error)}", exc_info=True)
 

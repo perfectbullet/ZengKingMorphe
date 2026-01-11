@@ -35,23 +35,27 @@ class DocumentTaskProcessor:
         filename: str,
         file_path: str,
         category: Optional[str] = None,
-        chunk_config: Optional[Dict] = None  # Custom chunk configuration
+        chunk_config: Optional[Dict] = None,  # Custom chunk configuration
+        doc_id: Optional[str] = None,  # Pre-generated doc_id (for immediate return)
+        resource_id: Optional[int] = None  # External system resource ID
     ) -> str:
         """
         Submit a new document processing task.
-        
+
         Args:
             kb_id: Knowledge base ID
             filename: Original filename
             file_path: Path to uploaded file
             category: Document category
             chunk_config: Custom chunking configuration (optional)
-            
+            doc_id: Pre-generated document ID (optional, for immediate return)
+            resource_id: External system resource ID (optional)
+
         Returns:
             Task ID
         """
         task_id = self.generate_task_id()
-        
+
         # Create task record in database
         db = await get_database()
         task_model = DocumentTaskModel(
@@ -61,11 +65,22 @@ class DocumentTaskProcessor:
             file_path=file_path,
             category=category,
             status="pending",
-            metadata={"chunk_config": chunk_config} if chunk_config else {}
+            metadata={
+                "chunk_config": chunk_config,
+                "resource_id": resource_id
+            } if chunk_config or resource_id else {}
         )
-        
-        await db.document_tasks.insert_one(task_model.model_dump())
-        
+
+        task_dict = task_model.model_dump()
+
+        # Add doc_id if provided (pre-generated)
+        if doc_id:
+            task_dict["doc_id"] = doc_id
+        if resource_id:
+            task_dict["resource_id"] = resource_id
+
+        await db.document_tasks.insert_one(task_dict)
+
         # Add to queue
         await self.task_queue.put({
             "task_id": task_id,
@@ -73,11 +88,19 @@ class DocumentTaskProcessor:
             "filename": filename,
             "file_path": file_path,
             "category": category,
-            "chunk_config": chunk_config
+            "chunk_config": chunk_config,
+            "doc_id": doc_id,  # Pass doc_id to processing
+            "resource_id": resource_id
         })
-        
-        logger.info(f"Document task submitted: task_id={task_id}, filename={filename}")
-        
+
+        logger.info(
+            "Document task submitted",
+            task_id=task_id,
+            filename=filename,
+            doc_id=doc_id,
+            resource_id=resource_id
+        )
+
         return task_id
     
     async def start(self):
@@ -217,7 +240,7 @@ class DocumentTaskProcessor:
     async def _process_with_progress(self, task_data: Dict) -> str:
         """Process document with progress updates."""
         task_id = task_data["task_id"]
-        
+
         # Call original document processor
         # We'll wrap it to track progress
         doc_id = await doc_processor.process_document(
@@ -226,9 +249,11 @@ class DocumentTaskProcessor:
             kb_id=task_data["kb_id"],
             category=task_data.get("category"),
             task_id=task_id,  # Pass task_id for progress tracking
-            chunk_config=task_data.get("chunk_config")  # Pass chunk_config
+            chunk_config=task_data.get("chunk_config"),  # Pass chunk_config
+            doc_id=task_data.get("doc_id"),  # Pass pre-generated doc_id
+            resource_id=task_data.get("resource_id")  # Pass resource_id
         )
-        
+
         return doc_id
     
     async def get_task_status(self, task_id: str) -> Optional[Dict]:

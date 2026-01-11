@@ -1,0 +1,5 @@
+# Override configuration for Windows development environment
+services:
+  ai-service:
+    env_file:
+      - ./ai-service/.env-win

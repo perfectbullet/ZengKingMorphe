@@ -4,15 +4,20 @@ RAG端到端完整评估测试脚本
 功能:
 1. 创建知识库
 2. 上传PDF文档(指定目录下所有PDF)
-3. 创建数字员工并绑定知识库
+3. 加载数字员工
 4. 等待文档处理完成
 5. 从MinerU接口获取markdown内容并生成问答对
 6. 调用流式对话接口进行问答
 7. 评估RAG质量并保存结果
 
 使用方法:
+    # 完整运行(包括创建知识库、上传文档等所有步骤)
     cd ai-service
     python ../venv/Scripts/python.exe scripts/e2e_rag_evaluation.py
+
+    # 跳过初始设置，直接从步骤4开始(适用于知识库已创建、文档已上传的情况)
+    cd ai-service
+    python ../venv/Scripts/python.exe scripts/e2e_rag_evaluation.py --skip-setup
 """
 import asyncio
 import aiohttp
@@ -270,15 +275,17 @@ class E2ERAGEvaluation:
                             continue
 
                         result = await response.json()
-                        doc_id = result.get("data", {}).get("doc_id")
-                        task_id = result.get("data", {}).get("task_id")
+                        # 异步上传返回task_id列表,需要从data字段获取
+                        data = result.get("data", result)
+                        tasks = data.get("tasks", []) if isinstance(data, dict) else []
+                        task_id = tasks[0] if tasks else result.get("tasks", [None])[0]
 
                         uploaded_files.append({
                             "filename": pdf_file.name,
-                            "doc_id": doc_id,
+                            "doc_id": None,  # 需要通过文档列表查询获取
                             "task_id": task_id
                         })
-                        self.logger.success(f"上传成功", file_name=pdf_file.name, doc_id=doc_id)
+                        self.logger.success(f"上传成功", file_name=pdf_file.name, task_id=task_id)
 
                 except Exception as e:
                     self.logger.error(f"上传异常", file_name=pdf_file.name, error=str(e))
@@ -287,7 +294,62 @@ class E2ERAGEvaluation:
 
         self.results["uploaded_files"] = uploaded_files
         self.logger.info(f"上传完成", success_count=len(uploaded_files), total_count=len(pdf_files))
-        return [f["doc_id"] for f in uploaded_files]
+
+        # 查询文档列表获取doc_id
+        await self._fetch_doc_ids(kb_id, uploaded_files)
+
+        return [f["doc_id"] for f in uploaded_files if f.get("doc_id")]
+
+    async def _fetch_doc_ids(self, kb_id: str, uploaded_files: List[Dict[str, Any]]):
+        """通过文档列表API获取实际的doc_id"""
+        self.logger.info("查询文档ID", kb_id=kb_id)
+
+        url = f"{self.base_url}/api/knowledge-base/documents/list"
+        params = {
+            "kb_id": kb_id,
+            "page": 1,
+            "page_size": 100
+        }
+
+        try:
+            from urllib.parse import unquote
+
+            response = await self._request("GET", url, params=params)
+            # API返回字段名是items而不是documents
+            documents = response.get("data", {}).get("items", response.get("data", {}).get("documents", []))
+
+            self.logger.debug(f"API返回文档数量", count=len(documents))
+
+            # 创建filename到doc_id的映射 (需要URL解码)
+            filename_to_doc_id = {}
+            for doc in documents:
+                # 文件名可能是URL编码的,需要解码
+                filename = doc.get("filename", "")
+                try:
+                    filename = unquote(filename)
+                except:
+                    pass  # 如果解码失败,使用原始文件名
+
+                doc_id = doc.get("doc_id")
+                if filename and doc_id:
+                    filename_to_doc_id[filename] = doc_id
+                    self.logger.debug("文档映射", filename=filename, doc_id=doc_id)
+
+            # 更新uploaded_files中的doc_id
+            matched = 0
+            for uploaded_file in uploaded_files:
+                filename = uploaded_file["filename"]
+                if filename in filename_to_doc_id:
+                    uploaded_file["doc_id"] = filename_to_doc_id[filename]
+                    matched += 1
+                    self.logger.debug("匹配成功", filename=filename, doc_id=uploaded_file["doc_id"])
+                else:
+                    self.logger.debug("未匹配", filename=filename)
+
+            self.logger.success("文档ID查询完成", matched=matched, total=len(uploaded_files))
+
+        except Exception as e:
+            self.logger.error("查询文档ID失败", error=str(e))
 
     async def load_employee(
         self,
@@ -350,7 +412,10 @@ class E2ERAGEvaluation:
 
             try:
                 response = await self._request("GET", url, params=params)
-                documents = response.get("data", {}).get("documents", [])
+                # API可能返回"items"或"documents"字段
+                documents = response.get("data", {}).get("items", [])
+                if not documents:
+                    documents = response.get("data", {}).get("documents", [])
 
                 completed = sum(1 for d in documents if d.get("status") == "completed")
                 processing = sum(1 for d in documents if d.get("status") == "processing")
@@ -395,7 +460,15 @@ class E2ERAGEvaluation:
 
         try:
             response = await self._request("GET", jobs_url, params={"limit": 100})
-            jobs = response.get("data", [])
+
+            # API直接返回列表,不是字典包裹的列表
+            if isinstance(response, list):
+                jobs = response
+            elif isinstance(response, dict):
+                jobs = response.get("data", response)
+            else:
+                self.logger.error("MinerU API返回格式错误", type=type(response).__name__)
+                return []
 
             if not jobs:
                 self.logger.warning("没有找到MinerU任务")
@@ -418,7 +491,10 @@ class E2ERAGEvaluation:
                 markdown_url = f"{self.base_url}/api/mineru/jobs/{job_id}/markdown"
                 try:
                     md_response = await self._request("GET", markdown_url)
-                    markdown_content = md_response.get("data", {}).get("markdown", "")
+                    # API可能直接返回markdown_content字段，也可能在data.markdown中
+                    markdown_content = md_response.get("markdown_content", "")
+                    if not markdown_content:
+                        markdown_content = md_response.get("data", {}).get("markdown", "")
 
                     job_contents.append({
                         "job_id": job_id,
@@ -833,22 +909,38 @@ class E2ERAGEvaluation:
 
         self.logger.success("简化报告已保存", file_path=str(summary_file))
 
-    async def run_full_evaluation(self):
-        """运行完整的端到端评估"""
+    async def run_full_evaluation(self, skip_initial_setup: bool = False):
+        """
+        运行完整的端到端评估
+
+        Args:
+            skip_initial_setup: 是否跳过初始设置步骤(1-3)，直接从步骤4开始
+                              如果知识库已创建、文档已上传、数字员工已加载，设为True
+        """
         self.logger.info("")
         self.logger.info("=" * 60)
         self.logger.info("RAG端到端评估测试")
+        if skip_initial_setup:
+            self.logger.info("模式: 跳过初始设置，从步骤4开始")
         self.logger.info("=" * 60)
 
         try:
-            # 1. 使用现有知识库
-            kb_id = await self.create_knowledge_base()
+            if not skip_initial_setup:
+                # 1. 使用现有知识库
+                kb_id = await self.create_knowledge_base()
 
-            # 2. 上传文档
-            await self.upload_documents(kb_id)
+                # 2. 上传文档
+                await self.upload_documents(kb_id)
 
-            # 3. 加载现有数字员工
-            await self.load_employee()
+                # 3. 加载现有数字员工
+                await self.load_employee()
+            else:
+                # 跳过前3步，直接使用已有的知识库ID和数字员工信息
+                self.logger.info("跳过初始设置步骤")
+                kb_id = "kb_e2bc0ea588c4"  # 使用已有的知识库ID
+
+                # 加载现有数字员工信息
+                await self.load_employee()
 
             # 4. 等待文档处理完成
             await self.wait_for_documents_completion(kb_id)
@@ -888,19 +980,31 @@ class E2ERAGEvaluation:
 
 async def main():
     """主函数"""
+    import argparse
+
+    # 解析命令行参数
+    parser = argparse.ArgumentParser(description="RAG端到端评估测试")
+    parser.add_argument(
+        "--skip-setup",
+        action="store_true",
+        help="跳过初始设置步骤(创建知识库、上传文档、加载数字员工)，直接从等待文档处理开始"
+    )
+    args = parser.parse_args()
+
     test = E2ERAGEvaluation()
 
-    # 检查PDF目录
-    if not test.pdf_dir.exists():
+    # 检查PDF目录（仅在未跳过设置时检查）
+    if not args.skip_setup and not test.pdf_dir.exists():
         test.logger.error("PDF目录不存在", pdf_dir=str(test.pdf_dir))
         test.logger.error("当前目录", cwd=str(Path.cwd()))
         test.logger.close()
         return
 
-    test.logger.info("配置验证", pdf_dir=str(test.pdf_dir), base_url=test.base_url)
+    if not args.skip_setup:
+        test.logger.info("配置验证", pdf_dir=str(test.pdf_dir), base_url=test.base_url)
 
     # 运行完整评估
-    await test.run_full_evaluation()
+    await test.run_full_evaluation(skip_initial_setup=args.skip_setup)
 
     # 关闭日志系统
     test.logger.close()

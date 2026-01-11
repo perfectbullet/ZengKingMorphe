@@ -19,6 +19,13 @@ from app.core.chroma import chroma_db
 from app.core.elasticsearch import es_db
 from app.models.database import DocumentModel, DocumentChunkModel
 
+# Import semantic chunking and hierarchical summarization
+from app.services.semantic_chunking import (
+    semantic_chunk_text,
+    create_hierarchical_summary,
+    SemanticChunk
+)
+
 logger = get_logger(__name__)
 
 
@@ -42,11 +49,13 @@ class DocumentProcessor:
         category: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
         task_id: Optional[str] = None,  # Add task_id for progress tracking
-        chunk_config: Optional[Dict[str, Any]] = None  # Custom chunk configuration
+        chunk_config: Optional[Dict[str, Any]] = None,  # Custom chunk configuration
+        doc_id: Optional[str] = None,  # Pre-generated doc_id (for immediate return)
+        resource_id: Optional[int] = None  # External system resource ID
     ) -> str:
         """
         Process a document: extract text, chunk, vectorize, and store.
-        
+
         Args:
             file_path: Path to the document file
             filename: Original filename
@@ -55,18 +64,26 @@ class DocumentProcessor:
             metadata: Additional metadata (optional)
             task_id: Task ID for progress tracking (optional)
             chunk_config: Custom chunking configuration (optional)
-            
+            doc_id: Pre-generated document ID (optional, will be generated if not provided)
+            resource_id: External system resource ID (optional)
+
         Returns:
             Document ID
         """
         try:
-            # Generate document ID
-            doc_id = self._generate_doc_id(filename, kb_id)
+            # Use provided doc_id or generate a new one
+            if not doc_id:
+                doc_id = self._generate_doc_id(filename, kb_id)
             
             # Get file info
             file_size = os.path.getsize(file_path)
             file_ext = os.path.splitext(filename)[1].lower()
-            
+
+            # Merge metadata with resource_id
+            doc_metadata = metadata.copy() if metadata else {}
+            if resource_id:
+                doc_metadata["resource_id"] = resource_id
+
             # Create document record
             db = await get_database()
             doc_model = DocumentModel(
@@ -78,24 +95,39 @@ class DocumentProcessor:
                 format=file_ext[1:].upper(),
                 status="processing",
                 segment_config=chunk_config,  # Save segment configuration
-                metadata=metadata or {}
+                metadata=doc_metadata
             )
-            
+
             await db.documents.insert_one(doc_model.model_dump())
-            
-            logger.info(f"Started processing document: doc_id={doc_id}, filename={filename}, kb_id={kb_id}, custom_chunking={bool(chunk_config)}")
-            
+
+            logger.info(
+                "Started processing document",
+                doc_id=doc_id,
+                filename=filename,
+                kb_id=kb_id,
+                custom_chunking=bool(chunk_config),
+                resource_id=resource_id
+            )
+
             # Extract text (check if we should use MinerU for PDFs)
             use_mineru = metadata.get('use_mineru', False) if metadata else False
             text_content = await self._extract_text(file_path, file_ext, use_mineru=use_mineru)
-            
+
             # Preprocess text if chunk_config specifies
             if chunk_config:
                 text_content = self._preprocess_text(text_content, chunk_config)
-            
-            # Chunk document
-            chunks = self._chunk_text(text_content, doc_id, kb_id, file_ext=file_ext, chunk_config=chunk_config)
-            
+
+            # Chunk document (async for semantic chunking)
+            # Returns (chunks, hierarchical_summary_data) tuple
+            chunk_result = await self._chunk_text(text_content, doc_id, kb_id, file_ext=file_ext, chunk_config=chunk_config)
+
+            # Handle different return types: tuple (semantic) or list (traditional)
+            if isinstance(chunk_result, tuple):
+                chunks, hierarchical_summary_data = chunk_result
+            else:
+                chunks = chunk_result
+                hierarchical_summary_data = None
+
             # Update total_chunks if task_id provided
             if task_id:
                 await db.document_tasks.update_one(
@@ -107,25 +139,49 @@ class DocumentProcessor:
                         }
                     }
                 )
-            
+
             # Process chunks (vectorize and store)
             await self._process_chunks(chunks, doc_id, kb_id, task_id=task_id)
-            
+
+            # Build hierarchical summary data for storage
+            hierarchical_summary_to_save = {}
+            if hierarchical_summary_data:
+                # Convert HierarchicalSummary object to dict for storage
+                hierarchical_summary_to_save = {
+                    "document_summary": hierarchical_summary_data.document_summary or "",
+                    "section_summaries": [
+                        {
+                            "chunk_indices": s.chunk_indices,
+                            "summary": s.summary
+                        }
+                        for s in (hierarchical_summary_data.section_summaries or [])
+                    ]
+                }
+
             # Update document status
+            update_data = {
+                "status": "completed",
+                "chunks_count": len(chunks),
+                "vectors_count": len(chunks),
+                "segment_config": chunk_config,  # Persist segment configuration
+                "processed_at": datetime.utcnow()
+            }
+
+            # Add hierarchical summary if available
+            if hierarchical_summary_to_save:
+                update_data["hierarchical_summary"] = hierarchical_summary_to_save
+
             await db.documents.update_one(
                 {"doc_id": doc_id},
-                {
-                    "$set": {
-                        "status": "completed",
-                        "chunks_count": len(chunks),
-                        "vectors_count": len(chunks),
-                        "segment_config": chunk_config,  # Persist segment configuration
-                        "processed_at": datetime.utcnow()
-                    }
-                }
+                {"$set": update_data}
             )
-            
-            logger.info(f"Completed processing document: doc_id={doc_id}, chunks_count={len(chunks)}")
+
+            logger.info(
+                "Completed processing document",
+                doc_id=doc_id,
+                chunks_count=len(chunks),
+                has_hierarchical_summary=bool(hierarchical_summary_to_save)
+            )
             return doc_id
             
         except Exception as e:
@@ -147,7 +203,7 @@ class DocumentProcessor:
                 pass
             
             raise
-    
+
     async def _extract_text(
         self,
         file_path: str,
@@ -174,7 +230,7 @@ class DocumentProcessor:
         else:
             extractor = self.supported_formats[file_ext]
             return await extractor(file_path)
-    
+
     async def _extract_pdf(self, file_path: str, use_mineru: bool = False) -> str:
         """
         Extract text from PDF.
@@ -205,6 +261,19 @@ class DocumentProcessor:
             logger.error(f"Failed to extract PDF: file={file_path}, error={str(e)}")
             raise
 
+    def _extract_content_from_result(self, content_items: list) -> list:
+        """Extract text content from MinerU result items."""
+        text_parts = []
+        if isinstance(content_items, list):
+            for item in content_items:
+                if isinstance(item, dict):
+                    text = item.get("text", "") or item.get("content", "")
+                    if text:
+                        text_parts.append(text)
+                elif isinstance(item, str):
+                    text_parts.append(item)
+        return text_parts
+
     async def _extract_pdf_with_mineru(self, file_path: str) -> str:
         """
         Extract text from PDF using MinerU API with enhanced parsing.
@@ -234,20 +303,8 @@ class DocumentProcessor:
 
             # Extract text content from result
             if result.get("status") == "success" and "content" in result:
-                # Merge all content items
-                text_parts = []
                 content_items = result["content"]
-
-                if isinstance(content_items, list):
-                    for item in content_items:
-                        if isinstance(item, dict):
-                            # Extract text from structured content
-                            text = item.get("text", "") or item.get("content", "")
-                            if text:
-                                text_parts.append(text)
-                        elif isinstance(item, str):
-                            text_parts.append(item)
-
+                text_parts = self._extract_content_from_result(content_items)
                 extracted_text = "\n\n".join(text_parts)
 
                 logger.info(
@@ -278,7 +335,7 @@ class DocumentProcessor:
             # Fallback to basic extraction
             logger.info(f"Falling back to basic PDF extraction: {file_path}")
             return await self._extract_pdf_basic(file_path)
-    
+
     async def _extract_docx(self, file_path: str) -> str:
         """Extract text from Word document."""
         try:
@@ -400,7 +457,7 @@ class DocumentProcessor:
                 return 300, 120
             return 256, 100
 
-    def _chunk_text(
+    async def _chunk_text(
         self,
         text: str,
         doc_id: str,
@@ -409,21 +466,28 @@ class DocumentProcessor:
         chunk_config: Optional[Dict[str, Any]] = None
     ) -> List[DocumentChunkModel]:
         """
-        Split text into chunks using RecursiveCharacterTextSplitter.
-        Uses language-specific separators for markdown/html, custom for txt.
-        Supports custom chunk configuration from Java platform.
+        Split text into chunks using semantic chunking.
+
+        Note: chunk_config is saved for reference but semantic chunking is always used.
+        Hierarchical summary is generated separately after semantic chunking,
+        controlled by enable_hierarchical_summary setting.
 
         Args:
             text: Text content
             doc_id: Document ID
             kb_id: Knowledge base ID
             file_ext: File extension (e.g., '.md', '.html', '.txt', '.pdf')
-            chunk_config: Custom chunking configuration (optional)
+            chunk_config: Custom chunking configuration (saved for reference only, not used)
 
         Returns:
             List of document chunks
         """
-        # Determine chunk size and overlap
+        # Always use semantic chunking (chunk_config is saved but not used for splitting)
+        if settings.enable_semantic_chunking:
+            return await self._semantic_chunk_text(text, doc_id, kb_id, file_ext)
+
+        # Fallback to traditional chunking only if semantic chunking is disabled
+        # Determine chunk size and overlap for traditional chunking
         if chunk_config:
             chunk_size = chunk_config.get('segment_union_max_length', settings.chunk_size)
             chunk_overlap = min(chunk_size // 10, 50)  # 10% overlap, max 50
@@ -440,14 +504,14 @@ class DocumentProcessor:
                 chunk_size=chunk_size,
                 chunk_overlap=chunk_overlap
             )
-        
+
         # Determine separators
         separators = None
-        
+
         # Custom identifier-based splitting (segment_type=1)
         if segment_type == 1:
             identifier_type = chunk_config.get('segment_identifier_type', 0)
-            
+
             if identifier_type == 0:  # System default identifiers
                 # Parse identifier_default bitmap: "1111111" = [......, 。, ., ！, !, ？, ?]
                 bitmap = chunk_config.get('identifier_default', '1111111')
@@ -456,7 +520,7 @@ class DocumentProcessor:
                 # Add fallback separators
                 separators.extend(['\n\n', '\n', ' ', ''])
                 logger.info(f"Using system default identifiers: separators={separators[:7]}")
-            
+
             elif identifier_type == 1:  # Custom identifiers
                 custom_str = chunk_config.get('identifier_customize', '')
                 if custom_str:
@@ -464,7 +528,7 @@ class DocumentProcessor:
                     separators = [s.strip() for s in custom_str.split(',') if s.strip()]
                     separators.extend(['\n\n', '\n', ' ', ''])  # Add fallbacks
                     logger.info(f"Using custom identifiers: separators={separators}")
-        
+
         # Newline splitting (segment_type=0) or default logic
         if separators is None:
             if file_ext in ['.md', '.pdf']:  # PDF converted to markdown
@@ -487,7 +551,7 @@ class DocumentProcessor:
                     " ",     # Space
                     "",      # Character-level split (fallback)
                 ]
-        
+
         # Create text splitter with appropriate separators
         text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size,
@@ -496,15 +560,15 @@ class DocumentProcessor:
             length_function=len,
             is_separator_regex=False,
         )
-        
+
         # Split text into chunks
         chunk_texts = text_splitter.split_text(text)
-        
+
         # Convert to DocumentChunkModel objects
         chunks = []
         for chunk_index, chunk_text in enumerate(chunk_texts):
             chunk_id = f"{doc_id}_chunk_{chunk_index}"
-            
+
             chunk_model = DocumentChunkModel(
                 chunk_id=chunk_id,
                 doc_id=doc_id,
@@ -513,9 +577,144 @@ class DocumentProcessor:
                 chunk_index=chunk_index
             )
             chunks.append(chunk_model)
-        
-        logger.info(f"Chunked document with RecursiveCharacterTextSplitter: doc_id={doc_id}, file_ext={file_ext}, chunks_count={len(chunks)}",         avg_chunk_size=sum(len(c.content) for c in chunks) / len(chunks) if chunks else 0       )
-        
+
+        logger.info(
+            "Chunked document with RecursiveCharacterTextSplitter",
+            doc_id=doc_id,
+            file_ext=file_ext,
+            chunks_count=len(chunks),
+            avg_chunk_size=sum(len(c.content) for c in chunks) / len(chunks) if chunks else 0
+        )
+
+        return chunks
+
+    async def _semantic_chunk_text(
+        self,
+        text: str,
+        doc_id: str,
+        kb_id: str,
+        file_ext: Optional[str] = None
+    ) -> List[DocumentChunkModel]:
+        """
+        Split text into semantically coherent chunks using embeddings.
+
+        Args:
+            text: Text content
+            doc_id: Document ID
+            kb_id: Knowledge base ID
+            file_ext: File extension
+
+        Returns:
+            List of document chunks with summaries
+        """
+        logger.info(
+            "Using semantic chunking with hierarchical summarization",
+            doc_id=doc_id,
+            text_length=len(text)
+        )
+
+        try:
+            # Use semantic chunking service
+            semantic_chunks = await semantic_chunk_text(text)
+
+            # Generate hierarchical summaries and capture the result
+            hierarchical_summary_data = None
+            if settings.enable_hierarchical_summary:
+                from app.services.semantic_chunking import HierarchicalSummary
+                hierarchical_summary_data = await create_hierarchical_summary(semantic_chunks, doc_id)
+
+            # Convert to DocumentChunkModel objects
+            chunks = []
+            for semantic_chunk in semantic_chunks:
+                chunk_id = f"{doc_id}_chunk_{semantic_chunk.chunk_index}"
+
+                # Build metadata with summary
+                metadata = {
+                    "chunk_type": "semantic",
+                    "summary": semantic_chunk.summary or ""
+                }
+
+                chunk_model = DocumentChunkModel(
+                    chunk_id=chunk_id,
+                    doc_id=doc_id,
+                    kb_id=kb_id,
+                    content=semantic_chunk.content,
+                    chunk_index=semantic_chunk.chunk_index,
+                    metadata=metadata
+                )
+                chunks.append(chunk_model)
+
+            logger.info(
+                "Semantic chunking completed",
+                doc_id=doc_id,
+                chunks_count=len(chunks),
+                with_summaries=settings.enable_hierarchical_summary
+            )
+
+            # Return chunks with hierarchical summary data
+            # Store it as an attribute for later use in process_document
+            return chunks, hierarchical_summary_data
+
+        except Exception as e:
+            logger.error(
+                "Semantic chunking failed, falling back to traditional chunking",
+                doc_id=doc_id,
+                error=str(e),
+                exc_info=True
+            )
+            # Fall back to traditional chunking
+            return await self._fallback_traditional_chunking(text, doc_id, kb_id, file_ext), None
+
+    async def _fallback_traditional_chunking(
+        self,
+        text: str,
+        doc_id: str,
+        kb_id: str,
+        file_ext: Optional[str] = None
+    ) -> List[DocumentChunkModel]:
+        """
+        Fallback to traditional character-based chunking.
+
+        Args:
+            text: Text content
+            doc_id: Document ID
+            kb_id: Knowledge base ID
+            file_ext: File extension
+
+        Returns:
+            List of document chunks
+        """
+        chunk_size, chunk_overlap = self._calculate_dynamic_chunk_params(len(text), file_ext or '.txt')
+
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            separators=["\n\n", "\n", "。", "！", "？", ".", "!", "?", ";", ":", " ", ""],
+            length_function=len,
+            is_separator_regex=False,
+        )
+
+        chunk_texts = text_splitter.split_text(text)
+
+        chunks = []
+        for chunk_index, chunk_text in enumerate(chunk_texts):
+            chunk_id = f"{doc_id}_chunk_{chunk_index}"
+
+            chunk_model = DocumentChunkModel(
+                chunk_id=chunk_id,
+                doc_id=doc_id,
+                kb_id=kb_id,
+                content=chunk_text,
+                chunk_index=chunk_index
+            )
+            chunks.append(chunk_model)
+
+        logger.info(
+            "Fallback traditional chunking completed",
+            doc_id=doc_id,
+            chunks_count=len(chunks)
+        )
+
         return chunks
     
     async def _process_chunks(

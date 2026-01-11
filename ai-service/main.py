@@ -20,7 +20,8 @@ from app.api.middleware.error_handler import (
     validation_exception_handler,
     general_exception_handler
 )
-from app.api.endpoints import chat, session, employee, knowledge_base, conversation, webhook, mineru
+from app.api.endpoints import chat, session, employee, conversation, webhook, mineru
+from app.api.endpoints import knowledge_base_kb, documents
 
 # Setup logging
 setup_logging()
@@ -59,22 +60,30 @@ async def lifespan(app: FastAPI):
     
     # Shutdown
     logger.info("Shutting down Digital Employee AI Service...")
-    
+
     try:
-        # Stop task processor
+        # Stop task processor first (停止任务处理器)
         await task_processor.stop()
+        logger.debug("Task processor stopped")
 
-        # Stop Ollama keep-alive service
+        # Stop Ollama keep-alive service (停止 Ollama 保活服务)
         await ollama_keep_alive.stop()
+        logger.debug("Ollama keep-alive service stopped")
 
+        # Disconnect databases in reverse order (按相反顺序断开数据库连接)
         await mongodb.disconnect()
+        logger.debug("MongoDB disconnected")
+
         chroma_db.disconnect()
+        logger.debug("ChromaDB disconnected")
+
         await es_db.disconnect()
-        
-        logger.info("Task processor stopped and all databases disconnected successfully")
-        
+        logger.debug("ElasticSearch disconnected")
+
+        logger.info("All services stopped successfully")
+
     except Exception as e:
-        logger.error(f"Error during shutdown: error={str(e)}")
+        logger.error("Error during shutdown", error=str(e), exc_info=True)
 
 
 # Create FastAPI application
@@ -105,7 +114,9 @@ app.add_exception_handler(Exception, general_exception_handler)
 app.include_router(chat.router, prefix="/api/chat", tags=["Chat"])
 app.include_router(session.router, prefix="/api/chat/session", tags=["Session"])
 app.include_router(employee.router, prefix="/api/ai/digital-employee", tags=["Digital Employee"])
-app.include_router(knowledge_base.router, prefix="/api/knowledge-base", tags=["Knowledge Base"])
+# Knowledge base endpoints (split into two files)
+app.include_router(knowledge_base_kb.router, prefix="/api/knowledge-base", tags=["Knowledge Base"])
+app.include_router(documents.router, prefix="/api/knowledge-base/documents", tags=["Documents"])
 app.include_router(conversation.router, prefix="/api/conversation", tags=["Conversation"])
 app.include_router(webhook.router, prefix="/api/ai", tags=["Webhook"])
 app.include_router(mineru.router, prefix="/api/mineru", tags=["MinerU"])

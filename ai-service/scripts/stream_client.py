@@ -1,19 +1,61 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-OpenAI-style streaming client for /api/chat/openai/chat/completions.
+OpenAI-style streaming client for /api/chat/v1/chat/completions.
 
 依赖: requests
-用法示例:
-  python ai-service/scripts/stream_client.py --host http://192.168.8.230:8100 --employee_id hutao --user_id user_123456 --session_id sess_20251218_abc123 --query "我刚刚问了什么问题"
 
-脚本特点:
+=======
+用法说明
+=======
+
+【快速开始】（使用默认参数）
+  python ai-service/scripts/stream_client.py --query "你好"
+
+【指定服务器】
+  # 本地开发服务器
+  python ai-service/scripts/stream_client.py --host http://localhost:8000 --query "你好"
+
+  # 生产服务器
+  python ai-service/scripts/stream_client.py --host http://192.168.8.230:8100 --query "你好"
+
+【指定员工/用户/会话】
+  python ai-service/scripts/stream_client.py \\
+    --host http://localhost:8000 \\
+    --employee_id financial_analyst \\
+    --user_id user_20260110 \\
+    --session_id sess_financial_analyst_fdaf \\
+    --query "失蜡铸造的原理"
+
+【完整示例】
+  # 知识库问答
+  python ai-service/scripts/stream_client.py --query "密码学课程的两个主要分支是什么？"
+
+  # 实时信息查询（自动触发联网搜索）
+  python ai-service/scripts/stream_client.py --query "北京天气咋样"
+
+  # 学术研究问答
+  python ai-service/scripts/stream_client.py --query "数据资产通过哪两条重要途径推动企业新质生产力发展？"
+
+=======
+默认参数
+=======
+  --host           http://localhost:8000
+  --employee_id    financial_analyst
+  --user_id        user_20260110
+  --session_id     sess_financial_analyst_fdaf
+  --model          qwen2.5:7b
+
+=======
+脚本特点
+=======
 - 支持参数化 host/employee_id/user_id/session_id/model/stream/query
 - 使用 requests.post(..., stream=True) 读取响应
 - 解析 SSE 风格的 `data: {...}` 行，或直接的 JSON 行
 - 对 streaming chunk (object == "chat.completion.chunk") 输出 partial content
 - 遇到 finish_reason == "stop" 或 payload == "[DONE]" 时结束
 - 支持从环境变量 API_KEY 注入 X-API-Key 头
+- 显示 TTFB (首字节响应时间) 和 First Token Latency (首token延迟)
 """
 from __future__ import annotations
 import argparse
@@ -174,15 +216,23 @@ def run_stream(host: str, body: dict, api_key: Optional[str], timeout: int = 60)
  
 
 def main():
-    parser = argparse.ArgumentParser(description="OpenAI-style streaming test client")
-    parser.add_argument("--host", default="http://192.168.8.230:8100", help="Base host (including port)")
-    parser.add_argument("--employee_id", default="hutao", help="Employee ID")
-    parser.add_argument("--user_id", default="user_123456", help="User ID")
-    parser.add_argument("--session_id", default='sess_20251222_abc123', help="Session ID")
-    parser.add_argument("--model", default="qwen2.5:7b", help="Model name")
-    
-    parser.add_argument("--query", required=True, help="User query text")
-    parser.add_argument("--timeout", type=int, default=60, help="Stream timeout seconds")
+    parser = argparse.ArgumentParser(
+        description="OpenAI-style streaming test client",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+示例:
+  %(prog)s --query "你好"
+  %(prog)s --host http://192.168.8.230:8100 --query "北京天气"
+        """
+    )
+    parser.add_argument("--host", default="http://localhost:8000", help="Base host (including port), 默认: http://localhost:8000")
+    parser.add_argument("--employee_id", default="financial_analyst", help="Employee ID, 默认: financial_analyst")
+    parser.add_argument("--user_id", default="user_20260110", help="User ID, 默认: user_20260110")
+    parser.add_argument("--session_id", default="sess_financial_analyst_fdaf", help="Session ID, 默认: sess_financial_analyst_fdaf")
+    parser.add_argument("--model", default="qwen2.5:7b", help="Model name, 默认: qwen2.5:7b")
+
+    parser.add_argument("--query", required=True, help="User query text（必填）")
+    parser.add_argument("--timeout", type=int, default=60, help="Stream timeout seconds, 默认: 60")
     args = parser.parse_args()
 
     api_key = os.environ.get("API_KEY")

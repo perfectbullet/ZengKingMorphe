@@ -19,9 +19,9 @@ def _load_env_file():
 
     优先级：
     1. 如果显式指定了 ENV_FILE 环境变量，使用该文件
-    2. Windows 本地开发：尝试加载 .env-win
-    3. Docker/容器环境：使用 .env
-    4. 其他平台：使用 .env
+    2. WSL/Windows 本地开发：尝试加载 .env-win
+    3. 本地开发：尝试加载 .env-local
+    4. Docker/容器环境：使用 .env
     """
     # 检查是否显式指定了环境文件
     env_file = os.getenv("ENV_FILE")
@@ -30,16 +30,21 @@ def _load_env_file():
         print(f"[OK] Loaded environment from: {env_file}")
         return
 
-    # Windows 平台特殊处理
-    if sys.platform == "win32":
-        # 优先尝试 .env-win (Windows本地开发配置)
-        # 从 app/core/config.py 向上两级到 ai-service 目录
-        env_win_path = os.path.join(os.path.dirname(__file__), "..", "..", ".env-win")
-        env_win_path = os.path.abspath(env_win_path)
-        if os.path.exists(env_win_path):
-            load_dotenv(env_win_path, override=True)
-            print(f"[OK] Windows detected: Loaded environment from .env-win")
-            return
+    # WSL/Windows 本地开发：优先尝试 .env-win
+    env_win_path = os.path.join(os.path.dirname(__file__), "..", "..", ".env-win")
+    env_win_path = os.path.abspath(env_win_path)
+    if os.path.exists(env_win_path):
+        load_dotenv(env_win_path, override=True)
+        print(f"[OK] Loaded environment from .env-win")
+        return
+
+    # 本地开发：尝试 .env-local
+    env_local_path = os.path.join(os.path.dirname(__file__), "..", "..", ".env-local")
+    env_local_path = os.path.abspath(env_local_path)
+    if os.path.exists(env_local_path):
+        load_dotenv(env_local_path, override=True)
+        print(f"[OK] Loaded environment from .env-local")
+        return
 
     # 默认加载 .env (Docker/容器环境)
     load_dotenv()
@@ -154,6 +159,10 @@ class Settings(BaseSettings):
     api_port: int = Field(default=8000, ge=1, le=65535)
     api_workers: int = Field(default=4, ge=1)
     log_level: str = Field(default="INFO")
+    log_file: Optional[str] = Field(
+        default=None,
+        description="Optional log file path for file logging with rotation"
+    )
     debug: bool = Field(default=False)
 
     # Rate Limiting Configuration
@@ -178,6 +187,62 @@ class Settings(BaseSettings):
     summary_model: str = Field(default="gpt-4o-mini")
     summary_max_tokens: int = Field(default=200, ge=1)
     summary_batch_size: int = Field(default=10, ge=1)
+
+    # Semantic Chunking Configuration
+    enable_semantic_chunking: bool = Field(
+        default=True,
+        description="Enable semantic chunking using embeddings for better context preservation"
+    )
+    semantic_chunk_similarity_threshold: float = Field(
+        default=0.75,
+        ge=0.0,
+        le=1.0,
+        description="Similarity threshold for semantic chunk boundaries (lower = more chunks)"
+    )
+    semantic_chunk_min_size: int = Field(
+        default=100,
+        ge=50,
+        description="Minimum chunk size in characters for semantic chunking"
+    )
+    semantic_chunk_max_size: int = Field(
+        default=500,
+        ge=100,
+        description="Maximum chunk size in characters for semantic chunking"
+    )
+    semantic_chunk_window_size: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="Number of sentences to consider for similarity calculation"
+    )
+
+    # Hierarchical Summarization Configuration
+    enable_hierarchical_summary: bool = Field(
+        default=True,
+        description="Enable hierarchical summarization (chunk -> section -> document levels)"
+    )
+    summary_chunk_level: bool = Field(
+        default=True,
+        description="Generate summaries for each chunk"
+    )
+    summary_section_level: bool = Field(
+        default=True,
+        description="Generate summaries for sections (groups of related chunks)"
+    )
+    summary_document_level: bool = Field(
+        default=True,
+        description="Generate document-level summary"
+    )
+    summary_section_threshold: int = Field(
+        default=5,
+        ge=2,
+        description="Number of chunks to trigger section-level summary"
+    )
+    summary_document_threshold: int = Field(
+        default=50,
+        ge=10,
+        description="Number of chunks to trigger document-level summary"
+    )
 
     # MinerU PDF Parsing Configuration
     mineru_api_url: str = Field(

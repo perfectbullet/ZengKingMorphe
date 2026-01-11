@@ -32,19 +32,14 @@ class ChromaDB:
             logger.info(
                 f"Initializing Chroma client: host={settings.chroma_host}, port={settings.chroma_port}"
             )
-            
-            # Create settings with telemetry disabled to avoid signature mismatch errors
-            chroma_settings = chromadb.config.Settings(
-                chroma_api_impl="chromadb.api.fastapi.FastAPI",
-                chroma_server_host=settings.chroma_host,
-                chroma_server_http_port=settings.chroma_port,
-                anonymized_telemetry=False
-            )
-            
+
+            # Create HttpClient with telemetry disabled
+            # Use tenant and database to avoid telemetry issues
             self.client = chromadb.HttpClient(
-                host=settings.chroma_host, 
+                host=settings.chroma_host,
                 port=settings.chroma_port,
-                settings=chroma_settings
+                tenant="default_tenant",
+                database="default_database",
             )
 
             # Create embedding function based on configuration
@@ -127,8 +122,10 @@ class ChromaDB:
     def disconnect(self) -> None:
         """Disconnect from Chroma."""
         if self.client:
-            # Persist data
-            self.client.persist()
+            # HttpClient (远程连接) 不支持 persist() 方法
+            # ChromaDB 服务器会自动持久化数据,无需手动调用
+            # 只需要清空客户端引用即可
+            self.client = None
             logger.info("Disconnected from Chroma")
 
     async def add_documents(

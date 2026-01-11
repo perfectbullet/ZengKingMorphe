@@ -1,0 +1,20 @@
+{
+  "code": 201,
+  "message": "Session created successfully",
+  "data": {
+    "session_id": "sess_financial_analyst_fdaf",
+    "user_id": "user_20260110",
+    "employee_id": "financial_analyst",
+    "status": "active",
+    "message_count": 0,
+    "context_messages": [],
+    "created_at": "2026-01-10T11:48:18.905097Z",
+    "last_activity": "2026-01-10T11:48:18.905097Z",
+    "ended_at": null,
+    "metadata": {
+      "device": "desktop",
+      "platform": "web",
+      "source": "metahuman_app"
+    }
+  }
+}
