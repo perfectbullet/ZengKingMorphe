@@ -15,6 +15,64 @@ logger = get_logger(__name__)
 router = APIRouter()
 
 
+@router.get("/list")
+async def list_employees(
+    limit: int = Query(10, ge=1, le=100, description="Maximum number of employees to return"),
+    api_key: str = Depends(get_api_key),
+    db=Depends(get_database),
+):
+    """
+    获取数字员工列表（前N个）。
+
+    \nArgs:
+        \n- limit: 返回的最大数量（默认10，最大100）
+        \n- api_key: API key from auth
+        \n- db: Database instance
+
+    \nReturns:
+        \n- Employee list with total count
+    """
+    try:
+        logger.info("List employees request", limit=limit)
+
+        # 查询员工列表，按创建时间倒序
+        cursor = db.digital_employee_configs.find().sort("created_at", -1).limit(limit)
+        employees = await cursor.to_list(length=limit)
+
+        # 统计总数
+        total = await db.digital_employee_configs.count_documents({})
+
+        # 格式化返回数据
+        result = []
+        for emp in employees:
+            emp.pop("_id", None)
+            emp["created_at"] = emp["created_at"].isoformat() + "Z"
+            emp["updated_at"] = emp["updated_at"].isoformat() + "Z"
+            if emp.get("synced_at"):
+                emp["synced_at"] = emp["synced_at"].isoformat() + "Z"
+            result.append(emp)
+
+        return {
+            "code": 200,
+            "message": "success",
+            "data": {
+                "total": total,
+                "count": len(result),
+                "employees": result,
+            }
+        }
+
+    except Exception as e:
+        logger.error(
+            f"List employees error: limit={limit}, error={str(e)}",
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to list employees",
+        )
+
+
 @router.get("/detail/{employee_id}")
 async def get_employee(
     employee_id: str = Path(..., description="Employee ID"),

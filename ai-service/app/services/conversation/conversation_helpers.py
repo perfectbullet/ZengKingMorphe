@@ -187,16 +187,13 @@ def build_context_text(state: ConversationState) -> str:
     Returns:
         Formatted context string for LLM prompt
     """
-    # Use compressed context if available
     if state.get("compressed_context"):
         return f"[压缩后的参考信息]\n{state['compressed_context']}"
 
-    # Build from retrieved docs
     context_parts = []
     for i, doc in enumerate(state.get("retrieved_docs", [])[:3], 1):
         context_parts.append(f"[知识库参考{i}]\n{doc.get('content', '')[:500]}")
 
-    # Add web search results
     web_results = state.get("web_search_results", [])
     if web_results and state.get("web_search_used", False):
         for i, web_result in enumerate(web_results[:3], 1):
@@ -226,6 +223,26 @@ def get_source_indicator(state: ConversationState) -> str:
     return ""
 
 
+def _build_conversation_history(state: ConversationState, max_turns: int = 5) -> List:
+    """
+    Build conversation history messages from state.
+
+    Args:
+        state: Current conversation state
+        max_turns: Maximum number of conversation turns to include
+
+    Returns:
+        List of Message objects from conversation history
+    """
+    messages = []
+    for msg in state.get("context", {}).get("messages", [])[-max_turns:]:
+        if msg.get("role") == "user":
+            messages.append(HumanMessage(content=msg.get("content", "")))
+        elif msg.get("role") == "assistant":
+            messages.append(AIMessage(content=msg.get("content", "")))
+    return messages
+
+
 # =============================================================================
 # Message Building Helpers
 # =============================================================================
@@ -251,8 +268,9 @@ def build_greeting_messages(
     personality = employee_config.get("personality", {})
     role = employee_config.get("role", "AI助手")
     greeting = employee_config.get("greeting", "您好")
+    name = employee_config.get('name', 'AI助手')
+    description = employee_config.get('description', '专业的AI助手')
 
-    # Get greeting type from entities
     entities = state.get("entities", {})
     greeting_type = entities.get("greeting_type", "basic")
     matched_keyword = entities.get("matched_keyword", "")
@@ -260,7 +278,6 @@ def build_greeting_messages(
     tone_desc, _, _ = get_personality_description(personality)
     formality_desc = "高度正式" if personality.get('formality') == 'high' else "适度正式"
 
-    # Style hints based on greeting type
     style_hints = {
         "time": f"根据时间（{matched_keyword}）给予相应的热情问候，并自然地询问用户今天需要什么帮助",
         "casual": "用轻松活泼的方式回应，表现出随时准备提供帮助的状态",
@@ -269,10 +286,10 @@ def build_greeting_messages(
     }
     style_hint = style_hints.get(greeting_type, style_hints["basic"])
 
-    system_prompt = f"""你是 {employee_config.get('name', 'AI助手')}，{role}。
+    system_prompt = f"""你是 {name}，{role}。
 
 角色定位：
-{employee_config.get('description', '专业的AI助手')}
+{description}
 
 个性特征：
 - 语气风格：{tone_desc}
@@ -296,15 +313,7 @@ def build_greeting_messages(
 请生成自然、友好的问候回应。"""
 
     messages = [SystemMessage(content=system_prompt)]
-
-    # Add conversation history (last 3 turns)
-    for msg in state.get("context", {}).get("messages", [])[-3:]:
-        if msg.get("role") == "user":
-            messages.append(HumanMessage(content=msg.get("content", "")))
-        elif msg.get("role") == "assistant":
-            messages.append(AIMessage(content=msg.get("content", "")))
-
-    # Current greeting
+    messages.extend(_build_conversation_history(state, max_turns=3))
     messages.append(HumanMessage(content=state["user_query"]))
 
     logger.debug(
@@ -333,25 +342,24 @@ def build_generation_messages(state: ConversationState) -> List:
     """
     employee_config = state.get("employee_config", {})
 
-    # Handle greeting separately
     if state.get("intent") == "greeting":
         return build_greeting_messages(state, employee_config)
 
-    # Get personality and basic config
     personality = employee_config.get("personality", {})
     role = employee_config.get("role", "AI助手")
     greeting = employee_config.get("greeting", "您好")
+    name = employee_config.get('name', 'AI助手')
+    description = employee_config.get('description', '专业的AI助手')
     tone_desc, style_desc, formality_desc = get_personality_description(personality)
 
     context_text = build_context_text(state)
     source_indicator = get_source_indicator(state)
 
-    # System prompt for realtime queries with web search
-    if state.get("web_search_used", False) and state.get("is_realtime_query", False):
-        system_prompt = f"""你是 {employee_config.get('name', 'AI助手')}，{role}。
+    # Build base system prompt
+    base_prompt = f"""你是 {name}，{role}。
 
 角色定位：
-{employee_config.get('description', '专业的AI助手')}
+{description}
 
 个性特征：
 - 语气风格：{tone_desc}
@@ -360,8 +368,11 @@ def build_generation_messages(state: ConversationState) -> List:
 
 开场白：
 {greeting}
+"""
 
-**重要提示**：用户询问的是实时信息（如{state.get('realtime_category', '最新动态')}），系统已通过网络搜索获取了最新数据。
+    # Add scenario-specific instructions
+    if state.get("web_search_used", False) and state.get("is_realtime_query", False):
+        requirements = f"""**重要提示**：用户询问的是实时信息（如{state.get('realtime_category', '最新动态')}），系统已通过网络搜索获取了最新数据。
 
 回答要求：
 1. **必须基于下方提供的网络资料回答**
@@ -379,21 +390,7 @@ def build_generation_messages(state: ConversationState) -> List:
 
 请基于上述网络资料，提供准确的实时信息回答。"""
     else:
-        # Regular RAG-based system prompt
-        system_prompt = f"""你是 {employee_config.get('name', 'AI助手')}，{role}。
-
-角色定位：
-{employee_config.get('description', '专业的AI助手')}
-
-个性特征：
-- 语气风格：{tone_desc}
-- 沟通方式：{style_desc}
-- 正式程度：{formality_desc}
-
-开场白：
-{greeting}
-
-回答要求：
+        requirements = f"""回答要求：
 1. 严格基于提供的上下文信息回答，不编造内容
 2. 如果上下文不足，诚实告知并建议联系人工客服
 3. 保持{tone_desc}的语气风格
@@ -408,17 +405,10 @@ def build_generation_messages(state: ConversationState) -> List:
 
 请提供专业、准确的回答。"""
 
-    # Build messages list
+    system_prompt = base_prompt + "\n" + requirements
+
     messages = [SystemMessage(content=system_prompt)]
-
-    # Add conversation history (last 5 turns)
-    for msg in state.get("context", {}).get("messages", [])[-5:]:
-        if msg.get("role") == "user":
-            messages.append(HumanMessage(content=msg.get("content", "")))
-        elif msg.get("role") == "assistant":
-            messages.append(AIMessage(content=msg.get("content", "")))
-
-    # Current query
+    messages.extend(_build_conversation_history(state, max_turns=5))
     messages.append(HumanMessage(content=state["user_query"]))
 
     return messages
@@ -434,17 +424,16 @@ def heuristic_complexity(query: str) -> float:
     Returns:
         复杂度分数 0-10
     """
-    score = 3.0  # 基础分数
-    query_lower = query.lower()
-
-    # 长度因子
+    score = 3.0
     length = len(query)
+
+    # Length factor
     if length > 100:
         score += 2
     elif length > 50:
         score += 1
 
-    # 复杂关键词（增加复杂度）
+    # Complex keywords
     complex_keywords = [
         "为什么", "为何", "如何", "怎样", "怎么",
         "比较", "对比", "区别", "差异",
@@ -455,15 +444,12 @@ def heuristic_complexity(query: str) -> float:
     if any(kw in query for kw in complex_keywords):
         score += 2
 
-    # 多问题标记
+    # Multiple questions
     if "，" in query or "。" in query or "？" in query or "?" in query:
         score += 1
 
-    # 简单查询模式（降低复杂度）
-    simple_patterns = [
-        "是什么", "什么是", "多少", "几个",
-        "天气", "价格", "多少钱", "怎么"
-    ]
+    # Simple patterns (reduce complexity)
+    simple_patterns = ["是什么", "什么是", "多少", "几个", "天气", "价格", "多少钱", "怎么"]
     if any(p in query for p in simple_patterns) and length < 30:
         score -= 1
 

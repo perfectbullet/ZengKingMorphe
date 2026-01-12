@@ -6,7 +6,7 @@ Provides endpoints for:
 - Conversation statistics
 - System health monitoring
 """
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, Query
 
@@ -20,6 +20,49 @@ logger = get_logger(__name__)
 router = APIRouter()
 
 
+# =============================================================================
+# Helper Functions
+# =============================================================================
+def _success_response(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a standardized success response."""
+    return {"code": 200, "message": "success", "data": data}
+
+
+def _error_response(message: str, error: Any) -> Dict[str, Any]:
+    """Return a standardized error response."""
+    return {"code": 500, "message": message, "error": str(error)}
+
+
+def _calculate_date_range(days: int) -> Tuple[datetime, datetime]:
+    """Calculate start and end dates for metrics query."""
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=days)
+    return start_date, end_date
+
+
+def _build_date_query(employee_id: Optional[str], start_date: datetime, end_date: datetime) -> Dict[str, Any]:
+    """Build MongoDB query for date-filtered conversations."""
+    query = {"created_at": {"$gte": start_date, "$lte": end_date}}
+    if employee_id:
+        query["employee_id"] = employee_id
+    return query
+
+
+def _calculate_percentage(numerator: int, denominator: int) -> str:
+    """Safely calculate percentage as formatted string."""
+    if denominator == 0:
+        return "0%"
+    return f"{(numerator / denominator) * 100:.1f}%"
+
+
+def _calculate_average(total: float, count: int) -> float:
+    """Safely calculate average."""
+    return total / count if count > 0 else 0.0
+
+
+# =============================================================================
+# Endpoints
+# =============================================================================
 @router.get("/retrieval-metrics")
 async def get_retrieval_metrics(
     employee_id: Optional[str] = Query(None, description="Filter by employee ID"),
@@ -58,18 +101,9 @@ async def get_retrieval_metrics(
             days=days,
         )
 
-        # Calculate date range
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=days)
+        start_date, end_date = _calculate_date_range(days)
+        query = _build_date_query(employee_id, start_date, end_date)
 
-        # Build query
-        query = {
-            "created_at": {"$gte": start_date, "$lte": end_date}
-        }
-        if employee_id:
-            query["employee_id"] = employee_id
-
-        # Get all conversations in date range
         cursor = db.conversations.find(query).sort("created_at", -1)
         conversations = await cursor.to_list(length=None)
 
@@ -83,7 +117,6 @@ async def get_retrieval_metrics(
         high_relevance_count = 0
 
         for conv in conversations:
-            # Count RAG queries
             if conv.get("retrieved_docs"):
                 rag_queries += 1
                 relevance = conv.get("relevance_score", 0.0)
@@ -91,23 +124,20 @@ async def get_retrieval_metrics(
                 if relevance >= settings.relevance_threshold:
                     high_relevance_count += 1
 
-            # Count web search queries
             if conv.get("web_search_used"):
                 web_search_queries += 1
 
-            # Count FAQ queries (inferred from intent)
             if conv.get("intent") == "faq_match":
                 faq_queries += 1
 
-            # Response time
             total_response_time += conv.get("response_time_ms", 0)
 
         # Calculate averages
-        avg_relevance = total_relevance / rag_queries if rag_queries > 0 else 0.0
-        avg_response_time = total_response_time / total_queries if total_queries > 0 else 0.0
-        hit_rate = (high_relevance_count / rag_queries * 100) if rag_queries > 0 else 0.0
+        avg_relevance = _calculate_average(total_relevance, rag_queries)
+        avg_response_time = _calculate_average(total_response_time, total_queries)
+        hit_rate = _calculate_average(high_relevance_count * 100, rag_queries)
 
-        # Get knowledge base breakdown if kb_id is specified
+        # Knowledge base breakdown
         kb_breakdown = []
         if kb_id:
             kb_conv = [c for c in conversations if kb_id in c.get("kb_used", [])]
@@ -126,32 +156,28 @@ async def get_retrieval_metrics(
                 "hit_rate": f"{kb_hit_rate:.1f}%",
             })
 
-        return {
-            "code": 200,
-            "message": "success",
-            "data": {
-                "summary": {
-                    "total_queries": total_queries,
-                    "rag_queries": rag_queries,
-                    "web_search_queries": web_search_queries,
-                    "faq_queries": faq_queries,
-                    "hit_rate": f"{hit_rate:.1f}%",
-                    "avg_relevance_score": f"{avg_relevance:.3f}",
-                    "avg_response_time_ms": f"{avg_response_time:.0f}",
-                },
-                "breakdown": {
-                    "rag_rate": f"{(rag_queries / total_queries * 100):.1f}%" if total_queries > 0 else "0%",
-                    "web_search_rate": f"{(web_search_queries / total_queries * 100):.1f}%" if total_queries > 0 else "0%",
-                    "faq_rate": f"{(faq_queries / total_queries * 100):.1f}%" if total_queries > 0 else "0%",
-                },
-                "kb_breakdown": kb_breakdown,
-                "date_range": {
-                    "start": start_date.isoformat(),
-                    "end": end_date.isoformat(),
-                    "days": days,
-                }
+        return _success_response({
+            "summary": {
+                "total_queries": total_queries,
+                "rag_queries": rag_queries,
+                "web_search_queries": web_search_queries,
+                "faq_queries": faq_queries,
+                "hit_rate": f"{hit_rate:.1f}%",
+                "avg_relevance_score": f"{avg_relevance:.3f}",
+                "avg_response_time_ms": f"{avg_response_time:.0f}",
+            },
+            "breakdown": {
+                "rag_rate": _calculate_percentage(rag_queries, total_queries),
+                "web_search_rate": _calculate_percentage(web_search_queries, total_queries),
+                "faq_rate": _calculate_percentage(faq_queries, total_queries),
+            },
+            "kb_breakdown": kb_breakdown,
+            "date_range": {
+                "start": start_date.isoformat(),
+                "end": end_date.isoformat(),
+                "days": days,
             }
-        }
+        })
 
     except Exception as e:
         logger.error(
@@ -159,11 +185,7 @@ async def get_retrieval_metrics(
             error=str(e),
             exc_info=True
         )
-        return {
-            "code": 500,
-            "message": "Failed to retrieve metrics",
-            "error": str(e)
-        }
+        return _error_response("Failed to retrieve metrics", e)
 
 
 @router.get("/conversation-stats")
@@ -199,50 +221,36 @@ async def get_conversation_stats(
             days=days,
         )
 
-        # Calculate date range
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=days)
+        start_date, end_date = _calculate_date_range(days)
+        query = _build_date_query(employee_id, start_date, end_date)
 
-        # Build query
-        query = {
-            "created_at": {"$gte": start_date, "$lte": end_date}
-        }
-        if employee_id:
-            query["employee_id"] = employee_id
-
-        # Get conversations
         cursor = db.conversations.find(query).sort("created_at", -1)
         conversations = await cursor.to_list(length=None)
 
-        # Calculate statistics
         total_conversations = len(conversations)
 
-        # Intent distribution
+        # Build intent distribution
         intent_dist: Dict[str, int] = {}
         for conv in conversations:
             intent = conv.get("intent", "unknown")
             intent_dist[intent] = intent_dist.get(intent, 0) + 1
 
-        # Daily trend
-        daily_trend = {}
+        # Build daily trend
+        daily_trend: Dict[str, int] = {}
         for conv in conversations:
             date_key = conv["created_at"].strftime("%Y-%m-%d")
             daily_trend[date_key] = daily_trend.get(date_key, 0) + 1
 
-        return {
-            "code": 200,
-            "message": "success",
-            "data": {
-                "total_conversations": total_conversations,
-                "intent_distribution": intent_dist,
-                "daily_trend": dict(sorted(daily_trend.items())),
-                "date_range": {
-                    "start": start_date.isoformat(),
-                    "end": end_date.isoformat(),
-                    "days": days,
-                }
+        return _success_response({
+            "total_conversations": total_conversations,
+            "intent_distribution": intent_dist,
+            "daily_trend": dict(sorted(daily_trend.items())),
+            "date_range": {
+                "start": start_date.isoformat(),
+                "end": end_date.isoformat(),
+                "days": days,
             }
-        }
+        })
 
     except Exception as e:
         logger.error(
@@ -250,11 +258,7 @@ async def get_conversation_stats(
             error=str(e),
             exc_info=True
         )
-        return {
-            "code": 500,
-            "message": "Failed to retrieve stats",
-            "error": str(e)
-        }
+        return _error_response("Failed to retrieve stats", e)
 
 
 @router.get("/system-health")
@@ -279,22 +283,17 @@ async def get_system_health(
         系统健康状态
     """
     try:
-        # Get recent error count (from conversations with errors)
         since = datetime.now() - timedelta(hours=1)
         error_count = await db.conversations.count_documents({
             "created_at": {"$gte": since},
             "error": {"$exists": True}
         })
 
-        return {
-            "code": 200,
-            "message": "success",
-            "data": {
-                "mongodb": "connected" if db.db is not None else "disconnected",
-                "recent_errors_1h": error_count,
-                "status": "healthy" if error_count < 10 else "degraded"
-            }
-        }
+        return _success_response({
+            "mongodb": "connected" if db.db is not None else "disconnected",
+            "recent_errors_1h": error_count,
+            "status": "healthy" if error_count < 10 else "degraded"
+        })
 
     except Exception as e:
         logger.error(
@@ -302,8 +301,4 @@ async def get_system_health(
             error=str(e),
             exc_info=True
         )
-        return {
-            "code": 500,
-            "message": "Failed to retrieve health status",
-            "error": str(e)
-        }
+        return _error_response("Failed to retrieve health status", e)

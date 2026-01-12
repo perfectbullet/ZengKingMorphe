@@ -72,37 +72,31 @@ import requests
 # Configuration
 # =============================================================================
 
-# 默认测试会话信息（来自 "一个测试用的session信息.json"）
 DEFAULT_SESSION_ID = "sess_financial_analyst_fdaf"
 DEFAULT_USER_ID = "user_20260110"
 DEFAULT_EMPLOYEE_ID = "financial_analyst"
 DEFAULT_HOST = "http://localhost:8000"
 DEFAULT_API_KEY = "y2tJW3P0bvZIxw6pGuV2FrcT0C1wyUfg2ldweEaDYN4"
 
-# 测试配置
-REQUEST_DELAY = 1.0  # 每个请求之间的延迟（秒），避免触发速率限制
-MAX_RETRIES = 3  # 429 错误的最大重试次数
-RETRY_DELAY = 2.0  # 重试延迟（秒）
+REQUEST_DELAY = 1.0
+MAX_RETRIES = 3
+RETRY_DELAY = 2.0
 
-# 测试问题文件路径
 TEST_QUESTIONS_FILE = Path(__file__).parent.parent / "scripts" / "test_questions.json"
 
 
 # =============================================================================
-# Test Questions (从 test_questions.json 中的精选问题)
+# Test Questions
 # =============================================================================
 
 INTENT_TEST_QUESTIONS = [
-    # 问候语测试
     ("问候语", "你好"),
     ("问候语", "早上好"),
     ("问候语", "在吗"),
     ("问候语", "哈喽"),
     ("问候语", "打扰一下"),
-    # 一般查询测试
     ("一般查询", "失蜡铸造的原理是什么"),
     ("一般查询", "密码学课程的两个主要分支"),
-    # 复杂查询测试 - 多轮对话、上下文理解
     ("一般查询-复杂", "比较一下失蜡铸造和数控雕刻的优缺点，并分析在什么情况下应该选择哪种工艺"),
     ("一般查询-复杂", "我需要了解数字韧性对企业发展的具体影响，包括正面和负面因素，最好有实际案例"),
     ("一般查询-复杂", "如果我想学习密码学，应该按照什么样的顺序学习？请给出详细的学习路径和建议"),
@@ -129,13 +123,11 @@ COMPLEXITY_TEST_QUESTIONS = [
 ]
 
 REALTIME_TEST_QUESTIONS = [
-    # 实时查询测试
     ("天气", "北京今天天气怎么样"),
     ("新闻", "今天有什么热点新闻"),
     ("价格", "黄金现在的价格是多少"),
     ("time", "现在是几点了"),
     ("market", "今天的股市行情如何"),
-    # 非实时查询测试 - 这些不应该被识别为实时查询
     ("非实时-知识查询", "失蜡铸造的原理是什么"),
     ("非实时-历史事实", "悉尼歌剧院是什么时候建成的"),
     ("非实时-概念解释", "什么是数字韧性"),
@@ -160,9 +152,10 @@ class Colors:
 
 def print_header(text: str) -> None:
     """Print a section header."""
-    print(f"\n{Colors.HEADER}{Colors.BOLD}{'=' * 60}{Colors.END}")
+    separator = f"{Colors.HEADER}{Colors.BOLD}{'=' * 60}{Colors.END}"
+    print(f"\n{separator}")
     print(f"{Colors.HEADER}{Colors.BOLD}{text.center(60)}{Colors.END}")
-    print(f"{Colors.HEADER}{Colors.BOLD}{'=' * 60}{Colors.END}\n")
+    print(f"{separator}\n")
 
 
 def print_success(text: str) -> None:
