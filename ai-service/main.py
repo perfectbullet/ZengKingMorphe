@@ -21,7 +21,7 @@ from app.api.middleware.error_handler import (
     general_exception_handler
 )
 from app.api.endpoints import chat, session, employee, conversation, webhook, mineru
-from app.api.endpoints import knowledge_base_kb, documents
+from app.api.endpoints import knowledge_base_kb, documents, metrics
 
 # Setup logging
 setup_logging()
@@ -120,6 +120,7 @@ app.include_router(documents.router, prefix="/api/knowledge-base/documents", tag
 app.include_router(conversation.router, prefix="/api/conversation", tags=["Conversation"])
 app.include_router(webhook.router, prefix="/api/ai", tags=["Webhook"])
 app.include_router(mineru.router, prefix="/api/mineru", tags=["MinerU"])
+app.include_router(metrics.router, prefix="/api/metrics", tags=["Metrics"])
 
 
 @app.get("/")

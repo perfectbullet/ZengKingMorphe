@@ -257,7 +257,7 @@ class RAGBatchTester:
 async def main():
     """主函数"""
     parser = argparse.ArgumentParser(description="RAG系统批量测试")
-    parser.add_argument("--dir", type=str, default="D:\\zenking_work\\期刊文件", help="测试目录")
+    parser.add_argument("--dir", type=str, default="/home/zj/zenking_work/metahuman_work/test_files", help="测试目录")
     parser.add_argument("--output", type=str, default="ai-service/docs/rag_chunk_baseline_full.json", help="输出文件")
     parser.add_argument("--pattern", type=str, default="*.pdf", help="文件匹配模式")
     parser.add_argument("--use-mineru", action="store_true", default=True, help="使用MinerU解析PDF")
@@ -303,7 +303,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    if sys.platform == "win32":
-        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-
     asyncio.run(main())

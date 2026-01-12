@@ -27,7 +27,7 @@ MinerU 客户端测试脚本
 示例：
     cd ai-service
     python tests/test_mineru_client.py process --file "../test_files/首饰雕蜡工艺-全本.pdf"
-    python tests/test_mineru_client.py process --file "D:\\zenking_work\\期刊文件\\高品质生态环境会提升企业全要素生产率吗？.pdf" --save-md
+    python tests/test_mineru_client.py process --file "/home/zj/zenking_work/metahuman_work/test_files/document.pdf" --save-md
 
 结果存储位置：
     - MongoDB 缓存: mineru_cache, mineru_jobs 集合

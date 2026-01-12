@@ -16,14 +16,19 @@ class PerformanceTester:
         self.api_url = f"{base_url}/api/chat/v1/chat/completions"
 
     def send_query(self, query: str, employee_id: str = "hutao") -> Dict:
-        """Send a query and measure timing"""
+        """
+        Send a query and measure timing.
+
+        Note: The API only supports streaming responses.
+        The stream is consumed internally and timing is measured.
+        """
 
         payload = {
             "messages": [{"role": "user", "content": query}],
             "employee_id": employee_id,
             "user_id": "perf_test_user",
             "session_id": "perf_test_session",
-            "stream": False  # Use non-streaming for accurate timing
+            "stream": True  # API only supports streaming
         }
 
         start_time = time.time()
@@ -32,9 +37,28 @@ class PerformanceTester:
             response = requests.post(
                 self.api_url,
                 json=payload,
+                stream=True,
                 timeout=30.0
             )
             response.raise_for_status()
+
+            # Consume the stream
+            full_content = ""
+            for line in response.iter_lines(decode_unicode=True):
+                if not line or line.startswith(":"):
+                    continue
+                if line == "data: [DONE]":
+                    break
+                if line.startswith("data: "):
+                    line = line[6:]
+                try:
+                    chunk_data = json.loads(line)
+                    if "choices" in chunk_data and len(chunk_data["choices"]) > 0:
+                        delta = chunk_data["choices"][0].get("delta", {})
+                        if "content" in delta:
+                            full_content += delta["content"]
+                except json.JSONDecodeError:
+                    pass
 
             duration_ms = (time.time() - start_time) * 1000
 
@@ -42,7 +66,8 @@ class PerformanceTester:
                 "success": True,
                 "duration_ms": duration_ms,
                 "status_code": response.status_code,
-                "query": query
+                "query": query,
+                "response_length": len(full_content)
             }
 
         except Exception as e:

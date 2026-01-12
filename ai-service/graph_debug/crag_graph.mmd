@@ -8,9 +8,10 @@ graph TD;
 	load_employee_config(load_employee_config)
 	load_session_context(load_session_context)
 	input_validation(input_validation)
+	classify_query_type(classify_query_type)
+	evaluate_complexity(evaluate_complexity)
 	rewrite_query(rewrite_query)
 	match_faq(match_faq)
-	check_realtime_query(check_realtime_query)
 	intent_recognition(intent_recognition)
 	knowledge_retrieval(knowledge_retrieval)
 	grade_documents(grade_documents)
@@ -22,22 +23,23 @@ graph TD;
 	save_conversation(save_conversation)
 	__end__([<p>__end__</p>]):::last
 	__start__ --> load_employee_config;
-	check_realtime_query -.-> match_faq;
-	check_realtime_query -.-> web_search;
+	classify_query_type -. &nbsp;normal&nbsp; .-> evaluate_complexity;
+	classify_query_type -. &nbsp;greeting&nbsp; .-> generate_answer;
+	classify_query_type -. &nbsp;realtime&nbsp; .-> web_search;
 	compress_context -.-> generate_answer;
 	compress_context -.-> web_search;
+	evaluate_complexity --> rewrite_query;
 	generate_answer --> verify_answer;
 	grade_documents --> rerank_documents;
-	input_validation --> rewrite_query;
-	intent_recognition -.-> generate_answer;
-	intent_recognition -.-> knowledge_retrieval;
+	input_validation --> classify_query_type;
+	intent_recognition --> knowledge_retrieval;
 	knowledge_retrieval --> grade_documents;
 	load_employee_config --> load_session_context;
 	load_session_context --> input_validation;
-	match_faq -. &nbsp;generate&nbsp; .-> generate_answer;
+	match_faq -.-> generate_answer;
 	match_faq -.-> intent_recognition;
 	rerank_documents --> compress_context;
-	rewrite_query --> check_realtime_query;
+	rewrite_query --> match_faq;
 	verify_answer --> save_conversation;
 	web_search --> generate_answer;
 	save_conversation --> __end__;

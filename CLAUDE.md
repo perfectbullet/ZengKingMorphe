@@ -97,9 +97,9 @@ python scripts/e2e_rag_evaluation.py
 
 ### LangGraph Conversation Workflow
 
-The core conversation engine is a **15-node StateGraph** ([ai-service/app/services/conversation_service.py](ai-service/app/services/conversation_service.py)):
+The core conversation engine is a **16-node StateGraph** ([ai-service/app/services/conversation_service.py](ai-service/app/services/conversation_service.py)):
 
-**Flow**: `load_employee_config → load_session_context → input_validation → rewrite_query → check_realtime_query → match_faq → recognize_intent → knowledge_retrieval → grade_documents → rerank_documents → compress_context → web_search → generate_answer → verify_answer → save_conversation`
+**Flow**: `load_employee_config → load_session_context → input_validation → evaluate_complexity → rewrite_query → check_realtime_query → match_faq → recognize_intent → knowledge_retrieval → grade_documents → rerank_documents → compress_context → web_search → generate_answer → verify_answer → save_conversation`
 
 **Key Routing Logic**:
 - **Realtime queries** (weather, news, stock prices) → bypass FAQ/RAG, direct to web search
@@ -232,6 +232,8 @@ class ChatResponse(BaseModel):
 
 ### Streaming Implementation
 
+**IMPORTANT**: This API supports **streaming responses only**. There is no non-streaming chat endpoint.
+
 Chat streaming uses SSE (Server-Sent Events) via `sse-starlette` ([ai-service/app/api/endpoints/chat.py](ai-service/app/api/endpoints/chat.py)):
 
 **Event Types**:
@@ -244,6 +246,25 @@ Chat streaming uses SSE (Server-Sent Events) via `sse-starlette` ([ai-service/ap
 **TTFB Tracking**: Time To First Byte is tracked via `state["ttfb_ms"]` in the workflow.
 
 **Chunk Storage**: Streaming chunks optionally stored in MongoDB `stream_chunks` collection for debugging.
+
+**Non-Streaming Usage**: If you need the complete response without handling streaming, consume the stream internally:
+```python
+# Example for scripts/tests that need full response
+response = requests.post(url, json=payload, stream=True)
+full_content = ""
+for line in response.iter_lines(decode_unicode=True):
+    if not line or line.startswith(":"):
+        continue
+    if line == "data: [DONE]":
+        break
+    if line.startswith("data: "):
+        line = line[6:]
+        chunk_data = json.loads(line)
+        if "choices" in chunk_data:
+            delta = chunk_data["choices"][0].get("delta", {})
+            if "content" in delta:
+                full_content += delta["content"]
+```
 
 ### Authentication Status
 

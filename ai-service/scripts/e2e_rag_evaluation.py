@@ -145,7 +145,7 @@ class E2ERAGEvaluation:
     def __init__(
         self,
         base_url: str = "http://localhost:8000",
-        pdf_dir: str = r"D:\\zenking_work\\期刊文件",
+        pdf_dir: str = "/home/zj/zenking_work/metahuman_work/test_files",
         api_key: str = "y2tJW3P0bvZIxw6pGuV2FrcT0C1wyUfg2ldweEaDYN4"
     ):
         self.base_url = base_url

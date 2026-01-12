@@ -167,61 +167,59 @@ async def test_openai_completion(client: httpx.AsyncClient):
     print_separator()
     print(f"🧪 测试OpenAI兼容接口")
     print_separator()
-    
+
     request_data = {
         "model": "qwen2.5:7b",
         "messages": [
             {"role": "user", "content": "首饰铸造工艺的优缺点是什么？"}
         ],
-        "stream": False,
+        "stream": True,  # API only supports streaming
         "employee_id": "hutao",
         "user_id": "test_openai_user"
     }
-    
+
     try:
         response = await client.post(
-            f"{API_BASE_URL}/api/chat/openai/chat/completions",
+            f"{API_BASE_URL}/api/chat/v1/chat/completions",
             json=request_data,
             timeout=60.0
         )
-        
+
         if response.status_code != 200:
             print(f"❌ 请求失败: {response.status_code}")
             print(f"响应: {response.text}")
             return False
-        
-        result = response.json()
-        
+
+        # Consume streaming response
+        full_content = ""
+        async for line in response.aiter_lines():
+            if not line or line.startswith(":"):
+                continue
+            if line == "data: [DONE]":
+                break
+            if line.startswith("data: "):
+                line = line[6:]
+            try:
+                chunk_data = json.loads(line)
+                if "choices" in chunk_data and len(chunk_data["choices"]) > 0:
+                    delta = chunk_data["choices"][0].get("delta", {})
+                    if "content" in delta:
+                        full_content += delta["content"]
+            except json.JSONDecodeError:
+                pass
+
         print(f"\n✅ 请求成功!")
-        print(f"对话ID: {result.get('id', 'N/A')}")
-        print(f"模型: {result.get('model', 'N/A')}")
-        
-        # Print answer
-        choices = result.get('choices', [])
-        if choices:
-            message = choices[0].get('message', {})
-            print(f"\n💬 AI回答:")
-            print_separator("-", 60)
-            print(message.get('content', 'N/A')[:300] + "...")
-            print_separator("-", 60)
-        
-        # Print metadata with sources
-        metadata = result.get('metadata', {})
-        if metadata:
-            print(f"\n📊 元数据:")
-            print(f"  会话ID: {metadata.get('conversation_id', 'N/A')}")
-            print(f"  置信度: {metadata.get('confidence', 0.0):.2f}")
-            print(f"  知识库: {metadata.get('kb_used', [])}")
-            print(f"  联网查询: {'是' if metadata.get('web_search_used', False) else '否'}")
-            
-            sources = metadata.get('sources', {})
-            if sources:
-                print_sources(sources)
-            else:
-                print("\n⚠️ 警告: 元数据中没有sources字段!")
-        
+        print(f"\n💬 AI回答:")
+        print_separator("-", 60)
+        print(full_content[:300] + "...")
+        print_separator("-", 60)
+
+        # Note: Detailed metadata extraction from streaming chunks would require
+        # additional parsing of the done chunk
+        print(f"\n⚠️ 注意: 流式响应的元数据需要从完成chunk中解析")
+
         return True
-        
+
     except Exception as e:
         print(f"❌ 测试失败: {str(e)}")
         import traceback

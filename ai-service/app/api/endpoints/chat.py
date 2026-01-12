@@ -2,9 +2,11 @@
 Chat API endpoints.
 """
 
+import random
 import time
-from typing import AsyncGenerator, Optional
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from typing import AsyncGenerator, List, Optional
+from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import Query
 from sse_starlette.sse import EventSourceResponse
 import json
 from datetime import datetime
@@ -24,6 +26,34 @@ from app.services.conversation_service import conversation_workflow
 logger = get_logger(__name__)
 
 router = APIRouter()
+
+
+# Status message variations for better UX
+STATUS_TOKENS: List[str] = [
+    "正在查询资料。",
+    "正在检索知识库...",
+    "正在查找相关信息...",
+    "正在搜索知识库...",
+    "正在阅读文档...",
+    "正在分析问题...",
+    "正在查询相关资料...",
+    "正在检索数据库...",
+    "正在查找答案...",
+    "正在阅读相关内容...",
+]
+
+SEARCH_TOKENS: List[str] = [
+    "正在进行网络搜索...",
+    "正在联网查找...",
+    "正在搜索网络资料...",
+    "正在获取最新信息...",
+    "正在查询网络数据...",
+    "正在在线搜索...",
+    "正在检索互联网信息...",
+    "正在查找网络资源...",
+    "正在获取实时信息...",
+    "正在搜索网络...",
+]
 
 
 def format_sources(
@@ -236,7 +266,7 @@ async def generate_openai_stream_response(
 
         if is_likely_realtime:
             # Send immediate search status indicator
-            search_token = "正在进行网络搜索..."
+            search_token = random.choice(SEARCH_TOKENS)
             search_chunk_data = {
                 "id": chat_id,
                 "object": "chat.completion.chunk",
@@ -263,7 +293,9 @@ async def generate_openai_stream_response(
         # Stream workflow execution and monitor for generate stage
         should_generate = False
         final_state = None
+        current_state = initial_state.copy()  # Accumulate state across nodes
         full_answer = ""
+        model_name = request.model  # Initialize with requested model
 
         async for event in conversation_workflow.workflow.astream(
             initial_state, stream_mode="updates"
@@ -273,9 +305,13 @@ async def generate_openai_stream_response(
             node_name = list(event.keys())[0] if event else None
             state_update = event.get(node_name, {}) if node_name else {}
 
+            # Accumulate state updates
+            if state_update:
+                current_state.update(state_update)
+
             # 检测 knowledge_retrieval 节点并发送状态提示
             if node_name == "knowledge_retrieval":
-                status_token = "正在查询资料。"
+                status_token = random.choice(STATUS_TOKENS)
                 status_chunk_data = {
                     "id": chat_id,
                     "object": "chat.completion.chunk",
@@ -306,7 +342,7 @@ async def generate_openai_stream_response(
                 and not should_generate
             ):
                 should_generate = True
-                final_state = state_update
+                final_state = current_state  # Use accumulated state
 
             # When ready to generate, do REAL streaming
             if should_generate and final_state:
@@ -315,10 +351,19 @@ async def generate_openai_stream_response(
                 # Build messages for LLM
                 messages = conversation_workflow.build_generation_messages(final_state)
 
+                # Get appropriate LLM for streaming based on hybrid routing
+                streaming_llm, model_name = conversation_workflow.get_streaming_llm(final_state)
+                logger.info(
+                    f"Streaming with LLM: {model_name}",
+                    model=model_name,
+                    intent=final_state.get("intent"),
+                    faq_matched=bool(final_state.get("faq_matched")),
+                    web_search_used=final_state.get("web_search_used", False)
+                )
+
                 # TRUE token-level streaming from LLM
-                # 这里是用 conversation_workflow.llm.astream 的流式输出，
                 first_token_received = False
-                async for chunk in conversation_workflow.llm.astream(messages):
+                async for chunk in streaming_llm.astream(messages):
                     token = chunk.content
                     if token:
                         # Track TTFB on first token
@@ -368,9 +413,9 @@ async def generate_openai_stream_response(
                 # Break out of workflow loop to prevent duplicate generation
                 break
 
-        # If no final_state yet, use last event
+        # If no final_state yet, use accumulated current_state
         if final_state is None:
-            final_state = event
+            final_state = current_state
 
         # Format source attribution
         sources = format_sources(
@@ -397,6 +442,10 @@ async def generate_openai_stream_response(
                 "kb_used": final_state.get("kb_used", []),
                 "web_search_used": final_state.get("web_search_used", False),
                 "sources": sources,
+                "intent": final_state.get("intent", ""),
+                "is_realtime_query": final_state.get("is_realtime_query", False),
+                "realtime_category": final_state.get("realtime_category", ""),
+                "model": model_name,
             },
         }
 

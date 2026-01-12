@@ -29,3 +29,4 @@ ai-service/scripts/rag_eval_qa_*.json
 ai-service/scripts/rag_eval_results_*.json
 ai-service/scripts/rag_eval_summary_*.txt
 .venv
+response_1768128602741.txt

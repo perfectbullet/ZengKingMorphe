@@ -401,8 +401,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    # 设置事件循环策略 (Windows兼容)
-    if sys.platform == "win32":
-        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-
     asyncio.run(main())

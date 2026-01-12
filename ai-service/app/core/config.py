@@ -12,30 +12,21 @@ from pydantic import Field
 # Load environment variables before importing settings
 from dotenv import load_dotenv
 
-# 智能环境变量加载：根据平台和运行环境选择合适的 .env 文件
+# 智能环境变量加载：根据运行环境选择合适的 .env 文件
 def _load_env_file():
     """
     根据运行环境自动加载对应的环境变量文件。
 
     优先级：
     1. 如果显式指定了 ENV_FILE 环境变量，使用该文件
-    2. WSL/Windows 本地开发：尝试加载 .env-win
-    3. 本地开发：尝试加载 .env-local
-    4. Docker/容器环境：使用 .env
+    2. 本地开发：尝试加载 .env-local
+    3. Docker/容器环境：使用 .env
     """
     # 检查是否显式指定了环境文件
     env_file = os.getenv("ENV_FILE")
     if env_file and os.path.exists(env_file):
         load_dotenv(env_file, override=True)
         print(f"[OK] Loaded environment from: {env_file}")
-        return
-
-    # WSL/Windows 本地开发：优先尝试 .env-win
-    env_win_path = os.path.join(os.path.dirname(__file__), "..", "..", ".env-win")
-    env_win_path = os.path.abspath(env_win_path)
-    if os.path.exists(env_win_path):
-        load_dotenv(env_win_path, override=True)
-        print(f"[OK] Loaded environment from .env-win")
         return
 
     # 本地开发：尝试 .env-local
@@ -66,10 +57,19 @@ class Settings(BaseSettings):
 
     # LLM Configuration
     use_ollama: bool = Field(
-        default=False, description="Use Ollama instead of OpenAI-style API"
+        default=False, description="Use Ollama instead of OpenAI-style API (deprecated, use llm_routing_mode)"
     )
 
-    # Ollama Configuration (used when use_ollama=True)
+    # LLM Routing Mode (推荐使用此配置控制模型选择)
+    # local_only - 仅使用本地 Ollama 模型
+    # remote_only - 仅使用外部 API 模型
+    # hybrid - 根据问题复杂度自动选择模型
+    llm_routing_mode: str = Field(
+        default="local_only",
+        description="LLM routing mode: local_only, remote_only, or hybrid"
+    )
+
+    # Ollama Configuration (本地模型配置 - 用于简单问题)
     ollama_base_url: str = Field(default="http://localhost:11434")
     ollama_model: str = Field(default="qwen2.5:7b")
     ollama_grader_model: str = Field(default="qwen2.5:7b")
@@ -78,7 +78,7 @@ class Settings(BaseSettings):
         description="Interval in seconds between Ollama keep-alive requests (0 to disable)"
     )
 
-    # OpenAI-style API Configuration (used when use_ollama=False)
+    # OpenAI-style API Configuration (外部模型配置 - 用于复杂问题)
     openai_api_key: str = Field(
         default="", description="OpenAI-style API key (e.g., SiliconFlow)"
     )
@@ -87,6 +87,17 @@ class Settings(BaseSettings):
     openai_grader_model: str = Field(default="deepseek-ai/DeepSeek-V3")
     openai_temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     openai_max_tokens: int = Field(default=2000, ge=1)
+
+    # 混合模式复杂度阈值配置 (hybrid 模式下生效)
+    # 复杂度评估使用本地 LLM 快速判断问题复杂度 (0-10分)
+    # 0-6分: 使用本地 Ollama (简单到中等复杂)
+    # 7-10分: 使用外部 API (高复杂度)
+    complexity_threshold: float = Field(
+        default=7.0,
+        ge=0.0,
+        le=10.0,
+        description="Complexity score threshold (0-10) above which to use remote LLM"
+    )
 
     # Embedding Configuration
     embedding_type: str = Field(

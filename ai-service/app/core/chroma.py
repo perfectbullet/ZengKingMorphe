@@ -180,8 +180,16 @@ class ChromaDB:
             results = collection.query(
                 query_texts=query_texts, n_results=n_results, where=where
             )
+            # Truncate documents for logging (only show first 50 chars)
+            truncated_results = results.copy()
+            if "documents" in truncated_results and truncated_results["documents"]:
+                truncated_docs = [
+                    [doc[:50] + "..." if len(doc) > 50 else doc for doc in doc_list]
+                    for doc_list in truncated_results["documents"]
+                ]
+                truncated_results["documents"] = truncated_docs
             logger.info(
-                f"Queried documents from Chroma: collection={collection_name}, results={results}"
+                f"Queried documents from Chroma: collection={collection_name}, results={truncated_results}"
             )
             return results
         except Exception as e:

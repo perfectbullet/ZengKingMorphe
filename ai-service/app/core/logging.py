@@ -4,13 +4,23 @@ Using loguru for structured logging.
 """
 
 import sys
+from pathlib import Path
 from loguru import logger
 from app.core.config import settings
 
 
 def setup_logging() -> None:
     """Configure loguru logging with structured output support."""
-    
+
+    # Clear log file on startup
+    if hasattr(settings, 'log_file') and settings.log_file:
+        log_path = Path(settings.log_file)
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_path.write_text("")  # Truncate the file
+        except Exception:
+            pass  # Ignore if we can't clear the file
+
     # Remove default handler
     logger.remove()
     

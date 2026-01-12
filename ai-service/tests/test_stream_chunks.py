@@ -16,7 +16,7 @@ import time
 from datetime import datetime
 
 # API Configuration
-BASE_URL = "http://192.168.8.230:8100"  # Change to 8000 if running locally
+BASE_URL = "http://localhost:8000"  # Change to 8000 if running locally
 API_KEY = "test-key"  # Add your API key if auth is enabled
 
 # Test data
