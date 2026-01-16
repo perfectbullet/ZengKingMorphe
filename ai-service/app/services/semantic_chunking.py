@@ -441,17 +441,19 @@ class HierarchicalSummarizer:
             )
         else:
             from langchain_openai import ChatOpenAI
+            # Use siliconflow_api_key for SiliconFlow API
+            api_key = settings.siliconflow_api_key or settings.openai_api_key
             logger.info(
                 "Creating OpenAI LLM for summarization",
                 model=settings.openai_model,
                 api_base=settings.openai_api_base,
-                has_api_key=bool(settings.openai_api_key)
+                has_api_key=bool(api_key)
             )
             llm = ChatOpenAI(
                 model=settings.openai_model,
                 temperature=0.3,
                 max_tokens=settings.summary_max_tokens,
-                api_key=settings.openai_api_key,
+                api_key=api_key,
                 base_url=settings.openai_api_base
             )
 
@@ -514,11 +516,13 @@ class HierarchicalSummarizer:
             )
         else:
             from langchain_openai import ChatOpenAI
+            # Use siliconflow_api_key for SiliconFlow API
+            api_key = settings.siliconflow_api_key or settings.openai_api_key
             llm = ChatOpenAI(
                 model=settings.openai_model,
                 temperature=0.3,
                 max_tokens=settings.summary_max_tokens * 2,
-                api_key=settings.openai_api_key,
+                api_key=api_key,
                 base_url=settings.openai_api_base
             )
 
@@ -570,11 +574,13 @@ class HierarchicalSummarizer:
             )
         else:
             from langchain_openai import ChatOpenAI
+            # Use siliconflow_api_key for SiliconFlow API
+            api_key = settings.siliconflow_api_key or settings.openai_api_key
             llm = ChatOpenAI(
                 model=settings.openai_model,
                 temperature=0.3,
                 max_tokens=settings.summary_max_tokens * 3,
-                api_key=settings.openai_api_key,
+                api_key=api_key,
                 base_url=settings.openai_api_base
             )
 

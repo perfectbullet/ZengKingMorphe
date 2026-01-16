@@ -244,37 +244,24 @@ class OpenAIStyleEmbeddings(Embeddings):
 def get_embedding(settings=None) -> Embeddings:
     """
     根据配置创建 Embedding 实例的工厂函数。
-    
+
+    默认使用 Ollama embeddings（EMBEDDING_OLLAMA_MODEL）。
+
     Args:
         settings: 应用配置对象（可选，默认使用全局配置）
-        
+
     Returns:
         Embeddings 实例
     """
     from app.core.config import settings as app_settings
-    
+
     if not settings:
         settings = app_settings
-    
-    if settings.embedding_type == "ollama":
-        logger.info(f"Creating Ollama embeddings: model={settings.embedding_ollama_model}")
-        return OllamaEmbeddings(
-            model=settings.embedding_ollama_model,
-            base_url=settings.ollama_base_url,
-            max_tokens=512
-        )
-    elif settings.embedding_type == "siliconflow":
-        logger.info(f"Creating SiliconFlow embeddings: model={settings.siliconflow_embedding_model}")
-        return SiliconFlowEmbeddings(
-            model=settings.siliconflow_embedding_model,
-            api_key=settings.siliconflow_api_key,
-            base_url=settings.siliconflow_embedding_api_url,
-            max_tokens=512
-        )
-    else:  # openai_style (default)
-        logger.info(f"Creating OpenAI-style embeddings: model={settings.embedding_model}, url={settings.embedding_api_url}")
-        return OpenAIStyleEmbeddings(
-            model=settings.embedding_model,
-            base_url=settings.embedding_api_url,
-            api_key=settings.embedding_api_key
-        )
+
+    # Default to Ollama embeddings
+    logger.info(f"Creating Ollama embeddings: model={settings.embedding_ollama_model}")
+    return OllamaEmbeddings(
+        model=settings.embedding_ollama_model,
+        base_url=settings.ollama_base_url,
+        max_tokens=512
+    )

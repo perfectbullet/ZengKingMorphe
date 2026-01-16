@@ -152,7 +152,9 @@ def handle_stream_payloads(payload_iter: Iterator[str], start_time: float) -> in
                     finish = choice.get("finish_reason")
                     if finish == "stop":
                         print()  # 换行结束
-                        # 也可以打印 usage/metadata if present in this chunk
+                        # 打印完整的元数据（包含 usage 和 metadata）
+                        print("\n--- metadata ---")
+                        print(json.dumps(obj, ensure_ascii=False, indent=2))
                         return 0
                 continue
 

@@ -29,7 +29,7 @@ from app.core.config import settings
 from app.core.database import get_database
 from app.core.logging import get_logger
 from app.models.database import ConversationModel, SessionModel
-from app.services.conversation.conversation_state import ConversationState, GREETING_KEYWORDS
+from app.services.conversation.conversation_state import ConversationState, GREETING_KEYWORDS, INTERRUPTION_KEYWORDS
 from app.services.conversation.conversation_helpers import (
     time_node, select_llm, build_generation_messages,
     heuristic_complexity
@@ -185,9 +185,10 @@ class ConversationNodes:
         Query Classification - 快速识别查询类型并路由。
 
         检测顺序 (从快到慢):
-        1. 问候语检测 (关键词匹配)
-        2. 实时查询检测 (关键词匹配)
-        3. 其他 (继续正常流程)
+        1. 打断检测 (关键词匹配)
+        2. 问候语检测 (关键词匹配)
+        3. 实时查询检测 (关键词匹配)
+        4. 其他 (继续正常流程)
 
         Args:
             state: Current conversation state
@@ -198,7 +199,18 @@ class ConversationNodes:
         async with time_node("classify_query_type", state):
             query = state["user_query"].strip().lower()
 
-            # 1. 检测问候语
+            # 1. 检测打断意图 (优先级最高)
+            for category, keywords in INTERRUPTION_KEYWORDS.items():
+                if any(kw in query for kw in keywords):
+                    state["intent"] = "interruption"
+                    state["complexity_score"] = 0.0
+                    state["complexity_reason"] = "interruption"
+                    state["is_realtime_query"] = False
+                    state["entities"] = {"interruption_type": category}
+                    logger.info("Query classified: interruption", category=category)
+                    return state
+
+            # 2. 检测问候语
             for category, keywords in GREETING_KEYWORDS.items():
                 if any(kw in query for kw in keywords):
                     state["intent"] = "greeting"
@@ -208,7 +220,7 @@ class ConversationNodes:
                     logger.info("Query classified: greeting", category=category)
                     return state
 
-            # 2. 检测实时查询
+            # 3. 检测实时查询
             if settings.realtime_query_enabled:
                 realtime_keywords = {
                     "time": ["今天", "明天", "昨天", "最近", "现在", "本周", "本月", "当前"],
@@ -225,7 +237,7 @@ class ConversationNodes:
                         logger.info("Query classified: realtime", category=category)
                         return state
 
-            # 3. 默认为一般查询
+            # 4. 默认为一般查询
             state["is_realtime_query"] = False
             state["intent"] = "general_query"
             logger.debug("Query classified: general")
@@ -240,9 +252,11 @@ class ConversationNodes:
             state: Current conversation state
 
         Returns:
-            目标节点名称
+            目标节点名称 (greeting/realtime/normal)
         """
-        if state.get("intent") == "greeting":
+        intent = state.get("intent")
+        # 打断和问候都直接跳到生成答案
+        if intent in ("greeting", "interruption"):
             return "greeting"
         if state.get("is_realtime_query"):
             return "realtime"
@@ -937,6 +951,9 @@ class ConversationNodes:
         Note: Actual LLM streaming happens in the API endpoint.
         This node only prepares the state with confidence scores.
 
+        For interruption/greeting intents, build_generation_messages will
+        create appropriate prompts for LLM to generate short responses.
+
         Args:
             state: Current conversation state
 
@@ -949,6 +966,9 @@ class ConversationNodes:
 
             if state.get("faq_matched"):
                 confidence = 0.95
+            elif state.get("intent") in ("interruption", "greeting"):
+                # 快速响应意图，高置信度
+                confidence = 0.98
             elif state.get("web_search_used", False):
                 web_results = state.get("web_search_results", [])
                 if web_results:
@@ -963,6 +983,7 @@ class ConversationNodes:
             logger.info(
                 "Ready for answer generation",
                 confidence=confidence,
+                intent=state.get("intent"),
                 web_search_used=state.get('web_search_used'),
                 kb_docs_count=len(state.get('retrieved_docs', []))
             )
@@ -998,9 +1019,9 @@ class ConversationNodes:
                 logger.debug("Answer verification disabled")
                 return state
 
-            # Skip for FAQ and greeting (already validated)
-            if state.get("faq_matched") or state.get("intent") == "greeting":
-                logger.debug("Skipping verification for FAQ/greeting")
+            # Skip for FAQ, greeting, and interruption (already validated)
+            if state.get("faq_matched") or state.get("intent") in ("greeting", "interruption"):
+                logger.debug("Skipping verification for FAQ/greeting/interruption", intent=state.get("intent"))
                 return state
 
             answer = state.get("final_answer", "")

@@ -734,19 +734,32 @@ class DocumentProcessor:
             task_id: Task ID for progress tracking (optional)
         """
         db = await get_database()
-        
+
+        # Filter out empty chunks to avoid embedding dimension errors
+        valid_chunks = [chunk for chunk in chunks if chunk.content and chunk.content.strip()]
+
+        if not valid_chunks:
+            logger.warning("No valid chunks to store after filtering empty content")
+            return
+
+        if len(valid_chunks) < len(chunks):
+            logger.warning(
+                f"Filtered out {len(chunks) - len(valid_chunks)} empty chunks, "
+                f"remaining: {len(valid_chunks)}"
+            )
+
         # Prepare data for batch operations
-        chunk_texts = [chunk.content for chunk in chunks]
-        chunk_ids = [chunk.chunk_id for chunk in chunks]
+        chunk_texts = [chunk.content for chunk in valid_chunks]
+        chunk_ids = [chunk.chunk_id for chunk in valid_chunks]
         chunk_metadatas = [
             {
                 "doc_id": chunk.doc_id,
                 "kb_id": chunk.kb_id,
                 "chunk_index": chunk.chunk_index
             }
-            for chunk in chunks
+            for chunk in valid_chunks
         ]
-        
+
         # Store in Chroma (with vectorization)
         await chroma_db.add_documents(
             collection_name="doc",
@@ -754,9 +767,9 @@ class DocumentProcessor:
             metadatas=chunk_metadatas,
             ids=chunk_ids
         )
-        
+
         # Store in ElasticSearch
-        for i, chunk in enumerate(chunks):
+        for i, chunk in enumerate(valid_chunks):
             await es_db.index_document(
                 index="doc",
                 doc_id=chunk.chunk_id,
@@ -769,12 +782,12 @@ class DocumentProcessor:
                     "created_at": datetime.utcnow().isoformat()
                 }
             )
-            
+
             # Update progress if task_id provided
             if task_id:
                 processed = i + 1
-                progress = (processed / len(chunks)) * 100.0
-                
+                progress = (processed / len(valid_chunks)) * 100.0
+
                 await db.document_tasks.update_one(
                     {"task_id": task_id},
                     {
@@ -784,15 +797,15 @@ class DocumentProcessor:
                         }
                     }
                 )
-            
+
             # Update chunk with vector_id
-            chunks[i].vector_id = chunk.chunk_id
-        
+            valid_chunks[i].vector_id = chunk.chunk_id
+
         # Store chunks in MongoDB
-        chunk_docs = [chunk.model_dump() for chunk in chunks]
+        chunk_docs = [chunk.model_dump() for chunk in valid_chunks]
         await db.document_chunks.insert_many(chunk_docs)
-        
-        logger.info(f"Stored chunks: doc_id={doc_id}, chunks_count={len(chunks)}")
+
+        logger.info(f"Stored chunks: doc_id={doc_id}, chunks_count={len(valid_chunks)}")
     
     def _generate_doc_id(self, filename: str, kb_id: str) -> str:
         """Generate unique document ID."""

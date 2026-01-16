@@ -133,10 +133,10 @@ class OpenAIChatRequest(BaseModel):
     temperature: Optional[float] = Field(default=0.7, ge=0.0, le=2.0)
     max_tokens: Optional[int] = Field(default=None, ge=1)
     # Custom fields for our system
-    employee_id: str = Field(default="hutao", description="Digital employee ID")
-    user_id: str = Field('user_123456', description="User ID")
-    session_id: Optional[str] = Field('sess_20251218_abc123', description="Session ID")
-    session_id2: Optional[str] = Field('session_id2_default', description="Secondary Session ID")
+    employee_id: str = Field(default="financial_analyst", description="Digital employee ID")
+    user_id: str = Field('user_20260110', description="User ID")
+    session_id: Optional[str] = Field('sess_financial_analyst_fdaf', description="Session ID")
+    session_id2: Optional[str] = Field('no_session_id2_send', description="Secondary Session ID")
 
 # Session API Schemas
 class CreateSessionRequest(BaseModel):
