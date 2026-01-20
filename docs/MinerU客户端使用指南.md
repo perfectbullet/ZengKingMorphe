@@ -16,7 +16,7 @@ MinerU 客户端是一个增强的 PDF 解析工具，提供以下功能：
 
 ```bash
 # MinerU PDF 解析配置
-MINERU_API_URL=http://192.168.8.231:8000/file_parse
+MINERU_API_URL=http://192.168.8.233:8000/file_parse
 MINERU_ENABLED=true
 MINERU_PAGES_PER_CHUNK=8
 MINERU_TIMEOUT=600
@@ -27,7 +27,7 @@ MINERU_CACHE_TTL_DAYS=30
 
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
-| `MINERU_API_URL` | MinerU API 端点 URL | `http://192.168.8.231:8000/file_parse` |
+| `MINERU_API_URL` | MinerU API 端点 URL | `http://192.168.8.233:8000/file_parse` |
 | `MINERU_ENABLED` | 是否启用 MinerU（优先使用基本解析） | `false` |
 | `MINERU_PAGES_PER_CHUNK` | 每个小文档的页数 | `8` |
 | `MINERU_TIMEOUT` | API 请求超时时间（秒） | `600` |

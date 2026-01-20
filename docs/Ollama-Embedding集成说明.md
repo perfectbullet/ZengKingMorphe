@@ -25,7 +25,7 @@
 EMBEDDING_TYPE=ollama  # openai_style | siliconflow | ollama
 
 # Ollama配置
-OLLAMA_BASE_URL=http://192.168.8.231:11434
+OLLAMA_BASE_URL=http://192.168.8.233:11434
 EMBEDDING_OLLAMA_MODEL=smartcreation/bge-large-zh-v1.5:latest
 
 # Chunk配置（适用于所有embedding方案）
@@ -133,7 +133,7 @@ chroma.py: 检测embedding_type=ollama
 OllamaEmbeddings: 向量化
   ↓
   for each chunk:
-    POST http://192.168.8.231:11434/api/embeddings
+    POST http://192.168.8.233:11434/api/embeddings
     {
       "model": "smartcreation/bge-large-zh-v1.5:latest",
       "prompt": "文档chunk内容..."
@@ -165,7 +165,7 @@ python test_ollama_embedding.py
 
 ✅ 配置验证
   ✓ EMBEDDING_TYPE: ollama (正确)
-  ✓ OLLAMA_BASE_URL: http://192.168.8.231:11434
+  ✓ OLLAMA_BASE_URL: http://192.168.8.233:11434
   ✓ EMBEDDING_OLLAMA_MODEL: smartcreation/bge-large-zh-v1.5:latest
 
 ✅ 服务连接

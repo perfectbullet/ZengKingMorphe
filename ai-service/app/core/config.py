@@ -257,7 +257,7 @@ class Settings(BaseSettings):
 
     # MinerU PDF Parsing Configuration
     mineru_api_url: str = Field(
-        default="http://192.168.8.231:8000/file_parse",
+        default="http://192.168.8.233:8000/file_parse",
         description="MinerU API endpoint URL for enhanced PDF parsing"
     )
     mineru_enabled: bool = Field(

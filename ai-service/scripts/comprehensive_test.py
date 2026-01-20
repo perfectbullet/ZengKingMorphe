@@ -42,7 +42,7 @@
   python ai-service/scripts/comprehensive_test.py --test complexity
 
 【指定服务器】
-  python ai-service/scripts/comprehensive_test.py --host http://192.168.8.230:8100
+  python ai-service/scripts/comprehensive_test.py --host http://192.168.8.233:8100
 
 【使用测试文件中的问题】
   python ai-service/scripts/comprehensive_test.py --use-test-questions

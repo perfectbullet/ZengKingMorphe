@@ -17,7 +17,7 @@ OpenAI-style streaming client for /api/chat/v1/chat/completions.
   python ai-service/scripts/stream_client.py --host http://localhost:8000 --query "你好"
 
   # 生产服务器
-  python ai-service/scripts/stream_client.py --host http://192.168.8.230:8100 --query "你好"
+  python ai-service/scripts/stream_client.py --host http://192.168.8.233:8100 --query "你好"
 
 【指定员工/用户/会话】
   python ai-service/scripts/stream_client.py \\
@@ -224,7 +224,7 @@ def main():
         epilog="""
 示例:
   %(prog)s --query "你好"
-  %(prog)s --host http://192.168.8.230:8100 --query "北京天气"
+  %(prog)s --host http://192.168.8.233:8100 --query "北京天气"
         """
     )
     parser.add_argument("--host", default="http://localhost:8000", help="Base host (including port), 默认: http://localhost:8000")

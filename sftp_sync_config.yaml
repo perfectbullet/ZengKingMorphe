@@ -2,10 +2,10 @@
 # 配置文件示例
 
 # Connection settings (连接设置)
-host: "192.168.8.230"         # Remote server IP or hostname (远程服务器IP或主机名)
+host: "192.168.8.233"         # Remote server IP or hostname (远程服务器IP或主机名)
 port: 22                       # SSH port (SSH端口)
-username: "user"             # SSH username (SSH用户名)
-password: "your_passphrase_here"         # SSH password (SSH密码) - Optional if using private_key
+username: "zenking"             # SSH username (SSH用户名)
+#password: "your_passphrase_here"         # SSH password (SSH密码) - Optional if using private_key
 
 # SSH key authentication (SSH密钥认证) - More secure than password
 private_key: "/home/zj/.ssh/id_rsa"  # Path to private key (私钥路径)

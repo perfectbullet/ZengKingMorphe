@@ -10,7 +10,7 @@ print("Testing OllamaEmbeddings fix...")
 try:
     embedder = OllamaEmbeddings(
         model="smartcreation/bge-large-zh-v1.5:latest",
-        base_url="http://192.168.8.231:11434"
+        base_url="http://192.168.8.233:11434"
     )
     
     # Test single embedding

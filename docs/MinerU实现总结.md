@@ -27,7 +27,7 @@
 
 **新增配置项**:
 ```bash
-MINERU_API_URL=http://192.168.8.231:8000/file_parse
+MINERU_API_URL=http://192.168.8.233:8000/file_parse
 MINERU_ENABLED=false
 MINERU_PAGES_PER_CHUNK=8
 MINERU_TIMEOUT=600

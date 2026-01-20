@@ -291,7 +291,7 @@ SILICONFLOW_API_KEY=sk-...  # Required for SiliconFlow
 ```bash
 # .env-local file
 USE_OLLAMA=true
-OLLAMA_BASE_URL=http://192.168.8.231:11434
+OLLAMA_BASE_URL=http://192.168.8.233:11434
 OLLAMA_MODEL=qwen2.5:7b
 OLLAMA_GRADER_MODEL=qwen2.5:7b
 OLLAMA_KEEP_ALIVE_INTERVAL=180  # Seconds, 0 to disable
