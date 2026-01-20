@@ -6,7 +6,8 @@ This script demonstrates:
 2. How to query stored chunks by various filters
 
 Usage:
-    D:/zenking_work/metahuman_work/ZengKingMorphe/.venv/Scripts/python.exe test_stream_chunks.py
+    conda activate 
+    python ai-service/tests/test_stream_chunks.py 
 """
 
 import asyncio

@@ -19,32 +19,13 @@ services:
     env_file:
       - ./ai-service/.env
     depends_on:
-      - mongodb
       - elasticsearch
       - chroma
+    extra_hosts:
+      - "host.docker.internal:172.21.0.1"
     networks:
       - digital-employee-network
     restart: unless-stopped
-
-  # MongoDB
-  mongodb:
-    image: mongo:7.0
-    container_name: digital-employee-mongodb
-    ports:
-      - "27117:27017"
-    volumes:
-      - mongodb-data:/data/db
-      - mongodb-config:/data/configdb
-    environment:
-      - MONGO_INITDB_DATABASE=digital_employee
-    networks:
-      - digital-employee-network
-    restart: unless-stopped
-    healthcheck:
-      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/digital_employee --quiet
-      interval: 10s
-      timeout: 5s
-      retries: 5
 
   # Chroma Vector Database
   chroma:
@@ -91,10 +72,6 @@ services:
       retries: 5
 
 volumes:
-  mongodb-data:
-    driver: local
-  mongodb-config:
-    driver: local
   chroma-data:
     driver: local
   ai-chroma-data:

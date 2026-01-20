@@ -193,7 +193,7 @@ python test_ollama_embedding.py
 编辑 `.env` 文件：
 ```env
 EMBEDDING_TYPE=ollama
-OLLAMA_BASE_URL=http://192.168.8.231:11434
+OLLAMA_BASE_URL=http://192.168.8.233:11434
 EMBEDDING_OLLAMA_MODEL=smartcreation/bge-large-zh-v1.5:latest
 ```
 
@@ -224,7 +224,7 @@ docker-compose logs -f ai-service
 {
   "event": "Using Ollama embeddings",
   "model": "smartcreation/bge-large-zh-v1.5:latest",
-  "base_url": "http://192.168.8.231:11434"
+  "base_url": "http://192.168.8.233:11434"
 }
 ```
 
@@ -274,7 +274,7 @@ docker-compose logs -f ai-service
 **解决**:
 ```bash
 # 检查Ollama服务状态
-curl http://192.168.8.231:11434/api/tags
+curl http://192.168.8.233:11434/api/tags
 
 # 如果失败，启动Ollama
 ollama serve
