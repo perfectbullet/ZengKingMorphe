@@ -174,6 +174,12 @@ class OpenAIChatRequest(BaseModel):
     channel_name: Optional[str] = Field(default=None, description="Channel name (web, mobile, etc.)")
     team_id: Optional[str] = Field(default=None, description="Team ID")
 
+    # Extra body for non-OpenAI standard parameters (passed via OpenAI SDK's extra_body)
+    extra_body: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Extra body parameters for non-OpenAI standard fields (channel_name, team_id, user_id, employee_id, etc.)"
+    )
+
 # Session API Schemas
 class CreateSessionRequest(BaseModel):
     """Create session request schema."""

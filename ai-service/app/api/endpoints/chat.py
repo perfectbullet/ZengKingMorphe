@@ -561,16 +561,68 @@ async def openai_chat_completions(
         符合 OpenAI 格式的响应或服务器发送事件（SSE）流
     """
     try:
+        # 处理 extra_body 参数（OpenAI SDK 通过 extra_body 传递非标准参数）
+        effective_team_id = request.team_id
+        effective_user_id = request.user_id
+        effective_employee_id = request.employee_id
+        effective_channel_name = request.channel_name
+
+        # 只有当 team_id/user_id/employee_id 不存在时，才从 channel_name 解析
+        if request.extra_body and "channel_name" in request.extra_body:
+            channel_name = request.extra_body["channel_name"]
+            if channel_name and not effective_channel_name:
+                effective_channel_name = channel_name
+                # 检查是否需要解析（参数缺失时）
+                need_parse = not effective_team_id or not effective_user_id or not effective_employee_id
+
+                if need_parse:
+                    logger.info(f"Received channel_name from extra_body: {channel_name}")
+                    # 解析 channel_name: employee_<team_id>_<user_id>_<employee_id>
+                    parts = channel_name.split('_')
+                    if len(parts) >= 4 and parts[0] == "employee":
+                        try:
+                            parsed_team_id = parts[1]
+                            parsed_user_id = parts[2]
+                            parsed_employee_id = parts[3]
+
+                            # 只覆盖缺失的值
+                            if not effective_team_id:
+                                effective_team_id = parsed_team_id
+                            if not effective_user_id:
+                                effective_user_id = parsed_user_id
+                            if not effective_employee_id:
+                                effective_employee_id = parsed_employee_id
+
+                            logger.info(
+                                f"Parsed from channel_name: team_id={effective_team_id}, "
+                                f"user_id={effective_user_id}, employee_id={effective_employee_id}"
+                            )
+                        except (ValueError, IndexError) as e:
+                            logger.error(f"Failed to parse channel_name '{channel_name}': {e}")
+                    else:
+                        logger.error(f"Invalid channel_name format: '{channel_name}', expected 'employee_<team_id>_<user_id>_<employee_id>'")
+
+        # extra_body 中的直接参数优先级最高（覆盖所有其他来源）
+        if request.extra_body:
+            if "team_id" in request.extra_body and request.extra_body["team_id"]:
+                effective_team_id = request.extra_body["team_id"]
+            if "user_id" in request.extra_body and request.extra_body["user_id"]:
+                effective_user_id = request.extra_body["user_id"]
+            if "employee_id" in request.extra_body and request.extra_body["employee_id"]:
+                effective_employee_id = request.extra_body["employee_id"]
+            if "channel_name" in request.extra_body and request.extra_body["channel_name"] and not effective_channel_name:
+                effective_channel_name = request.extra_body["channel_name"]
+
         # Rate limiting
         await rate_limit_middleware(
-            request=None, user_id=request.user_id, session_id=request.session_id
+            request=None, user_id=effective_user_id, session_id=request.session_id
         )
 
         logger.info(
             "OpenAI chat completion request",
             model=request.model,
-            user_id=request.user_id,
-            employee_id=request.employee_id,
+            user_id=effective_user_id,
+            employee_id=effective_employee_id,
             session_id=request.session_id,
             stream=request.stream,
             temperature=request.temperature,
@@ -581,13 +633,23 @@ async def openai_chat_completions(
             seed=request.seed,
             n=request.n,
             has_tools=request.tools is not None,
-            channel_name=request.channel_name,
-            team_id=request.team_id,
+            channel_name=effective_channel_name,
+            team_id=effective_team_id,
+            extra_body_provided=request.extra_body is not None,
         )
 
         if request.stream:
-            # Return streaming response
-            return EventSourceResponse(generate_openai_stream_response(request))
+            # Return streaming response with effective parameters
+            # 创建一个包含解析后参数的请求副本
+            stream_request = request.model_copy(
+                update={
+                    "user_id": effective_user_id,
+                    "employee_id": effective_employee_id,
+                    "team_id": effective_team_id,
+                    "channel_name": effective_channel_name,
+                }
+            )
+            return EventSourceResponse(generate_openai_stream_response(stream_request))
         else:
             # Non-streaming response (not implemented in this snippet)
             raise HTTPException(
