@@ -480,3 +480,7 @@ async def get_knowledge_base_detail(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to get knowledge base detail"
         )
+
+
+
+

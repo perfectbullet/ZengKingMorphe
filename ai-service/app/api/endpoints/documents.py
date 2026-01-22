@@ -13,7 +13,7 @@ from app.api.middleware.auth import get_api_key
 from app.core.logging import get_logger
 from app.core.database import get_database
 from app.core.chroma import chroma_db
-from app.core.config import settings
+
 from app.services.task_processor import task_processor
 from app.models.schemas import (
     CreateRagDocumentRequest,

@@ -2,7 +2,7 @@
 Digital Employee management API endpoints.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status, Path, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Path, Query, Body
 from datetime import datetime
 
 from app.models.schemas import CreateEmployeeRequest, UpdateEmployeeRequest
@@ -411,5 +411,158 @@ async def delete_employee(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to delete employee",
+        )
+
+
+@router.put("/update/{employee_id}")
+async def update_employee(
+    employee_id: str = Path(..., description="Employee ID"),
+    request: UpdateEmployeeRequest = Body(None),
+    api_key: str = Depends(get_api_key),
+    db=Depends(get_database),
+):
+    """
+    更新数字员工配置（按 employee_id 部分更新）。
+
+    \nArgs:
+        \n- employee_id: Employee ID
+        \n- request: UpdateEmployeeRequest with fields to update (all optional)
+        \n- api_key: API key from auth
+        \n- db: Database instance
+
+    \nReturns:
+        \n- Updated employee configuration
+
+    \nExample:
+        \n- Update kb_ids: {"kb_ids": ["kb_8aa64d4d6698"]}
+        \n- Update name: {"name": "陈晓燕"}
+    """
+    try:
+        logger.info(
+            "Update employee request",
+            employee_id=employee_id,
+            update_fields=request.model_dump(exclude_none=True)
+        )
+
+        # Check if employee exists
+        existing = await db.digital_employee_configs.find_one(
+            {"employee_id": employee_id}
+        )
+        if not existing:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Employee {employee_id} not found",
+            )
+
+        # Build update document with only non-None fields
+        update_doc = {"updated_at": datetime.utcnow()}
+
+        # Core fields
+        if request.name is not None:
+            update_doc["name"] = request.name
+        if request.position is not None:
+            update_doc["position"] = request.position
+        if request.intro is not None:
+            update_doc["intro"] = request.intro
+
+        # Personality/Style fields
+        if request.persona is not None:
+            update_doc["persona"] = request.persona
+        if request.tone is not None:
+            update_doc["tone"] = request.tone
+        if request.style is not None:
+            update_doc["style"] = request.style
+        if request.style_desc is not None:
+            update_doc["style_desc"] = request.style_desc
+        if request.language is not None:
+            update_doc["language"] = request.language
+
+        # Configuration fields
+        if request.kb_ids is not None:
+            update_doc["kb_ids"] = request.kb_ids
+        if request.web_search_enabled is not None:
+            update_doc["web_search_enabled"] = request.web_search_enabled
+        if request.is_multimodal is not None:
+            update_doc["is_multimodal"] = request.is_multimodal
+
+        # FAQ settings
+        if request.faq_sim_threshold is not None:
+            update_doc["faq_sim_threshold"] = request.faq_sim_threshold
+        if request.faq_top_k is not None:
+            update_doc["faq_top_k"] = request.faq_top_k
+
+        # Prologue settings
+        if request.prologue is not None:
+            update_doc["prologue"] = request.prologue
+        if request.is_opening_questions is not None:
+            update_doc["is_opening_questions"] = request.is_opening_questions
+
+        # Custom prompt
+        if request.is_my_prompt is not None:
+            update_doc["is_my_prompt"] = request.is_my_prompt
+        if request.my_prompt is not None:
+            update_doc["my_prompt"] = request.my_prompt
+
+        # Display settings
+        if request.is_show_sign is not None:
+            update_doc["is_show_sign"] = request.is_show_sign
+        if request.portrait is not None:
+            update_doc["portrait"] = request.portrait
+        if request.model_image is not None:
+            update_doc["model_image"] = request.model_image
+
+        # Status
+        if request.onduty_status is not None:
+            update_doc["onduty_status"] = request.onduty_status
+        if request.status is not None:
+            update_doc["status"] = request.status
+
+        # Metadata
+        if request.metadata is not None:
+            update_doc["metadata"] = request.metadata
+        if request.hot_questions is not None:
+            update_doc["hot_questions"] = request.hot_questions
+
+        # Perform update if there are fields to update
+        if len(update_doc) > 1:  # More than just updated_at
+            await db.digital_employee_configs.update_one(
+                {"employee_id": employee_id},
+                {"$set": update_doc}
+            )
+            logger.info(
+                "Employee updated successfully",
+                employee_id=employee_id,
+                updated_fields=list(update_doc.keys())
+            )
+        else:
+            logger.warning(
+                "No fields to update",
+                employee_id=employee_id
+            )
+
+        # Fetch updated document
+        updated = await db.digital_employee_configs.find_one(
+            {"employee_id": employee_id}
+        )
+        updated.pop("_id", None)
+        updated["created_at"] = updated["created_at"].isoformat() + "Z"
+        updated["updated_at"] = updated["updated_at"].isoformat() + "Z"
+        if updated.get("synced_at"):
+            updated["synced_at"] = updated["synced_at"].isoformat() + "Z"
+
+        return {"code": 200, "message": "success", "data": updated}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            "Update employee error",
+            employee_id=employee_id,
+            error=str(e),
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update employee",
         )
 
