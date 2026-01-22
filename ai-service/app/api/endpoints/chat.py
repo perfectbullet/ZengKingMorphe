@@ -78,12 +78,20 @@ def format_sources(
         if len(doc.get("content", "")) > max_content_length:
             content_snippet += "..."
 
+        # Normalize RRF score to 0-1 range for display
+        # RRF score range: 0 ~ 2/k (when k=60, max ~0.033)
+        raw_rrf_score = doc.get("rrf_score", doc.get("score", 0.0))
+        rrf_k = 60  # Must match the k value used in _rrf_fusion
+        max_possible_rrf = 2.0 / rrf_k
+        normalized_score = (raw_rrf_score / max_possible_rrf) if max_possible_rrf > 0 else 0.0
+        normalized_score = max(0.0, min(1.0, normalized_score))
+
         rag_source = {
             "rank": idx,
             "doc_id": doc.get("doc_id", ""),
             "kb_id": doc.get("kb_id", ""),
             "content_snippet": content_snippet,
-            "score": round(doc.get("rrf_score", doc.get("score", 0.0)), 4),
+            "score": round(normalized_score, 4),
         }
 
         # Add chunk_index if available

@@ -755,7 +755,8 @@ class DocumentProcessor:
             {
                 "doc_id": chunk.doc_id,
                 "kb_id": chunk.kb_id,
-                "chunk_index": chunk.chunk_index
+                "chunk_index": chunk.chunk_index,
+                "summary": chunk.metadata.get("summary", "") if chunk.metadata else ""
             }
             for chunk in valid_chunks
         ]
@@ -770,6 +771,11 @@ class DocumentProcessor:
 
         # Store in ElasticSearch
         for i, chunk in enumerate(valid_chunks):
+            # 获取 summary：优先从 chunk.summary，其次从 chunk.metadata.summary
+            chunk_summary = chunk.summary if chunk.summary else ""
+            if not chunk_summary and chunk.metadata:
+                chunk_summary = chunk.metadata.get("summary", "")
+
             await es_db.index_document(
                 index="doc",
                 doc_id=chunk.chunk_id,
@@ -778,6 +784,7 @@ class DocumentProcessor:
                     "doc_id": doc_id,
                     "kb_id": kb_id,
                     "content": chunk.content,
+                    "summary": chunk_summary,
                     "chunk_index": chunk.chunk_index,
                     "created_at": datetime.utcnow().isoformat()
                 }
