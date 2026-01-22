@@ -227,10 +227,10 @@ def main():
   %(prog)s --host http://192.168.8.233:8100 --query "北京天气"
         """
     )
-    parser.add_argument("--host", default="http://localhost:8000", help="Base host (including port), 默认: http://localhost:8000")
-    parser.add_argument("--employee_id", default="financial_analyst", help="Employee ID, 默认: financial_analyst")
-    parser.add_argument("--user_id", default="user_20260110", help="User ID, 默认: user_20260110")
-    parser.add_argument("--session_id", default="sess_financial_analyst_fdaf", help="Session ID, 默认: sess_financial_analyst_fdaf")
+    parser.add_argument("--host", default="http://192.168.8.233:8100", help="Base host (including port), 默认: http://localhost:8000")
+    parser.add_argument("--employee_id", default="29", help="Employee ID, 默认: financial_analyst")
+    parser.add_argument("--user_id", default="42478261", help="User ID, 默认: user_20260110")
+    parser.add_argument("--session_id", default="sess_4_42478261_29", help="Session ID, 默认: sess_financial_analyst_fdaf")
     parser.add_argument("--model", default="qwen2.5:7b", help="Model name, 默认: qwen2.5:7b")
 
     parser.add_argument("--query", required=True, help="User query text（必填）")

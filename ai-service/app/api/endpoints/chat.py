@@ -183,7 +183,7 @@ async def generate_openai_stream_response(
         if not user_query:
             user_query = request.messages[-1].content if request.messages else ""
 
-        # Build initial state
+        # Build initial state with all parameters from request
         initial_state = {
             "messages": [],
             "user_query": user_query,
@@ -213,6 +213,18 @@ async def generate_openai_stream_response(
             "workflow_start_time": time.time(),
             "node_timings": {},
             "ttfb_ms": None,
+            # LLM parameters from OpenAI request
+            "llm_temperature": request.temperature,
+            "llm_top_p": request.top_p,
+            "llm_max_tokens": request.max_tokens,
+            "llm_presence_penalty": request.presence_penalty,
+            "llm_frequency_penalty": request.frequency_penalty,
+            "llm_seed": request.seed,
+            "llm_n": request.n,
+            "llm_tools": [tool.model_dump() for tool in request.tools] if request.tools else None,
+            # Additional context
+            "channel_name": request.channel_name,
+            "team_id": request.team_id,
         }
 
         # Save user query chunk to DB
@@ -371,7 +383,10 @@ async def generate_openai_stream_response(
                             first_token_received = True
                             ttfb_ms = int((time.time() - initial_state["workflow_start_time"]) * 1000)
                             final_state["ttfb_ms"] = ttfb_ms
-                            logger.info(f"[TTFB] First token received - ttfb: {ttfb_ms}ms")
+                            logger.info(
+                                "First token received",
+                                ttfb_ms=ttfb_ms
+                            )
 
                         full_answer += token
 
@@ -402,7 +417,11 @@ async def generate_openai_stream_response(
                 # Log workflow completion time
                 workflow_end_time = time.time()
                 total_time_ms = int((workflow_end_time - initial_state["workflow_start_time"]) * 1000)
-                logger.info(f"[WORKFLOW] Workflow completed - total: {total_time_ms}ms")
+                logger.info(
+                    "Workflow completed",
+                    total_time_ms=total_time_ms,
+                    ttfb_ms=final_state.get("ttfb_ms")
+                )
 
                 # Update state with generated answer
                 final_state["final_answer"] = full_answer
@@ -463,7 +482,11 @@ async def generate_openai_stream_response(
         yield "[DONE]"
 
     except Exception as e:
-        logger.error(f"OpenAI stream generation error: error={str(e)}", exc_info=True)
+        logger.error(
+            "OpenAI stream generation error",
+            error=str(e),
+            exc_info=True
+        )
 
         # Send error in OpenAI format
         error_chunk_data = {
@@ -483,7 +506,11 @@ async def generate_openai_stream_response(
                 request.employee_id, "error", error_chunk_data
             )
         except Exception as db_error:
-            logger.error(f"Failed to save error chunk to DB: error={str(db_error)}", exc_info=True)
+            logger.error(
+                "Failed to save error chunk to DB",
+                error=str(db_error),
+                exc_info=True
+            )
 
         yield json.dumps(error_chunk_data)
 
@@ -509,7 +536,23 @@ async def openai_chat_completions(
 
     参数说明:
 
-        request: 符合 OpenAI 格式的对话请求
+        request: 符合 OpenAI 格式的对话请求，包含:
+            - model: 模型名称
+            - messages: 对话消息列表
+            - stream: 是否启用流式传输
+            - temperature: 采样温度 (0.0-2.0)
+            - top_p: 核采样参数 (0.0-1.0)
+            - max_tokens: 最大生成token数
+            - presence_penalty: 存在惩罚 (-2.0-2.0)
+            - frequency_penalty: 频率惩罚 (-2.0-2.0)
+            - seed: 随机种子
+            - n: 生成候选数量
+            - tools: 工具/函数调用列表
+            - employee_id: 数字员工ID
+            - user_id: 用户ID
+            - session_id: 会话ID
+            - channel_name: 渠道名称
+            - team_id: 团队ID
 
         api_key: 来自身份验证的应用程序接口密钥
 
@@ -523,12 +566,24 @@ async def openai_chat_completions(
             request=None, user_id=request.user_id, session_id=request.session_id
         )
 
-        logger.info(f"OpenAI chat completion request: {request}")
-        # OpenAI chat completion request: model='qwen2.5:7b' 
-        # messages=[OpenAIMessage(role='user', content='胡桃')] 
-        # stream=True temperature=0.7 max_tokens=None employee_id='hutao' 
-        # user_id='user_123456' session_id='sess_20251218_abc123' 
-        # session_id2='session_id2_default'
+        logger.info(
+            "OpenAI chat completion request",
+            model=request.model,
+            user_id=request.user_id,
+            employee_id=request.employee_id,
+            session_id=request.session_id,
+            stream=request.stream,
+            temperature=request.temperature,
+            top_p=request.top_p,
+            max_tokens=request.max_tokens,
+            presence_penalty=request.presence_penalty,
+            frequency_penalty=request.frequency_penalty,
+            seed=request.seed,
+            n=request.n,
+            has_tools=request.tools is not None,
+            channel_name=request.channel_name,
+            team_id=request.team_id,
+        )
 
         if request.stream:
             # Return streaming response
@@ -543,7 +598,11 @@ async def openai_chat_completions(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"OpenAI chat completion error: error={str(e)}", exc_info=True)
+        logger.error(
+            "OpenAI chat completion error",
+            error=str(e),
+            exc_info=True
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to process chat completion",
@@ -592,7 +651,15 @@ async def query_stream_chunks(
         分页的chunk列表及分页信息
     """
     try:
-        logger.info(f"Query stream chunks: user_id={user_id}, employee_id={employee_id}, session_id={session_id}, chat_id={chat_id}, page={page}, page_size={page_size}")
+        logger.info(
+            "Query stream chunks",
+            user_id=user_id,
+            employee_id=employee_id,
+            session_id=session_id,
+            chat_id=chat_id,
+            page=page,
+            page_size=page_size
+        )
 
         # Get database instance
         db = await get_database()
@@ -690,7 +757,11 @@ async def query_stream_chunks(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Query stream chunks error: error={str(e)}", exc_info=True)
+        logger.error(
+            "Query stream chunks error",
+            error=str(e),
+            exc_info=True
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to query stream chunks",
