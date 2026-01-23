@@ -22,9 +22,9 @@ OpenAI-style streaming client for /api/chat/v1/chat/completions.
 【指定员工/用户/会话】
   python ai-service/scripts/stream_client.py \\
     --host http://localhost:8000 \\
-    --employee_id financial_analyst \\
-    --user_id user_20260110 \\
-    --session_id sess_financial_analyst_fdaf \\
+    --employee_id 29 \\
+    --user_id 3 \\
+    --session_id sess_4_3_29 \\
     --query "失蜡铸造的原理"
 
 【完整示例】
@@ -41,9 +41,9 @@ OpenAI-style streaming client for /api/chat/v1/chat/completions.
 默认参数
 =======
   --host           http://localhost:8000
-  --employee_id    financial_analyst
-  --user_id        user_20260110
-  --session_id     sess_financial_analyst_fdaf
+  --employee_id    29
+  --user_id        3
+  --session_id     sess_4_3_29
   --model          qwen2.5:7b
 
 =======
@@ -249,8 +249,8 @@ def main():
     )
     parser.add_argument("--host", default="http://192.168.8.233:8100", help="Base host (including port), 默认: http://localhost:8000")
     parser.add_argument("--employee_id", default="29", help="Employee ID, 默认: 29")
-    parser.add_argument("--user_id", default="42478261", help="User ID, 默认: 42478261")
-    parser.add_argument("--session_id", default="sess_4_42478261_29", help="Session ID, 默认: sess_4_42478261_29")
+    parser.add_argument("--user_id", default="3", help="User ID, 默认: 3")
+    parser.add_argument("--session_id", default="sess_4_3_29", help="Session ID, 默认: sess_4_3_29")
     parser.add_argument("--model", default="qwen2.5:7b", help="Model name, 默认: qwen2.5:7b")
 
     # 新增参数

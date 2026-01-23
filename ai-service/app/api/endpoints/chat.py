@@ -612,6 +612,8 @@ async def openai_chat_completions(
 
         # extra_body 中的直接参数优先级最高（覆盖所有其他来源）
         if request.extra_body:
+            if "session_id" in request.extra_body and request.extra_body["session_id"]:
+                request.session_id = request.extra_body["session_id"]
             if "team_id" in request.extra_body and request.extra_body["team_id"]:
                 effective_team_id = request.extra_body["team_id"]
             if "user_id" in request.extra_body and request.extra_body["user_id"]:
