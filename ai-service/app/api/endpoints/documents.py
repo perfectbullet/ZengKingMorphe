@@ -1,6 +1,7 @@
 """
 Document management API endpoints.
 """
+
 import os
 import shutil
 import aiohttp
@@ -8,7 +9,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile, Form, Query
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    status,
+    File,
+    UploadFile,
+    Form,
+    Query,
+)
 
 from app.api.middleware.auth import get_api_key
 from app.core.logging import get_logger
@@ -17,10 +27,7 @@ from app.core.chroma import chroma_db
 
 from app.services.task_processor import task_processor
 from app.services.document_service import generate_doc_id
-from app.models.schemas import (
-    CreateRagDocumentRequest,
-    CreateRagDocumentResponse
-)
+from app.models.schemas import CreateRagDocumentRequest, CreateRagDocumentResponse
 
 logger = get_logger(__name__)
 
@@ -51,21 +58,14 @@ async def _get_chunks_from_chroma(doc_id: str) -> Dict[str, Any]:
         - total_characters: int
         - content: str (concatenated chunks)
     """
-    chunks_stats = {
-        "total_chunks": 0,
-        "avg_chunk_size": 0,
-        "total_characters": 0
-    }
+    chunks_stats = {"total_chunks": 0, "avg_chunk_size": 0, "total_characters": 0}
     full_content = ""
 
     if not chroma_db.client:
         return chunks_stats
 
     try:
-        results = chroma_db.doc_collection.get(
-            where={"doc_id": doc_id},
-            limit=10000
-        )
+        results = chroma_db.doc_collection.get(where={"doc_id": doc_id}, limit=10000)
 
         if not results or not results.get("documents"):
             return chunks_stats
@@ -94,11 +94,7 @@ async def _get_chunks_from_chroma(doc_id: str) -> Dict[str, Any]:
         full_content = "".join(chunks)
 
     except Exception as e:
-        logger.warning(
-            "Failed to get chunks from Chroma",
-            doc_id=doc_id,
-            error=str(e)
-        )
+        logger.warning("Failed to get chunks from Chroma", doc_id=doc_id, error=str(e))
 
     return {**chunks_stats, "content": full_content}
 
@@ -108,7 +104,7 @@ async def upload_documents(
     files: List[UploadFile] = File(..., description="Files to upload (max 50)"),
     kb_id: str = Form(..., description="Knowledge base ID"),
     category: str = Form(..., description="Document category"),
-    api_key: str = Depends(get_api_key)
+    api_key: str = Depends(get_api_key),
 ):
     """
     上传并处理文档（支持同步/异步模式）。
@@ -126,13 +122,9 @@ async def upload_documents(
         if len(files) > 50:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Maximum 50 files allowed per upload"
+                detail="Maximum 50 files allowed per upload",
             )
-        logger.info(
-            "Upload documents request",
-            kb_id=kb_id,
-            file_count=len(files)
-        )
+        logger.info("Upload documents request", kb_id=kb_id, file_count=len(files))
 
         # Async mode: submit tasks and return immediately
         task_ids = []
@@ -146,25 +138,21 @@ async def upload_documents(
                 kb_id=kb_id,
                 filename=file.filename,
                 file_path=str(file_path),
-                category=category
+                category=category,
             )
             task_ids.append(task_id)
         return {
             "status": "success",
             "message": f"Submitted {len(task_ids)} tasks for processing",
-            "tasks": task_ids
+            "tasks": task_ids,
         }
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(
-            "Upload documents error",
-            error=str(e),
-            exc_info=True
-        )
+        logger.error("Upload documents error", error=str(e), exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to upload documents"
+            detail="Failed to upload documents",
         )
 
 
@@ -176,7 +164,7 @@ async def list_documents(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     api_key: str = Depends(get_api_key),
-    db = Depends(get_database)
+    db=Depends(get_database),
 ):
     """
     获取文档列表。
@@ -205,7 +193,12 @@ async def list_documents(
         total = await db.documents.count_documents(query)
 
         # Get paginated results
-        cursor = db.documents.find(query).sort("uploaded_at", -1).skip((page - 1) * page_size).limit(page_size)
+        cursor = (
+            db.documents.find(query)
+            .sort("uploaded_at", -1)
+            .skip((page - 1) * page_size)
+            .limit(page_size)
+        )
         docs = await cursor.to_list(length=page_size)
 
         # Format results
@@ -230,27 +223,21 @@ async def list_documents(
                 "total": total,
                 "page": page,
                 "page_size": page_size,
-                "items": items
-            }
+                "items": items,
+            },
         }
 
     except Exception as e:
-        logger.error(
-            "List documents error",
-            error=str(e),
-            exc_info=True
-        )
+        logger.error("List documents error", error=str(e), exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to list documents"
+            detail="Failed to list documents",
         )
 
 
 @router.get("/{doc_id}")
 async def get_document_detail(
-    doc_id: str,
-    api_key: str = Depends(get_api_key),
-    db = Depends(get_database)
+    doc_id: str, api_key: str = Depends(get_api_key), db=Depends(get_database)
 ):
     """
     获取文档详情（包含切片统计和所属知识库信息）。
@@ -271,8 +258,7 @@ async def get_document_detail(
 
         if not doc:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Document not found"
+                status_code=status.HTTP_404_NOT_FOUND, detail="Document not found"
             )
 
         # Get knowledge base info
@@ -285,7 +271,7 @@ async def get_document_detail(
                     "kb_id": kb["kb_id"],
                     "name": kb["name"],
                     "category": kb["category"],
-                    "description": kb.get("description", "")
+                    "description": kb.get("description", ""),
                 }
 
         # Get chunks statistics and content from Chroma
@@ -303,27 +289,20 @@ async def get_document_detail(
             "processed_at": _format_datetime(doc.get("processed_at")),
             "chunks_stats": chroma_data,
             "content": chroma_data.get("content", ""),
-            "knowledge_base": kb_info
+            "knowledge_base": kb_info,
         }
 
-        return {
-            "code": 200,
-            "message": "success",
-            "data": doc_data
-        }
+        return {"code": 200, "message": "success", "data": doc_data}
 
     except HTTPException:
         raise
     except Exception as e:
         logger.error(
-            "Get document detail error",
-            doc_id=doc_id,
-            error=str(e),
-            exc_info=True
+            "Get document detail error", doc_id=doc_id, error=str(e), exc_info=True
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to get document detail"
+            detail="Failed to get document detail",
         )
 
 
@@ -333,7 +312,7 @@ async def get_document_chunks(
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(20, ge=1, le=100, description="Page size"),
     api_key: str = Depends(get_api_key),
-    db = Depends(get_database)
+    db=Depends(get_database),
 ):
     """
     获取文档切片列表（包含切片文本、长度、分层摘要等详细信息）。
@@ -350,18 +329,14 @@ async def get_document_chunks(
     """
     try:
         logger.info(
-            "Get document chunks request",
-            doc_id=doc_id,
-            page=page,
-            page_size=page_size
+            "Get document chunks request", doc_id=doc_id, page=page, page_size=page_size
         )
 
         # Verify document exists and get hierarchical summary
         doc = await db.documents.find_one({"doc_id": doc_id})
         if not doc:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Document not found"
+                status_code=status.HTTP_404_NOT_FOUND, detail="Document not found"
             )
 
         kb_id = doc.get("kb_id")
@@ -370,22 +345,26 @@ async def get_document_chunks(
         hierarchical_summary = doc.get("hierarchical_summary", {})
 
         # Fetch all chunks from MongoDB to get summary data
-        chunks_cursor = db.document_chunks.find({"doc_id": doc_id}).sort("chunk_index", 1)
+        chunks_cursor = db.document_chunks.find({"doc_id": doc_id}).sort(
+            "chunk_index", 1
+        )
         mongo_chunks = await chunks_cursor.to_list(length=None)
 
         # Build chunks list with summaries
         all_chunks = []
         for chunk in mongo_chunks:
             metadata = chunk.get("metadata", {})
-            all_chunks.append({
-                "chunk_id": chunk.get("chunk_id"),
-                "chunk_index": chunk.get("chunk_index", 0),
-                "content": chunk.get("content", ""),
-                "length": len(chunk.get("content", "")),
-                "kb_id": chunk.get("kb_id"),
-                "doc_id": chunk.get("doc_id"),
-                "summary": metadata.get("summary", "")
-            })
+            all_chunks.append(
+                {
+                    "chunk_id": chunk.get("chunk_id"),
+                    "chunk_index": chunk.get("chunk_index", 0),
+                    "content": chunk.get("content", ""),
+                    "length": len(chunk.get("content", "")),
+                    "kb_id": chunk.get("kb_id"),
+                    "doc_id": chunk.get("doc_id"),
+                    "summary": metadata.get("summary", ""),
+                }
+            )
 
         # Paginate
         start_idx = (page - 1) * page_size
@@ -405,30 +384,24 @@ async def get_document_chunks(
             "hierarchical_summary": {
                 "document_summary": hierarchical_summary.get("document_summary", ""),
                 "section_summaries": hierarchical_summary.get("section_summaries", []),
-                "chunks_with_summaries": sum(1 for c in all_chunks if c.get("summary"))
-            }
+                "chunks_with_summaries": sum(1 for c in all_chunks if c.get("summary")),
+            },
         }
 
     except HTTPException:
         raise
     except Exception as e:
         logger.error(
-            "Get document chunks error",
-            doc_id=doc_id,
-            error=str(e),
-            exc_info=True
+            "Get document chunks error", doc_id=doc_id, error=str(e), exc_info=True
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to get document chunks"
+            detail="Failed to get document chunks",
         )
 
 
 @router.get("/tasks/{task_id}")
-async def get_task_status(
-    task_id: str,
-    api_key: str = Depends(get_api_key)
-):
+async def get_task_status(task_id: str, api_key: str = Depends(get_api_key)):
     """
     查询文档处理任务状态。
 
@@ -440,42 +413,34 @@ async def get_task_status(
         \n- Task status information (status, progress, doc_id, error, etc.)
     """
     try:
-        logger.info("Get task status request", task_id=task_id)
+        logger.debug("Get task status request", task_id=task_id)
 
         task = await task_processor.get_task_status(task_id)
 
         if not task:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Task {task_id} not found"
-            )
-
-        return {
-            "code": 200,
-            "status": "success",
-            "data": task
-        }
+            # raise HTTPException(
+            #     status_code=status.HTTP_404_NOT_FOUND,
+            #     detail=f"Task {task_id} not found"
+            # )
+            # 这样改的目的是不想看到过多的日志
+            return {"code": 404, "status": "Task {task_id} not found", "detail": "Task {task_id} not found", "data": task, "status_code": status.HTTP_404_NOT_FOUND}
+        logger.info("Get task status request", task_id=task_id)
+        return {"code": 200, "status": "success", "data": task}
 
     except HTTPException:
         raise
     except Exception as e:
         logger.error(
-            "Get task status error",
-            task_id=task_id,
-            error=str(e),
-            exc_info=True
+            "Get task status error", task_id=task_id, error=str(e), exc_info=True
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to get task status"
+            detail="Failed to get task status",
         )
 
 
 @router.delete("/tasks/{task_id}")
-async def cancel_task(
-    task_id: str,
-    api_key: str = Depends(get_api_key)
-):
+async def cancel_task(task_id: str, api_key: str = Depends(get_api_key)):
     """
     取消文档处理任务。
 
@@ -494,27 +459,22 @@ async def cancel_task(
         if not cancelled:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Task cannot be cancelled (not found or already completed)"
+                detail="Task cannot be cancelled (not found or already completed)",
             )
 
         return {
             "code": 200,
             "status": "success",
-            "message": f"Task {task_id} cancelled"
+            "message": f"Task {task_id} cancelled",
         }
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(
-            "Cancel task error",
-            task_id=task_id,
-            error=str(e),
-            exc_info=True
-        )
+        logger.error("Cancel task error", task_id=task_id, error=str(e), exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to cancel task"
+            detail="Failed to cancel task",
         )
 
 
@@ -522,7 +482,7 @@ async def cancel_task(
 async def create_rag_document_with_segment(
     request: CreateRagDocumentRequest,
     api_key: str = Depends(get_api_key),
-    db = Depends(get_database)
+    db=Depends(get_database),
 ):
     """
     创建RAG文档（Java平台集成接口，支持自定义分段策略）。
@@ -549,20 +509,21 @@ async def create_rag_document_with_segment(
             kb_id=request.kb_id,
             document_name=request.document_name,
             resource_id=request.resource_id,
-            segment_flag=request.segment_flag
+            segment_flag=request.segment_flag,
         )
 
         # Verify knowledge base exists
         kb = await db.knowledge_bases.find_one({"kb_id": request.kb_id})
         if not kb:
             logger.warning(
-                "Knowledge base not found",
-                kb_id=request.kb_id,
-                available_kbs=await db.knowledge_bases.find({}, {"kb_id": 1, "name": 1}).to_list(None)
+                f"Knowledge base not found: kb_id={request.kb_id}",
+                available_kbs=await db.knowledge_bases.find(
+                    {}, {"kb_id": 1, "name": 1}
+                ).to_list(None),
             )
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Knowledge base {request.kb_id} not found"
+                detail=f"Knowledge base {request.kb_id} not found",
             )
 
         # Generate doc_id immediately (before async processing)
@@ -572,39 +533,39 @@ async def create_rag_document_with_segment(
         file_path = None
         try:
             # Generate temporary file path (using pathlib)
-            file_ext = os.path.splitext(request.document_name)[1] or '.txt'
+            file_ext = os.path.splitext(request.document_name)[1] or ".txt"
             temp_filename = f"java_upload_{request.resource_id}_{datetime.utcnow().timestamp()}{file_ext}"
             file_path = UPLOAD_DIR / temp_filename
 
             # Download file with timeout
             async with aiohttp.ClientSession() as session:
-                async with session.get(request.resource_url, timeout=aiohttp.ClientTimeout(total=120)) as response:
+                async with session.get(
+                    request.resource_url, timeout=aiohttp.ClientTimeout(total=120)
+                ) as response:
                     if response.status != 200:
                         raise HTTPException(
                             status_code=status.HTTP_400_BAD_REQUEST,
-                            detail=f"Failed to download file from URL: HTTP {response.status}"
+                            detail=f"Failed to download file from URL: HTTP {response.status}",
                         )
 
                     # Save file to disk
-                    with open(file_path, 'wb') as f:
+                    with open(file_path, "wb") as f:
                         async for chunk in response.content.iter_chunked(8192):
                             f.write(chunk)
 
             logger.info(
                 "Downloaded file from URL",
                 url=request.resource_url,
-                file_path=str(file_path)
+                file_path=str(file_path),
             )
 
         except aiohttp.ClientError as e:
             logger.error(
-                "Failed to download file",
-                url=request.resource_url,
-                error=str(e)
+                "Failed to download file", url=request.resource_url, error=str(e)
             )
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Failed to download file: {str(e)}"
+                detail=f"Failed to download file: {str(e)}",
             )
 
         # Build chunk_config from segment_vo
@@ -612,14 +573,14 @@ async def create_rag_document_with_segment(
         if request.segment_flag == 1 and request.segment_vo:
             segment = request.segment_vo
             chunk_config = {
-                'is_space_flag': segment.is_space_flag,
-                'is_menu_flag': segment.is_menu_flag,
-                'segment_type': segment.segment_type,
-                'is_segment_union_flag': segment.is_segment_union_flag,
-                'segment_union_max_length': segment.segment_union_max_length,
-                'segment_identifier_type': segment.segment_identifier_type,
-                'identifier_default': segment.identifier_default,
-                'identifier_customize': segment.identifier_customize,
+                "is_space_flag": segment.is_space_flag,
+                "is_menu_flag": segment.is_menu_flag,
+                "segment_type": segment.segment_type,
+                "is_segment_union_flag": segment.is_segment_union_flag,
+                "segment_union_max_length": segment.segment_union_max_length,
+                "segment_identifier_type": segment.segment_identifier_type,
+                "identifier_default": segment.identifier_default,
+                "identifier_customize": segment.identifier_customize,
             }
             logger.info("Using custom segment config", chunk_config=chunk_config)
 
@@ -631,7 +592,7 @@ async def create_rag_document_with_segment(
             category=None,
             chunk_config=chunk_config,
             doc_id=doc_id,
-            resource_id=request.resource_id
+            resource_id=request.resource_id,
         )
 
         return CreateRagDocumentResponse(
@@ -643,19 +604,15 @@ async def create_rag_document_with_segment(
                 "status": "processing",
                 "resource_id": request.resource_id,
                 "document_name": request.document_name,
-                "kb_id": request.kb_id
-            }
+                "kb_id": request.kb_id,
+            },
         )
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(
-            "Create RAG document error",
-            error=str(e),
-            exc_info=True
-        )
+        logger.error("Create RAG document error", error=str(e), exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to create RAG document"
+            detail="Failed to create RAG document",
         )

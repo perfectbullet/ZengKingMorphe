@@ -38,7 +38,10 @@ rsync ${RSYNC_OPTS} -e "ssh -i ${SSH_KEY}" \
     --exclude="logs/" \
     --exclude="test_files/" \
     --exclude=".pytest_cache/" \
-    --include="*.py" \
+    --exclude="*.pyc" \
+    --exclude="*.pyo" \
+    --include="*/" \
+    --include="**/*.py" \
     --include="Dockerfile" \
     --include="requirements.txt" \
     --include=".dockerignore" \
