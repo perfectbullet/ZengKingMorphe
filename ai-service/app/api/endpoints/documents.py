@@ -4,10 +4,11 @@ Document management API endpoints.
 import os
 import shutil
 import aiohttp
-from typing import List
-from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile, Form, Query
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import List, Dict, Any, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile, Form, Query
 
 from app.api.middleware.auth import get_api_key
 from app.core.logging import get_logger
@@ -15,6 +16,7 @@ from app.core.database import get_database
 from app.core.chroma import chroma_db
 
 from app.services.task_processor import task_processor
+from app.services.document_service import generate_doc_id
 from app.models.schemas import (
     CreateRagDocumentRequest,
     CreateRagDocumentResponse
@@ -24,11 +26,81 @@ logger = get_logger(__name__)
 
 router = APIRouter()
 
-# Temporary upload directory (using pathlib for cross-platform compatibility)
-UPLOAD_DIR = Path(__file__).parent.parent.parent.parent / "../upload_docs"
-UPLOAD_DIR = UPLOAD_DIR.resolve()
+# Temporary upload directory (ai-service/upload_docs from project root)
+UPLOAD_DIR = Path(__file__).parent.parent.parent.parent / "upload_docs"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-logger.info(f"Upload directory configured: {UPLOAD_DIR}")
+logger.info("Upload directory configured", upload_dir=str(UPLOAD_DIR))
+
+
+def _format_datetime(dt: Optional[datetime]) -> Optional[str]:
+    """Format datetime to ISO 8601 with UTC timezone suffix."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.isoformat()
+
+
+async def _get_chunks_from_chroma(doc_id: str) -> Dict[str, Any]:
+    """
+    Fetch chunks from ChromaDB and calculate statistics.
+
+    Returns dict with:
+        - total_chunks: int
+        - avg_chunk_size: int
+        - total_characters: int
+        - content: str (concatenated chunks)
+    """
+    chunks_stats = {
+        "total_chunks": 0,
+        "avg_chunk_size": 0,
+        "total_characters": 0
+    }
+    full_content = ""
+
+    if not chroma_db.client:
+        return chunks_stats
+
+    try:
+        results = chroma_db.doc_collection.get(
+            where={"doc_id": doc_id},
+            limit=10000
+        )
+
+        if not results or not results.get("documents"):
+            return chunks_stats
+
+        documents = results["documents"]
+        metadatas = results.get("metadatas", [])
+
+        # Build chunks list with proper ordering by chunk_index
+        chunks_with_index = []
+        for i, text in enumerate(documents):
+            metadata = metadatas[i] if i < len(metadatas) else {}
+            chunk_index = metadata.get("chunk_index", i)
+            chunks_with_index.append((chunk_index, text))
+
+        # Sort by chunk_index and extract content
+        chunks_with_index.sort(key=lambda pair: pair[0])
+        chunks = [text for _, text in chunks_with_index]
+
+        # Calculate statistics
+        total_chars = sum(len(chunk) for chunk in chunks)
+        chunks_stats["total_chunks"] = len(chunks)
+        chunks_stats["total_characters"] = total_chars
+        chunks_stats["avg_chunk_size"] = total_chars // len(chunks) if chunks else 0
+
+        # Concatenate all chunks to form complete content
+        full_content = "".join(chunks)
+
+    except Exception as e:
+        logger.warning(
+            "Failed to get chunks from Chroma",
+            doc_id=doc_id,
+            error=str(e)
+        )
+
+    return {**chunks_stats, "content": full_content}
 
 
 @router.post("/upload")
@@ -122,10 +194,8 @@ async def list_documents(
         \n- List of documents
     """
     try:
-        # Build query
-        query = {}
-        if kb_id:
-            query["kb_id"] = kb_id
+        # Build query filter
+        query = {"kb_id": kb_id}
         if category:
             query["category"] = category
         if status_filter:
@@ -139,10 +209,8 @@ async def list_documents(
         docs = await cursor.to_list(length=page_size)
 
         # Format results
-        items = []
-        for doc in docs:
-            doc.pop("_id", None)
-            items.append({
+        items = [
+            {
                 "doc_id": doc["doc_id"],
                 "filename": doc["filename"],
                 "kb_id": doc["kb_id"],
@@ -150,8 +218,10 @@ async def list_documents(
                 "size": doc["size"],
                 "chunks_count": doc.get("chunks_count", 0),
                 "status": doc["status"],
-                "uploaded_at": doc["uploaded_at"].isoformat() + "Z"
-            })
+                "uploaded_at": _format_datetime(doc["uploaded_at"]),
+            }
+            for doc in docs
+        ]
 
         return {
             "code": 200,
@@ -207,8 +277,9 @@ async def get_document_detail(
 
         # Get knowledge base info
         kb_info = None
-        if doc.get("kb_id"):
-            kb = await db.knowledge_bases.find_one({"kb_id": doc["kb_id"]})
+        doc_kb_id = doc.get("kb_id")
+        if doc_kb_id:
+            kb = await db.knowledge_bases.find_one({"kb_id": doc_kb_id})
             if kb:
                 kb_info = {
                     "kb_id": kb["kb_id"],
@@ -218,63 +289,20 @@ async def get_document_detail(
                 }
 
         # Get chunks statistics and content from Chroma
-        chunks_stats = {
-            "total_chunks": doc.get("chunks_count", 0),
-            "avg_chunk_size": 0,
-            "total_characters": 0
-        }
-        full_content = ""
-
-        try:
-            # Query chunks from Chroma to get statistics and content
-            if chroma_db.client and doc.get("chunks_count", 0) > 0:
-                results = chroma_db.doc_collection.get(
-                    where={"doc_id": doc_id},
-                    limit=10000  # Get all chunks
-                )
-
-                if results and results.get("documents"):
-                    documents = results["documents"]
-                    metadatas = results.get("metadatas", [])
-
-                    # Build chunk list with indices for proper ordering
-                    chunks_with_index = []
-                    for i, text in enumerate(documents):
-                        metadata = metadatas[i] if i < len(metadatas) else {}
-                        chunk_index = metadata.get("chunk_index", i)
-                        chunks_with_index.append((chunk_index, text))
-
-                    # Sort by chunk_index
-                    chunks_with_index.sort(key=lambda x: x[0])
-
-                    # Calculate statistics
-                    chunks = [text for _, text in chunks_with_index]
-                    total_chars = sum(len(chunk) for chunk in chunks)
-                    chunks_stats["total_characters"] = total_chars
-                    chunks_stats["avg_chunk_size"] = total_chars // len(chunks) if chunks else 0
-
-                    # Concatenate all chunks to form complete content
-                    full_content = "".join(chunks)
-        except Exception as e:
-            logger.warning(
-                "Failed to get chunks statistics and content",
-                doc_id=doc_id,
-                error=str(e)
-            )
+        chroma_data = await _get_chunks_from_chroma(doc_id)
 
         # Format response
-        doc.pop("_id", None)
         doc_data = {
             "doc_id": doc["doc_id"],
             "filename": doc["filename"],
-            "kb_id": doc.get("kb_id"),
+            "kb_id": doc_kb_id,
             "category": doc.get("category"),
             "size": doc["size"],
             "status": doc["status"],
-            "uploaded_at": doc["uploaded_at"].isoformat() + "Z",
-            "processed_at": doc.get("processed_at").isoformat() + "Z" if doc.get("processed_at") else None,
-            "chunks_stats": chunks_stats,
-            "content": full_content,
+            "uploaded_at": _format_datetime(doc["uploaded_at"]),
+            "processed_at": _format_datetime(doc.get("processed_at")),
+            "chunks_stats": chroma_data,
+            "content": chroma_data.get("content", ""),
             "knowledge_base": kb_info
         }
 
@@ -345,41 +373,18 @@ async def get_document_chunks(
         chunks_cursor = db.document_chunks.find({"doc_id": doc_id}).sort("chunk_index", 1)
         mongo_chunks = await chunks_cursor.to_list(length=None)
 
-        total_chunks = len(mongo_chunks)
-
-        if not mongo_chunks:
-            return {
-                "code": 200,
-                "status": "success",
-                "doc_id": doc_id,
-                "kb_id": kb_id,
-                "filename": doc.get("filename"),
-                "total_chunks": 0,
-                "page": page,
-                "page_size": page_size,
-                "chunks": [],
-                "hierarchical_summary": hierarchical_summary
-            }
-
         # Build chunks list with summaries
         all_chunks = []
         for chunk in mongo_chunks:
-            chunk_id = chunk.get("chunk_id")
-            chunk_index = chunk.get("chunk_index", 0)
-            content = chunk.get("content", "")
-
-            # Get summary from metadata
             metadata = chunk.get("metadata", {})
-            summary = metadata.get("summary", "")
-
             all_chunks.append({
-                "chunk_id": chunk_id,
-                "chunk_index": chunk_index,
-                "content": content,
-                "length": len(content),
+                "chunk_id": chunk.get("chunk_id"),
+                "chunk_index": chunk.get("chunk_index", 0),
+                "content": chunk.get("content", ""),
+                "length": len(chunk.get("content", "")),
                 "kb_id": chunk.get("kb_id"),
                 "doc_id": chunk.get("doc_id"),
-                "summary": summary  # Chunk-level summary
+                "summary": metadata.get("summary", "")
             })
 
         # Paginate
@@ -393,7 +398,7 @@ async def get_document_chunks(
             "doc_id": doc_id,
             "kb_id": kb_id,
             "filename": doc.get("filename"),
-            "total_chunks": total_chunks,
+            "total_chunks": len(mongo_chunks),
             "page": page,
             "page_size": page_size,
             "chunks": paginated_chunks,
@@ -550,17 +555,18 @@ async def create_rag_document_with_segment(
         # Verify knowledge base exists
         kb = await db.knowledge_bases.find_one({"kb_id": request.kb_id})
         if not kb:
+            logger.warning(
+                "Knowledge base not found",
+                kb_id=request.kb_id,
+                available_kbs=await db.knowledge_bases.find({}, {"kb_id": 1, "name": 1}).to_list(None)
+            )
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Knowledge base {request.kb_id} not found"
             )
 
         # Generate doc_id immediately (before async processing)
-        import hashlib
-        timestamp = datetime.utcnow().timestamp()
-        content = f"{request.document_name}_{request.kb_id}_{timestamp}"
-        hash_obj = hashlib.md5(content.encode())
-        doc_id = f"doc_{hash_obj.hexdigest()[:12]}"
+        doc_id = generate_doc_id(request.document_name, request.kb_id)
 
         # Download file from resource_url
         file_path = None
@@ -615,10 +621,7 @@ async def create_rag_document_with_segment(
                 'identifier_default': segment.identifier_default,
                 'identifier_customize': segment.identifier_customize,
             }
-            logger.info(
-                "Using custom segment config",
-                chunk_config=chunk_config
-            )
+            logger.info("Using custom segment config", chunk_config=chunk_config)
 
         # Submit async task with pre-generated doc_id
         task_id = await task_processor.submit_task(

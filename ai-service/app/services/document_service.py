@@ -185,8 +185,13 @@ class DocumentProcessor:
             return doc_id
             
         except Exception as e:
-            logger.error(f"Failed to process document: filename={filename}, error={str(e)}", exc_info=True)
-            
+            logger.error(
+                "Failed to process document",
+                filename=filename,
+                error=str(e),
+                exc_info=True
+            )
+
             # Update document status to failed
             try:
                 db = await get_database()
@@ -199,8 +204,12 @@ class DocumentProcessor:
                         }
                     }
                 )
-            except Exception:
-                pass
+            except Exception as update_error:
+                logger.warning(
+                    "Failed to update document status to failed",
+                    doc_id=doc_id,
+                    error=str(update_error)
+                )
             
             raise
 
@@ -258,7 +267,7 @@ class DocumentProcessor:
                     text_parts.append(text)
             return "\n\n".join(text_parts)
         except Exception as e:
-            logger.error(f"Failed to extract PDF: file={file_path}, error={str(e)}")
+            logger.error("Failed to extract PDF", file=file_path, error=str(e), exc_info=True)
             raise
 
     def _extract_content_from_result(self, content_items: list) -> list:
@@ -343,7 +352,7 @@ class DocumentProcessor:
             paragraphs = [para.text for para in doc.paragraphs if para.text.strip()]
             return "\n\n".join(paragraphs)
         except Exception as e:
-            logger.error(f"Failed to extract DOCX: file={file_path}, error={str(e)}")
+            logger.error("Failed to extract DOCX", file=file_path, error=str(e), exc_info=True)
             raise
     
     async def _extract_txt(self, file_path: str) -> str:
@@ -352,7 +361,7 @@ class DocumentProcessor:
             async with aiofiles.open(file_path, 'r', encoding='utf-8') as f:
                 return await f.read()
         except Exception as e:
-            logger.error(f"Failed to extract TXT: file={file_path}, error={str(e)}")
+            logger.error("Failed to extract TXT", file=file_path, error=str(e), exc_info=True)
             raise
     
     async def _extract_markdown(self, file_path: str) -> str:
@@ -365,7 +374,7 @@ class DocumentProcessor:
             # soup = BeautifulSoup(html, 'html.parser')
             return md_content
         except Exception as e:
-            logger.error(f"Failed to extract Markdown: file={file_path}, error={str(e)}")
+            logger.error("Failed to extract Markdown", file=file_path, error=str(e), exc_info=True)
             raise
     
     async def _extract_html(self, file_path: str) -> str:
@@ -376,7 +385,7 @@ class DocumentProcessor:
             soup = BeautifulSoup(html_content, 'html.parser')
             return soup.get_text()
         except Exception as e:
-            logger.error(f"Failed to extract HTML: file={file_path}, error={str(e)}")
+            logger.error("Failed to extract HTML", file=file_path, error=str(e), exc_info=True)
             raise
     
     def _preprocess_text(self, text: str, chunk_config: Dict[str, Any]) -> str:
@@ -610,12 +619,13 @@ class DocumentProcessor:
         logger.info(
             "Using semantic chunking with hierarchical summarization",
             doc_id=doc_id,
-            text_length=len(text)
+            text_length=len(text),
+            file_ext=file_ext
         )
 
         try:
-            # Use semantic chunking service
-            semantic_chunks = await semantic_chunk_text(text)
+            # Use semantic chunking service with file_ext for auto-tuning chunk sizes
+            semantic_chunks = await semantic_chunk_text(text, file_ext=file_ext)
 
             # Generate hierarchical summaries and capture the result
             hierarchical_summary_data = None
@@ -816,10 +826,24 @@ class DocumentProcessor:
     
     def _generate_doc_id(self, filename: str, kb_id: str) -> str:
         """Generate unique document ID."""
-        timestamp = datetime.utcnow().timestamp()
-        content = f"{filename}_{kb_id}_{timestamp}"
-        hash_obj = hashlib.md5(content.encode())
-        return f"doc_{hash_obj.hexdigest()[:12]}"
+        return generate_doc_id(filename, kb_id)
+
+
+def generate_doc_id(filename: str, kb_id: str) -> str:
+    """
+    Generate unique document ID.
+
+    Args:
+        filename: Document filename
+        kb_id: Knowledge base ID
+
+    Returns:
+        Unique document ID
+    """
+    timestamp = datetime.utcnow().timestamp()
+    content = f"{filename}_{kb_id}_{timestamp}"
+    hash_obj = hashlib.md5(content.encode())
+    return f"doc_{hash_obj.hexdigest()[:12]}"
 
 
 # Global document processor instance

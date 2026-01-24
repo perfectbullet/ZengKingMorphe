@@ -17,6 +17,9 @@ from app.utils.embeddings import get_embedding
 
 logger = get_logger(__name__)
 
+# LLM configuration constants
+DEFAULT_LLM_TEMPERATURE = 0.3
+
 
 @dataclass
 class ChunkBoundary:
@@ -67,12 +70,17 @@ class SemanticChunker:
     5. Merge sentences into chunks respecting min/max size constraints
     """
 
+    # Markdown-based formats (.md, .pdf with MinerU) need larger chunks
+    # due to short line structure from PDF conversion
+    MARKDOWN_FORMATS = {'.md', '.pdf'}
+
     def __init__(
         self,
         similarity_threshold: Optional[float] = None,
         min_chunk_size: Optional[int] = None,
         max_chunk_size: Optional[int] = None,
-        window_size: Optional[int] = None
+        window_size: Optional[int] = None,
+        file_ext: Optional[str] = None
     ):
         """
         Initialize the semantic chunker.
@@ -82,10 +90,20 @@ class SemanticChunker:
             min_chunk_size: Minimum chunk size in characters
             max_chunk_size: Maximum chunk size in characters
             window_size: Number of sentences to consider for similarity
+            file_ext: File extension (.md, .pdf, .txt, etc.) for auto-tuning chunk sizes
         """
         self.similarity_threshold = similarity_threshold or settings.semantic_chunk_similarity_threshold
-        self.min_chunk_size = min_chunk_size or settings.semantic_chunk_min_size
-        self.max_chunk_size = max_chunk_size or settings.semantic_chunk_max_size
+
+        # Auto-tune chunk sizes based on file type
+        if file_ext and file_ext.lower() in self.MARKDOWN_FORMATS:
+            # Markdown/PDF files need larger chunks due to short line structure
+            self.min_chunk_size = min_chunk_size or 500
+            self.max_chunk_size = max_chunk_size or 2000
+        else:
+            # Default for plain text and other formats
+            self.min_chunk_size = min_chunk_size or settings.semantic_chunk_min_size
+            self.max_chunk_size = max_chunk_size or settings.semantic_chunk_max_size
+
         self.window_size = window_size or settings.semantic_chunk_window_size
 
         # Chinese and English sentence separators
@@ -407,6 +425,34 @@ class HierarchicalSummarizer:
 
         return summary
 
+    def _create_llm(self, max_tokens_multiplier: int = 1):
+        """
+        Create LLM instance for summarization.
+
+        Args:
+            max_tokens_multiplier: Multiplier for max_tokens setting
+
+        Returns:
+            Configured LLM instance
+        """
+        if settings.use_ollama:
+            from langchain_community.chat_models import ChatOllama
+            return ChatOllama(
+                model=settings.ollama_model,
+                base_url=settings.ollama_base_url,
+                temperature=DEFAULT_LLM_TEMPERATURE
+            )
+        else:
+            from langchain_openai import ChatOpenAI
+            api_key = settings.siliconflow_api_key or settings.openai_api_key
+            return ChatOpenAI(
+                model=settings.openai_model,
+                temperature=DEFAULT_LLM_TEMPERATURE,
+                max_tokens=settings.summary_max_tokens * max_tokens_multiplier,
+                api_key=api_key,
+                base_url=settings.openai_api_base
+            )
+
     async def _summarize_chunks(
         self,
         chunks: List[SemanticChunk],
@@ -414,48 +460,7 @@ class HierarchicalSummarizer:
         doc_id: str
     ):
         """Generate summaries for individual chunks."""
-        from app.core.config import settings
-
-        # Debug: Log configuration
-        logger.info(
-            "Summary LLM configuration",
-            use_ollama=settings.use_ollama,
-            ollama_model=settings.ollama_model,
-            ollama_base_url=settings.ollama_base_url,
-            openai_model=settings.openai_model,
-            openai_api_base=settings.openai_api_base
-        )
-
-        # Choose LLM based on configuration
-        if settings.use_ollama:
-            from langchain_community.chat_models import ChatOllama
-            logger.info(
-                "Creating Ollama LLM for summarization",
-                model=settings.ollama_model,
-                base_url=settings.ollama_base_url
-            )
-            llm = ChatOllama(
-                model=settings.ollama_model,
-                base_url=settings.ollama_base_url,
-                temperature=0.3
-            )
-        else:
-            from langchain_openai import ChatOpenAI
-            # Use siliconflow_api_key for SiliconFlow API
-            api_key = settings.siliconflow_api_key or settings.openai_api_key
-            logger.info(
-                "Creating OpenAI LLM for summarization",
-                model=settings.openai_model,
-                api_base=settings.openai_api_base,
-                has_api_key=bool(api_key)
-            )
-            llm = ChatOpenAI(
-                model=settings.openai_model,
-                temperature=0.3,
-                max_tokens=settings.summary_max_tokens,
-                api_key=api_key,
-                base_url=settings.openai_api_base
-            )
+        llm = self._create_llm(max_tokens_multiplier=1)
 
         prompts = []
 
@@ -498,33 +503,11 @@ class HierarchicalSummarizer:
         doc_id: str
     ):
         """Generate summaries for sections (groups of related chunks)."""
-        # Group chunks into sections based on topic similarity
         sections = self._group_chunks_into_sections(chunks)
-
         if not sections:
             return
 
-        from app.core.config import settings
-
-        # Choose LLM based on configuration
-        if settings.use_ollama:
-            from langchain_community.chat_models import ChatOllama
-            llm = ChatOllama(
-                model=settings.ollama_model,
-                base_url=settings.ollama_base_url,
-                temperature=0.3
-            )
-        else:
-            from langchain_openai import ChatOpenAI
-            # Use siliconflow_api_key for SiliconFlow API
-            api_key = settings.siliconflow_api_key or settings.openai_api_key
-            llm = ChatOpenAI(
-                model=settings.openai_model,
-                temperature=0.3,
-                max_tokens=settings.summary_max_tokens * 2,
-                api_key=api_key,
-                base_url=settings.openai_api_base
-            )
+        llm = self._create_llm(max_tokens_multiplier=2)
 
         for section in sections:
             section_text = "\n\n".join(
@@ -550,7 +533,6 @@ class HierarchicalSummarizer:
         doc_id: str
     ):
         """Generate document-level summary."""
-        # Use section summaries if available, otherwise use chunk summaries
         if summary.section_summaries:
             source_text = "\n\n".join(
                 s.summary for s in summary.section_summaries
@@ -561,28 +543,7 @@ class HierarchicalSummarizer:
             )
 
         prompt = self._create_document_summary_prompt(source_text)
-
-        from app.core.config import settings
-
-        # Choose LLM based on configuration
-        if settings.use_ollama:
-            from langchain_community.chat_models import ChatOllama
-            llm = ChatOllama(
-                model=settings.ollama_model,
-                base_url=settings.ollama_base_url,
-                temperature=0.3
-            )
-        else:
-            from langchain_openai import ChatOpenAI
-            # Use siliconflow_api_key for SiliconFlow API
-            api_key = settings.siliconflow_api_key or settings.openai_api_key
-            llm = ChatOpenAI(
-                model=settings.openai_model,
-                temperature=0.3,
-                max_tokens=settings.summary_max_tokens * 3,
-                api_key=api_key,
-                base_url=settings.openai_api_base
-            )
+        llm = self._create_llm(max_tokens_multiplier=3)
 
         result = await self._generate_summary(llm, prompt, f"{doc_id}_document")
 
@@ -697,17 +658,27 @@ class HierarchicalSummarizer:
         return None
 
 
-# Global instances
-_semantic_chunker: Optional[SemanticChunker] = None
+# Global instances with cache for different file_ext configurations
+_semantic_chunker_cache: Dict[Optional[str], SemanticChunker] = {}
 _hierarchical_summarizer: Optional[HierarchicalSummarizer] = None
 
 
-def get_semantic_chunker() -> SemanticChunker:
-    """Get or create the global semantic chunker instance."""
-    global _semantic_chunker
-    if _semantic_chunker is None:
-        _semantic_chunker = SemanticChunker()
-    return _semantic_chunker
+def get_semantic_chunker(file_ext: Optional[str] = None) -> SemanticChunker:
+    """
+    Get or create a semantic chunker instance, cached by file_ext.
+
+    Args:
+        file_ext: File extension for auto-tuning chunk sizes.
+            When provided, creates/retrieves a chunker optimized for that file type.
+            When None, returns the default chunker.
+
+    Returns:
+        SemanticChunker instance (cached per file_ext)
+    """
+    cache_key = file_ext
+    if cache_key not in _semantic_chunker_cache:
+        _semantic_chunker_cache[cache_key] = SemanticChunker(file_ext=file_ext)
+    return _semantic_chunker_cache[cache_key]
 
 
 def get_hierarchical_summarizer() -> HierarchicalSummarizer:
@@ -718,12 +689,13 @@ def get_hierarchical_summarizer() -> HierarchicalSummarizer:
     return _hierarchical_summarizer
 
 
-async def semantic_chunk_text(text: str) -> List[SemanticChunk]:
+async def semantic_chunk_text(text: str, file_ext: Optional[str] = None) -> List[SemanticChunk]:
     """
     Convenience function to chunk text semantically.
 
     Args:
         text: Input text
+        file_ext: File extension for auto-tuning chunk sizes
 
     Returns:
         List of semantic chunks
@@ -737,7 +709,7 @@ async def semantic_chunk_text(text: str) -> List[SemanticChunk]:
             chunk_index=0
         )]
 
-    chunker = get_semantic_chunker()
+    chunker = get_semantic_chunker(file_ext=file_ext)
     return await chunker.chunk_text(text)
 
 

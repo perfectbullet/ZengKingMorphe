@@ -27,6 +27,18 @@ from app.api.endpoints import knowledge_base_kb, documents, metrics, websocket
 setup_logging()
 logger = get_logger(__name__)
 
+# Uvicorn reload configuration
+UVICORN_RELOAD_EXCLUDES = [
+    "*.log",
+    "*.db",
+    "logs/*",
+    "data/*",
+    ".venv/*",
+    "__pycache__/*",
+    "*.pyc",
+    ".git/*",
+]
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -148,5 +160,6 @@ if __name__ == "__main__":
         host=settings.api_host,
         port=settings.api_port,
         workers=settings.api_workers,
-        reload=settings.debug
+        reload=settings.debug,
+        reload_excludes=UVICORN_RELOAD_EXCLUDES
     )

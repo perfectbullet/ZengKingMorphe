@@ -7,7 +7,7 @@ services:
       dockerfile: Dockerfile
     container_name: digital-employee-ai
     ports:
-      - "8100:8000"
+      - "8100:8100"
     environment:
       - JAVA_API_BASE_URL=${JAVA_API_BASE_URL:-http://java-platform:8080}
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:-your-secret-key-change-in-production}
@@ -32,7 +32,7 @@ services:
     image: chromadb/chroma:0.6.3  # Using stable version instead of 'latest' for consistency
     container_name: digital-employee-chroma
     ports:
-      - "8101:8000"
+      - "8101:8100"
     volumes:
       - chroma-data:/chroma/chroma
     environment:
@@ -43,7 +43,7 @@ services:
       - digital-employee-network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      test: ["CMD", "curl", "-f", "http://localhost:8100/api/v1/heartbeat"]
       interval: 10s
       timeout: 5s
       retries: 3

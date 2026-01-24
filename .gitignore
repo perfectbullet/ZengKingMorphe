@@ -32,3 +32,9 @@ ai-service/scripts/rag_eval_summary_*.txt
 response_1768128602741.txt
 一个知识库详细数据.json
 一个chunk数据.json
+
+# Test-generated temporary files (patterns instead of specific files)
+MinerU_markdown_*.txt
+*_metahuman.json
+response_*.txt
+response_*.json
