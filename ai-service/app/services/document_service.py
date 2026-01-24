@@ -1,6 +1,7 @@
 """
 Document processing service.
 """
+
 import os
 import re
 import hashlib
@@ -23,7 +24,7 @@ from app.models.database import DocumentModel, DocumentChunkModel
 from app.services.semantic_chunking import (
     semantic_chunk_text,
     create_hierarchical_summary,
-    SemanticChunk
+    SemanticChunk,
 )
 
 logger = get_logger(__name__)
@@ -31,16 +32,16 @@ logger = get_logger(__name__)
 
 class DocumentProcessor:
     """Document processing service for RAG."""
-    
+
     def __init__(self):
         self.supported_formats = {
-            '.pdf': self._extract_pdf,
-            '.docx': self._extract_docx,
-            '.txt': self._extract_txt,
-            '.md': self._extract_markdown,
-            '.html': self._extract_html,
+            ".pdf": self._extract_pdf,
+            ".docx": self._extract_docx,
+            ".txt": self._extract_txt,
+            ".md": self._extract_markdown,
+            ".html": self._extract_html,
         }
-    
+
     async def process_document(
         self,
         file_path: str,
@@ -51,7 +52,7 @@ class DocumentProcessor:
         task_id: Optional[str] = None,  # Add task_id for progress tracking
         chunk_config: Optional[Dict[str, Any]] = None,  # Custom chunk configuration
         doc_id: Optional[str] = None,  # Pre-generated doc_id (for immediate return)
-        resource_id: Optional[int] = None  # External system resource ID
+        resource_id: Optional[int] = None,  # External system resource ID
     ) -> str:
         """
         Process a document: extract text, chunk, vectorize, and store.
@@ -74,7 +75,7 @@ class DocumentProcessor:
             # Use provided doc_id or generate a new one
             if not doc_id:
                 doc_id = self._generate_doc_id(filename, kb_id)
-            
+
             # Get file info
             file_size = os.path.getsize(file_path)
             file_ext = os.path.splitext(filename)[1].lower()
@@ -95,7 +96,7 @@ class DocumentProcessor:
                 format=file_ext[1:].upper(),
                 status="processing",
                 segment_config=chunk_config,  # Save segment configuration
-                metadata=doc_metadata
+                metadata=doc_metadata,
             )
 
             await db.documents.insert_one(doc_model.model_dump())
@@ -106,12 +107,25 @@ class DocumentProcessor:
                 filename=filename,
                 kb_id=kb_id,
                 custom_chunking=bool(chunk_config),
-                resource_id=resource_id
+                resource_id=resource_id,
             )
 
             # Extract text (check if we should use MinerU for PDFs)
-            use_mineru = metadata.get('use_mineru', False) if metadata else False
-            text_content = await self._extract_text(file_path, file_ext, use_mineru=use_mineru)
+            use_mineru = metadata.get("use_mineru", False) if metadata else False
+
+            # Auto-detect scanned PDFs and use MinerU for OCR
+            if file_ext == ".pdf" and not use_mineru:
+                use_mineru = await self._detect_scanned_pdf(file_path)
+                if use_mineru:
+                    logger.info(
+                        "Detected scanned PDF, will use MinerU for OCR",
+                        doc_id=doc_id,
+                        file_path=file_path,
+                    )
+
+            text_content = await self._extract_text(
+                file_path, file_ext, use_mineru=use_mineru
+            )
 
             # Preprocess text if chunk_config specifies
             if chunk_config:
@@ -119,7 +133,13 @@ class DocumentProcessor:
 
             # Chunk document (async for semantic chunking)
             # Returns (chunks, hierarchical_summary_data) tuple
-            chunk_result = await self._chunk_text(text_content, doc_id, kb_id, file_ext=file_ext, chunk_config=chunk_config)
+            chunk_result = await self._chunk_text(
+                text_content,
+                doc_id,
+                kb_id,
+                file_ext=file_ext,
+                chunk_config=chunk_config,
+            )
 
             # Handle different return types: tuple (semantic) or list (traditional)
             if isinstance(chunk_result, tuple):
@@ -132,12 +152,7 @@ class DocumentProcessor:
             if task_id:
                 await db.document_tasks.update_one(
                     {"task_id": task_id},
-                    {
-                        "$set": {
-                            "total_chunks": len(chunks),
-                            "processed_chunks": 0
-                        }
-                    }
+                    {"$set": {"total_chunks": len(chunks), "processed_chunks": 0}},
                 )
 
             # Process chunks (vectorize and store)
@@ -148,14 +163,12 @@ class DocumentProcessor:
             if hierarchical_summary_data:
                 # Convert HierarchicalSummary object to dict for storage
                 hierarchical_summary_to_save = {
-                    "document_summary": hierarchical_summary_data.document_summary or "",
+                    "document_summary": hierarchical_summary_data.document_summary
+                    or "",
                     "section_summaries": [
-                        {
-                            "chunk_indices": s.chunk_indices,
-                            "summary": s.summary
-                        }
+                        {"chunk_indices": s.chunk_indices, "summary": s.summary}
                         for s in (hierarchical_summary_data.section_summaries or [])
-                    ]
+                    ],
                 }
 
             # Update document status
@@ -164,32 +177,29 @@ class DocumentProcessor:
                 "chunks_count": len(chunks),
                 "vectors_count": len(chunks),
                 "segment_config": chunk_config,  # Persist segment configuration
-                "processed_at": datetime.utcnow()
+                "processed_at": datetime.utcnow(),
             }
 
             # Add hierarchical summary if available
             if hierarchical_summary_to_save:
                 update_data["hierarchical_summary"] = hierarchical_summary_to_save
 
-            await db.documents.update_one(
-                {"doc_id": doc_id},
-                {"$set": update_data}
-            )
+            await db.documents.update_one({"doc_id": doc_id}, {"$set": update_data})
 
             logger.info(
                 "Completed processing document",
                 doc_id=doc_id,
                 chunks_count=len(chunks),
-                has_hierarchical_summary=bool(hierarchical_summary_to_save)
+                has_hierarchical_summary=bool(hierarchical_summary_to_save),
             )
             return doc_id
-            
+
         except Exception as e:
             logger.error(
                 "Failed to process document",
                 filename=filename,
                 error=str(e),
-                exc_info=True
+                exc_info=True,
             )
 
             # Update document status to failed
@@ -197,27 +207,19 @@ class DocumentProcessor:
                 db = await get_database()
                 await db.documents.update_one(
                     {"doc_id": doc_id},
-                    {
-                        "$set": {
-                            "status": "failed",
-                            "error_message": str(e)
-                        }
-                    }
+                    {"$set": {"status": "failed", "error_message": str(e)}},
                 )
             except Exception as update_error:
                 logger.warning(
                     "Failed to update document status to failed",
                     doc_id=doc_id,
-                    error=str(update_error)
+                    error=str(update_error),
                 )
-            
+
             raise
 
     async def _extract_text(
-        self,
-        file_path: str,
-        file_ext: str,
-        use_mineru: bool = False
+        self, file_path: str, file_ext: str, use_mineru: bool = False
     ) -> str:
         """
         Extract text from document.
@@ -234,7 +236,7 @@ class DocumentProcessor:
             raise ValueError(f"Unsupported file format: {file_ext}")
 
         # Call extractor with use_mineru parameter for PDF files
-        if file_ext == '.pdf' and use_mineru:
+        if file_ext == ".pdf" and use_mineru:
             return await self._extract_pdf(file_path, use_mineru=True)
         else:
             extractor = self.supported_formats[file_ext]
@@ -267,8 +269,60 @@ class DocumentProcessor:
                     text_parts.append(text)
             return "\n\n".join(text_parts)
         except Exception as e:
-            logger.error("Failed to extract PDF", file=file_path, error=str(e), exc_info=True)
+            logger.error(
+                "Failed to extract PDF", file=file_path, error=str(e), exc_info=True
+            )
             raise
+
+    async def _detect_scanned_pdf(
+        self, file_path: str, text_threshold: int = 100
+    ) -> bool:
+        """
+        Detect if a PDF is a scanned version (image-based without text layer).
+
+        Args:
+            file_path: Path to PDF file
+            text_threshold: Minimum character count to consider as having text content
+
+        Returns:
+            True if PDF appears to be scanned (needs OCR), False if text layer exists
+        """
+        try:
+            reader = PdfReader(file_path)
+            total_text = ""
+            # Check first 3 pages or all pages if fewer
+            pages_to_check = min(len(reader.pages), 3)
+            for i in range(pages_to_check):
+                page = reader.pages[i]
+                text = page.extract_text()
+                if text:
+                    total_text += text
+
+            # Clean whitespace for accurate check
+            clean_text = "".join(total_text.split())
+
+            # If extracted text is below threshold, likely a scanned PDF
+            is_scanned = len(clean_text) < text_threshold
+
+            logger.info(
+                "PDF scanned detection",
+                file=file_path,
+                pages_checked=pages_to_check,
+                text_length=len(clean_text),
+                threshold=text_threshold,
+                is_scanned=is_scanned,
+            )
+
+            return is_scanned
+
+        except Exception as e:
+            logger.warning(
+                "Failed to detect scanned PDF, assuming scanned to be safe",
+                file=file_path,
+                error=str(e),
+            )
+            # On error, assume it's scanned so we try MinerU
+            return True
 
     def _extract_content_from_result(self, content_items: list) -> list:
         """Extract text content from MinerU result items."""
@@ -319,7 +373,7 @@ class DocumentProcessor:
                 logger.info(
                     "Successfully extracted text with MinerU",
                     file=file_path,
-                    content_length=len(extracted_text)
+                    content_length=len(extracted_text),
                 )
 
                 return extracted_text
@@ -328,7 +382,7 @@ class DocumentProcessor:
                 logger.warning(
                     "MinerU extraction failed or returned no content, falling back to basic extraction",
                     file=file_path,
-                    status=result.get("status")
+                    status=result.get("status"),
                 )
                 return await self._extract_pdf_basic(file_path)
 
@@ -339,7 +393,7 @@ class DocumentProcessor:
             logger.error(
                 f"Failed to extract PDF with MinerU: {file_path}",
                 error=str(e),
-                exc_info=True
+                exc_info=True,
             )
             # Fallback to basic extraction
             logger.info(f"Falling back to basic PDF extraction: {file_path}")
@@ -352,80 +406,93 @@ class DocumentProcessor:
             paragraphs = [para.text for para in doc.paragraphs if para.text.strip()]
             return "\n\n".join(paragraphs)
         except Exception as e:
-            logger.error("Failed to extract DOCX", file=file_path, error=str(e), exc_info=True)
+            logger.error(
+                "Failed to extract DOCX", file=file_path, error=str(e), exc_info=True
+            )
             raise
-    
+
     async def _extract_txt(self, file_path: str) -> str:
         """Extract text from TXT file."""
         try:
-            async with aiofiles.open(file_path, 'r', encoding='utf-8') as f:
+            async with aiofiles.open(file_path, "r", encoding="utf-8") as f:
                 return await f.read()
         except Exception as e:
-            logger.error("Failed to extract TXT", file=file_path, error=str(e), exc_info=True)
+            logger.error(
+                "Failed to extract TXT", file=file_path, error=str(e), exc_info=True
+            )
             raise
-    
+
     async def _extract_markdown(self, file_path: str) -> str:
         """Extract text from Markdown file."""
         try:
-            async with aiofiles.open(file_path, 'r', encoding='utf-8') as f:
+            async with aiofiles.open(file_path, "r", encoding="utf-8") as f:
                 md_content = await f.read()
             # Convert to HTML then extract text
             # html = markdown.markdown(md_content)
             # soup = BeautifulSoup(html, 'html.parser')
             return md_content
         except Exception as e:
-            logger.error("Failed to extract Markdown", file=file_path, error=str(e), exc_info=True)
+            logger.error(
+                "Failed to extract Markdown",
+                file=file_path,
+                error=str(e),
+                exc_info=True,
+            )
             raise
-    
+
     async def _extract_html(self, file_path: str) -> str:
         """Extract text from HTML file."""
         try:
-            async with aiofiles.open(file_path, 'r', encoding='utf-8') as f:
+            async with aiofiles.open(file_path, "r", encoding="utf-8") as f:
                 html_content = await f.read()
-            soup = BeautifulSoup(html_content, 'html.parser')
+            soup = BeautifulSoup(html_content, "html.parser")
             return soup.get_text()
         except Exception as e:
-            logger.error("Failed to extract HTML", file=file_path, error=str(e), exc_info=True)
+            logger.error(
+                "Failed to extract HTML", file=file_path, error=str(e), exc_info=True
+            )
             raise
-    
+
     def _preprocess_text(self, text: str, chunk_config: Dict[str, Any]) -> str:
         """
         Preprocess text based on chunk configuration.
-        
+
         Args:
             text: Raw text content
             chunk_config: Chunk configuration with preprocessing flags
-            
+
         Returns:
             Preprocessed text
         """
         # Remove consecutive spaces, newlines, tabs
-        if chunk_config.get('is_space_flag', 0) == 1:
+        if chunk_config.get("is_space_flag", 0) == 1:
             # Replace multiple spaces with single space
-            text = re.sub(r' {2,}', ' ', text)
+            text = re.sub(r" {2,}", " ", text)
             # Replace multiple newlines with double newline (preserve paragraphs)
-            text = re.sub(r'\n{3,}', '\n\n', text)
+            text = re.sub(r"\n{3,}", "\n\n", text)
             # Replace tabs with space
-            text = re.sub(r'\t+', ' ', text)
+            text = re.sub(r"\t+", " ", text)
             logger.info("Applied space/newline/tab preprocessing")
-        
+
         # Remove table of contents, headers, footers (basic heuristic)
-        if chunk_config.get('is_menu_flag', 0) == 1:
+        if chunk_config.get("is_menu_flag", 0) == 1:
             # Remove common TOC patterns
             toc_patterns = [
-                r'目录.*?(?=\n\n|\Z)',  # Chinese TOC
-                r'Table of Contents.*?(?=\n\n|\Z)',  # English TOC
-                r'^第[一二三四五六七八九十\d]+章.*$',  # Chapter titles
-                r'^Chapter \d+.*$',  # English chapters
-                r'页眉|页脚|Page \d+',  # Headers/footers
+                r"目录.*?(?=\n\n|\Z)",  # Chinese TOC
+                r"Table of Contents.*?(?=\n\n|\Z)",  # English TOC
+                r"^第[一二三四五六七八九十\d]+章.*$",  # Chapter titles
+                r"^Chapter \d+.*$",  # English chapters
+                r"页眉|页脚|Page \d+",  # Headers/footers
             ]
             for pattern in toc_patterns:
-                text = re.sub(pattern, '', text, flags=re.MULTILINE | re.IGNORECASE)
+                text = re.sub(pattern, "", text, flags=re.MULTILINE | re.IGNORECASE)
             logger.info("Applied TOC/header/footer removal")
-        
+
         return text.strip()
-    
-    def _calculate_dynamic_chunk_params(self, total_chars: int, file_ext: str = '.txt') -> tuple[int, int]:
+
+    def _calculate_dynamic_chunk_params(
+        self, total_chars: int, file_ext: str = ".txt"
+    ) -> tuple[int, int]:
         """
         根据文档长度动态计算chunk_size和overlap。
 
@@ -443,7 +510,7 @@ class DocumentProcessor:
             (chunk_size, chunk_overlap) 元组
         """
         # PDF使用MinerU时,由于markdown格式需要更大的chunk
-        is_markdown_based = file_ext in ['.md', '.pdf']
+        is_markdown_based = file_ext in [".md", ".pdf"]
 
         if total_chars < 1000:
             # 短文档: 保持完整性,减少分段
@@ -472,7 +539,7 @@ class DocumentProcessor:
         doc_id: str,
         kb_id: str,
         file_ext: Optional[str] = None,
-        chunk_config: Optional[Dict[str, Any]] = None
+        chunk_config: Optional[Dict[str, Any]] = None,
     ) -> List[DocumentChunkModel]:
         """
         Split text into chunks using semantic chunking.
@@ -498,12 +565,16 @@ class DocumentProcessor:
         # Fallback to traditional chunking only if semantic chunking is disabled
         # Determine chunk size and overlap for traditional chunking
         if chunk_config:
-            chunk_size = chunk_config.get('segment_union_max_length', settings.chunk_size)
+            chunk_size = chunk_config.get(
+                "segment_union_max_length", settings.chunk_size
+            )
             chunk_overlap = min(chunk_size // 10, 50)  # 10% overlap, max 50
-            segment_type = chunk_config.get('segment_type', 0)
+            segment_type = chunk_config.get("segment_type", 0)
         else:
             # 使用动态分段策略
-            chunk_size, chunk_overlap = self._calculate_dynamic_chunk_params(len(text), file_ext or '.txt')
+            chunk_size, chunk_overlap = self._calculate_dynamic_chunk_params(
+                len(text), file_ext or ".txt"
+            )
             segment_type = -1  # Use default logic
 
             logger.info(
@@ -511,7 +582,7 @@ class DocumentProcessor:
                 doc_id=doc_id,
                 total_chars=len(text),
                 chunk_size=chunk_size,
-                chunk_overlap=chunk_overlap
+                chunk_overlap=chunk_overlap,
             )
 
         # Determine separators
@@ -519,46 +590,56 @@ class DocumentProcessor:
 
         # Custom identifier-based splitting (segment_type=1)
         if segment_type == 1:
-            identifier_type = chunk_config.get('segment_identifier_type', 0)
+            identifier_type = chunk_config.get("segment_identifier_type", 0)
 
             if identifier_type == 0:  # System default identifiers
                 # Parse identifier_default bitmap: "1111111" = [......, 。, ., ！, !, ？, ?]
-                bitmap = chunk_config.get('identifier_default', '1111111')
-                default_identifiers = ['......', '。', '.', '！', '!', '？', '?']
-                separators = [default_identifiers[i] for i, bit in enumerate(bitmap) if bit == '1' and i < len(default_identifiers)]
+                bitmap = chunk_config.get("identifier_default", "1111111")
+                default_identifiers = ["......", "。", ".", "！", "!", "？", "?"]
+                separators = [
+                    default_identifiers[i]
+                    for i, bit in enumerate(bitmap)
+                    if bit == "1" and i < len(default_identifiers)
+                ]
                 # Add fallback separators
-                separators.extend(['\n\n', '\n', ' ', ''])
-                logger.info(f"Using system default identifiers: separators={separators[:7]}")
+                separators.extend(["\n\n", "\n", " ", ""])
+                logger.info(
+                    f"Using system default identifiers: separators={separators[:7]}"
+                )
 
             elif identifier_type == 1:  # Custom identifiers
-                custom_str = chunk_config.get('identifier_customize', '')
+                custom_str = chunk_config.get("identifier_customize", "")
                 if custom_str:
                     # Parse custom identifiers (comma-separated or direct list)
-                    separators = [s.strip() for s in custom_str.split(',') if s.strip()]
-                    separators.extend(['\n\n', '\n', ' ', ''])  # Add fallbacks
+                    separators = [s.strip() for s in custom_str.split(",") if s.strip()]
+                    separators.extend(["\n\n", "\n", " ", ""])  # Add fallbacks
                     logger.info(f"Using custom identifiers: separators={separators}")
 
         # Newline splitting (segment_type=0) or default logic
         if separators is None:
-            if file_ext in ['.md', '.pdf']:  # PDF converted to markdown
-                separators = RecursiveCharacterTextSplitter.get_separators_for_language(Language.MARKDOWN)
-            elif file_ext == '.html':
-                separators = RecursiveCharacterTextSplitter.get_separators_for_language(Language.HTML)
+            if file_ext in [".md", ".pdf"]:  # PDF converted to markdown
+                separators = RecursiveCharacterTextSplitter.get_separators_for_language(
+                    Language.MARKDOWN
+                )
+            elif file_ext == ".html":
+                separators = RecursiveCharacterTextSplitter.get_separators_for_language(
+                    Language.HTML
+                )
             else:
                 # Default separators for plain text
                 separators = [
                     "\n\n",  # Paragraph boundary
-                    "\n",    # Line break
-                    "。",    # Chinese period
-                    "！",    # Chinese exclamation
-                    "？",    # Chinese question
-                    ".",     # English period
-                    "!",     # English exclamation
-                    "?",     # English question
-                    ";",     # Semicolon
-                    ":",     # Colon
-                    " ",     # Space
-                    "",      # Character-level split (fallback)
+                    "\n",  # Line break
+                    "。",  # Chinese period
+                    "！",  # Chinese exclamation
+                    "？",  # Chinese question
+                    ".",  # English period
+                    "!",  # English exclamation
+                    "?",  # English question
+                    ";",  # Semicolon
+                    ":",  # Colon
+                    " ",  # Space
+                    "",  # Character-level split (fallback)
                 ]
 
         # Create text splitter with appropriate separators
@@ -583,7 +664,7 @@ class DocumentProcessor:
                 doc_id=doc_id,
                 kb_id=kb_id,
                 content=chunk_text,
-                chunk_index=chunk_index
+                chunk_index=chunk_index,
             )
             chunks.append(chunk_model)
 
@@ -592,17 +673,15 @@ class DocumentProcessor:
             doc_id=doc_id,
             file_ext=file_ext,
             chunks_count=len(chunks),
-            avg_chunk_size=sum(len(c.content) for c in chunks) / len(chunks) if chunks else 0
+            avg_chunk_size=sum(len(c.content) for c in chunks) / len(chunks)
+            if chunks
+            else 0,
         )
 
         return chunks
 
     async def _semantic_chunk_text(
-        self,
-        text: str,
-        doc_id: str,
-        kb_id: str,
-        file_ext: Optional[str] = None
+        self, text: str, doc_id: str, kb_id: str, file_ext: Optional[str] = None
     ) -> List[DocumentChunkModel]:
         """
         Split text into semantically coherent chunks using embeddings.
@@ -620,7 +699,7 @@ class DocumentProcessor:
             "Using semantic chunking with hierarchical summarization",
             doc_id=doc_id,
             text_length=len(text),
-            file_ext=file_ext
+            file_ext=file_ext,
         )
 
         try:
@@ -631,7 +710,10 @@ class DocumentProcessor:
             hierarchical_summary_data = None
             if settings.enable_hierarchical_summary:
                 from app.services.semantic_chunking import HierarchicalSummary
-                hierarchical_summary_data = await create_hierarchical_summary(semantic_chunks, doc_id)
+
+                hierarchical_summary_data = await create_hierarchical_summary(
+                    semantic_chunks, doc_id
+                )
 
             # Convert to DocumentChunkModel objects
             chunks = []
@@ -641,7 +723,7 @@ class DocumentProcessor:
                 # Build metadata with summary
                 metadata = {
                     "chunk_type": "semantic",
-                    "summary": semantic_chunk.summary or ""
+                    "summary": semantic_chunk.summary or "",
                 }
 
                 chunk_model = DocumentChunkModel(
@@ -650,7 +732,7 @@ class DocumentProcessor:
                     kb_id=kb_id,
                     content=semantic_chunk.content,
                     chunk_index=semantic_chunk.chunk_index,
-                    metadata=metadata
+                    metadata=metadata,
                 )
                 chunks.append(chunk_model)
 
@@ -658,7 +740,7 @@ class DocumentProcessor:
                 "Semantic chunking completed",
                 doc_id=doc_id,
                 chunks_count=len(chunks),
-                with_summaries=settings.enable_hierarchical_summary
+                with_summaries=settings.enable_hierarchical_summary,
             )
 
             # Return chunks with hierarchical summary data
@@ -670,17 +752,15 @@ class DocumentProcessor:
                 "Semantic chunking failed, falling back to traditional chunking",
                 doc_id=doc_id,
                 error=str(e),
-                exc_info=True
+                exc_info=True,
             )
             # Fall back to traditional chunking
-            return await self._fallback_traditional_chunking(text, doc_id, kb_id, file_ext), None
+            return await self._fallback_traditional_chunking(
+                text, doc_id, kb_id, file_ext
+            ), None
 
     async def _fallback_traditional_chunking(
-        self,
-        text: str,
-        doc_id: str,
-        kb_id: str,
-        file_ext: Optional[str] = None
+        self, text: str, doc_id: str, kb_id: str, file_ext: Optional[str] = None
     ) -> List[DocumentChunkModel]:
         """
         Fallback to traditional character-based chunking.
@@ -694,12 +774,27 @@ class DocumentProcessor:
         Returns:
             List of document chunks
         """
-        chunk_size, chunk_overlap = self._calculate_dynamic_chunk_params(len(text), file_ext or '.txt')
+        chunk_size, chunk_overlap = self._calculate_dynamic_chunk_params(
+            len(text), file_ext or ".txt"
+        )
 
         text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
-            separators=["\n\n", "\n", "。", "！", "？", ".", "!", "?", ";", ":", " ", ""],
+            separators=[
+                "\n\n",
+                "\n",
+                "。",
+                "！",
+                "？",
+                ".",
+                "!",
+                "?",
+                ";",
+                ":",
+                " ",
+                "",
+            ],
             length_function=len,
             is_separator_regex=False,
         )
@@ -715,28 +810,28 @@ class DocumentProcessor:
                 doc_id=doc_id,
                 kb_id=kb_id,
                 content=chunk_text,
-                chunk_index=chunk_index
+                chunk_index=chunk_index,
             )
             chunks.append(chunk_model)
 
         logger.info(
             "Fallback traditional chunking completed",
             doc_id=doc_id,
-            chunks_count=len(chunks)
+            chunks_count=len(chunks),
         )
 
         return chunks
-    
+
     async def _process_chunks(
         self,
         chunks: List[DocumentChunkModel],
         doc_id: str,
         kb_id: str,
-        task_id: Optional[str] = None  # Add task_id for progress tracking
+        task_id: Optional[str] = None,  # Add task_id for progress tracking
     ) -> None:
         """
         Process chunks: vectorize and store in vector DB and ElasticSearch.
-        
+
         Args:
             chunks: List of document chunks
             doc_id: Document ID
@@ -746,7 +841,9 @@ class DocumentProcessor:
         db = await get_database()
 
         # Filter out empty chunks to avoid embedding dimension errors
-        valid_chunks = [chunk for chunk in chunks if chunk.content and chunk.content.strip()]
+        valid_chunks = [
+            chunk for chunk in chunks if chunk.content and chunk.content.strip()
+        ]
 
         if not valid_chunks:
             logger.warning("No valid chunks to store after filtering empty content")
@@ -766,7 +863,7 @@ class DocumentProcessor:
                 "doc_id": chunk.doc_id,
                 "kb_id": chunk.kb_id,
                 "chunk_index": chunk.chunk_index,
-                "summary": chunk.metadata.get("summary", "") if chunk.metadata else ""
+                "summary": chunk.metadata.get("summary", "") if chunk.metadata else "",
             }
             for chunk in valid_chunks
         ]
@@ -776,7 +873,7 @@ class DocumentProcessor:
             collection_name="doc",
             documents=chunk_texts,
             metadatas=chunk_metadatas,
-            ids=chunk_ids
+            ids=chunk_ids,
         )
 
         # Store in ElasticSearch
@@ -796,8 +893,8 @@ class DocumentProcessor:
                     "content": chunk.content,
                     "summary": chunk_summary,
                     "chunk_index": chunk.chunk_index,
-                    "created_at": datetime.utcnow().isoformat()
-                }
+                    "created_at": datetime.utcnow().isoformat(),
+                },
             )
 
             # Update progress if task_id provided
@@ -810,9 +907,9 @@ class DocumentProcessor:
                     {
                         "$set": {
                             "processed_chunks": processed,
-                            "progress": round(progress, 2)
+                            "progress": round(progress, 2),
                         }
-                    }
+                    },
                 )
 
             # Update chunk with vector_id
@@ -823,7 +920,7 @@ class DocumentProcessor:
         await db.document_chunks.insert_many(chunk_docs)
 
         logger.info(f"Stored chunks: doc_id={doc_id}, chunks_count={len(valid_chunks)}")
-    
+
     def _generate_doc_id(self, filename: str, kb_id: str) -> str:
         """Generate unique document ID."""
         return generate_doc_id(filename, kb_id)

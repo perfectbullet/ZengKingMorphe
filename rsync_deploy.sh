@@ -14,7 +14,8 @@ REMOTE_DIR="/data/metahuman_work/ZengKingMorphe"
 # rsync 选项
 # --no-group: 跳过组权限设置（避免权限不足警告）
 # --prune-empty-dirs: 删除空目录
-RSYNC_OPTS="-avz --progress --delete --no-group --prune-empty-dirs"
+# 注意: 不使用 --delete，避免删除远程的缓存、配置等文件
+RSYNC_OPTS="-avz --progress --no-group --prune-empty-dirs"
 
 echo "=========================================="
 echo "开始同步到 ${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_DIR}"
