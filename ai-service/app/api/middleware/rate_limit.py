@@ -61,6 +61,8 @@ class RateLimiter:
         self.user_buckets: Dict[str, TokenBucket] = {}
         # Session-level rate limiting
         self.session_buckets: Dict[str, TokenBucket] = {}
+        # IP-level rate limiting
+        self.ip_buckets: Dict[str, TokenBucket] = {}
         # Cleanup timestamp
         self.last_cleanup = datetime.utcnow()
     
@@ -85,9 +87,20 @@ class RateLimiter:
         ]
         for session_id in expired_sessions:
             del self.session_buckets[session_id]
-        
+
+        # Clean IP buckets
+        expired_ips = [
+            ip_addr for ip_addr, bucket in self.ip_buckets.items()
+            if (now - bucket.last_refill).total_seconds() > 7200
+        ]
+        for ip_addr in expired_ips:
+            del self.ip_buckets[ip_addr]
+
         self.last_cleanup = now
-        logger.info(f"Cleaned up old rate limit buckets: expired_users={len(expired_users)}, expired_sessions={len(expired_sessions)}")
+        logger.info(
+            f"Cleaned up old rate limit buckets: expired_users={len(expired_users)}, "
+            f"expired_sessions={len(expired_sessions)}, expired_ips={len(expired_ips)}"
+        )
     
     async def check_user_rate_limit(self, user_id: str) -> None:
         """
@@ -110,7 +123,7 @@ class RateLimiter:
         
         bucket = self.user_buckets[user_id]
         if not bucket.consume():
-            logger.warning(f"User rate limit exceeded: user_id={user_id}")
+            logger.debug(f"User rate limit exceeded: user_id={user_id}")
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail="Rate limit exceeded. Please try again later.",
@@ -141,6 +154,33 @@ class RateLimiter:
                 detail="Too many requests in this session. Please slow down.",
             )
 
+    async def check_ip_rate_limit(self, ip_address: str) -> None:
+        """
+        Check IP-level rate limit for polling endpoints.
+
+        Args:
+            ip_address: Client IP address
+
+        Raises:
+            HTTPException: If rate limit exceeded
+        """
+        self._cleanup_old_buckets()
+
+        if ip_address not in self.ip_buckets:
+            # Create new bucket: rate_limit_per_ip_per_minute requests per minute
+            self.ip_buckets[ip_address] = TokenBucket(
+                capacity=settings.rate_limit_per_ip_per_minute,
+                refill_rate=settings.rate_limit_per_ip_per_minute / 60.0
+            )
+
+        bucket = self.ip_buckets[ip_address]
+        if not bucket.consume():
+            logger.debug(f"IP rate limit exceeded: ip_address={ip_address}")
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many requests from this IP. Please slow down your polling.",
+            )
+
 
 # Global rate limiter instance
 rate_limiter = RateLimiter()
@@ -149,18 +189,64 @@ rate_limiter = RateLimiter()
 async def rate_limit_middleware(request: Request, user_id: str, session_id: str = None) -> None:
     """
     Rate limiting middleware.
-    
+
     Args:
         request: Request object
         user_id: User ID
         session_id: Session ID (optional)
-        
+
     Raises:
         HTTPException: If rate limit exceeded
     """
     # Check user-level rate limit
     await rate_limiter.check_user_rate_limit(user_id)
-    
+
     # Check session-level rate limit if session_id provided
     if session_id:
         await rate_limiter.check_session_rate_limit(session_id)
+
+
+def get_client_ip(request: Request) -> str:
+    """
+    Extract client IP address from request, accounting for proxies.
+
+    Args:
+        request: FastAPI Request object
+
+    Returns:
+        Client IP address as string
+    """
+    # Check for forwarded headers (reverse proxy/load balancer)
+    forwarded_for = request.headers.get("X-Forwarded-For")
+    if forwarded_for:
+        # X-Forwarded-For can contain multiple IPs, take the first one
+        return forwarded_for.split(",")[0].strip()
+
+    real_ip = request.headers.get("X-Real-IP")
+    if real_ip:
+        return real_ip.strip()
+
+    # Fall back to direct connection IP
+    return request.client.host if request.client else "unknown"
+
+
+async def ip_rate_limit_dependency(request: Request) -> None:
+    """
+    FastAPI dependency for IP-based rate limiting.
+
+    Usage in endpoint:
+        @router.get("/endpoint")
+        async def my_endpoint(
+            ...,
+            _ip_rate_limit: None = Depends(ip_rate_limit_dependency)
+        ):
+            ...
+
+    Args:
+        request: FastAPI Request object (injected)
+
+    Raises:
+        HTTPException: If IP rate limit exceeded (429)
+    """
+    ip_address = get_client_ip(request)
+    await rate_limiter.check_ip_rate_limit(ip_address)

@@ -21,6 +21,7 @@ from fastapi import (
 )
 
 from app.api.middleware.auth import get_api_key
+from app.api.middleware.rate_limit import ip_rate_limit_dependency
 from app.core.logging import get_logger
 from app.core.database import get_database
 from app.core.chroma import chroma_db
@@ -401,7 +402,11 @@ async def get_document_chunks(
 
 
 @router.get("/tasks/{task_id}")
-async def get_task_status(task_id: str, api_key: str = Depends(get_api_key)):
+async def get_task_status(
+    task_id: str,
+    api_key: str = Depends(get_api_key),
+    _ip_rate_limit: None = Depends(ip_rate_limit_dependency),
+):
     """
     查询文档处理任务状态。
 

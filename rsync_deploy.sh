@@ -46,6 +46,8 @@ rsync ${RSYNC_OPTS} -e "ssh -i ${SSH_KEY}" \
     --include="Dockerfile" \
     --include="requirements.txt" \
     --include=".dockerignore" \
+    --include=".env" \
+    --include=".env.example" \
     --exclude="*" \
     "${LOCAL_DIR}/ai-service/" \
     "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_DIR}/ai-service/"

@@ -161,5 +161,6 @@ if __name__ == "__main__":
         port=settings.api_port,
         workers=settings.api_workers,
         reload=settings.debug,
-        reload_excludes=UVICORN_RELOAD_EXCLUDES
+        reload_excludes=UVICORN_RELOAD_EXCLUDES,
+        log_level="warning"
     )
