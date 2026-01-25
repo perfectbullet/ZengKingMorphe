@@ -14,14 +14,14 @@ OpenAI-style streaming client for /api/chat/v1/chat/completions.
 
 【指定服务器】
   # 本地开发服务器
-  python ai-service/scripts/stream_client.py --host http://localhost:8000 --query "你好"
+  python ai-service/scripts/stream_client.py --host http://192.168.8.233:8100 --query "你好"
 
   # 生产服务器
   python ai-service/scripts/stream_client.py --host http://192.168.8.233:8100 --query "你好"
 
 【指定员工/用户/会话】
   python ai-service/scripts/stream_client.py \\
-    --host http://localhost:8000 \\
+    --host http://192.168.8.233:8100 \\
     --employee_id 29 \\
     --user_id 3 \\
     --session_id sess_4_3_29 \\
@@ -29,7 +29,7 @@ OpenAI-style streaming client for /api/chat/v1/chat/completions.
 
 【完整示例】
   # 知识库问答
-  python ai-service/scripts/stream_client.py --query "密码学课程的两个主要分支是什么？"
+  python ai-service/scripts/stream_client.py --query "介绍集合的概念"
 
   # 实时信息查询（自动触发联网搜索）
   python ai-service/scripts/stream_client.py --query "北京天气咋样"
@@ -40,7 +40,7 @@ OpenAI-style streaming client for /api/chat/v1/chat/completions.
 =======
 默认参数
 =======
-  --host           http://localhost:8000
+  --host           http://192.168.8.233:8100
   --employee_id    29
   --user_id        3
   --session_id     sess_4_3_29
@@ -247,7 +247,7 @@ def main():
   %(prog)s --extra-body '{"team_id": "4", "user_id": "46935014", "employee_id": "29"}' --query "你好"
         """
     )
-    parser.add_argument("--host", default="http://192.168.8.233:8100", help="Base host (including port), 默认: http://localhost:8000")
+    parser.add_argument("--host", default="http://192.168.8.233:8100", help="Base host (including port), 默认: http://192.168.8.233:8100")
     parser.add_argument("--employee_id", default="29", help="Employee ID, 默认: 29")
     parser.add_argument("--user_id", default="3", help="User ID, 默认: 3")
     parser.add_argument("--session_id", default="sess_4_3_29", help="Session ID, 默认: sess_4_3_29")
