@@ -72,18 +72,28 @@ async def create_knowledge_base(
         }
 
         # Insert into knowledge_bases collection
-        await db.knowledge_bases.insert_one(kb_doc)
-
-        return {
-            "code": 200,
-            "message": "success",
-            "data": {
-                "kb_id": kb_id,
-                "name": request.name,
-                "status": "active",
-                "created_at": kb_doc["created_at"].isoformat() + "Z"
+        result = await db.knowledge_bases.insert_one(kb_doc)
+        logger.info(
+            f"create knowledge base result {result}"
+        )
+        if result.inserted_id:
+            return {
+                "code": 200,
+                "message": "success",
+                "data": {
+                    "kb_id": kb_id,
+                    "name": request.name,
+                    "status": "active",
+                    "created_at": kb_doc["created_at"].isoformat() + "Z"
+                }
             }
-        }
+        else:
+            logger.error("create knowledge failed")
+            return {
+                "code": status.HTTP_400_BAD_REQUEST,
+                "status": "error",
+                "message": "create knowledge failed"
+            }
 
     except Exception as e:
         logger.error(
@@ -122,8 +132,14 @@ async def update_knowledge_base(
             updates=request.model_dump(exclude_none=True)
         )
 
+        # 查询条件
+        query = {
+            'kb_id': kb_id,
+            'flag': 1
+        }
+
         # Check if knowledge base exists
-        kb = await db.knowledge_bases.find_one({"kb_id": kb_id})
+        kb = await db.knowledge_bases.find_one(query)
         if not kb:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -152,7 +168,7 @@ async def update_knowledge_base(
 
         # Update knowledge base
         result = await db.knowledge_bases.update_one(
-            {"kb_id": kb_id},
+            query,
             {"$set": update_data}
         )
 
@@ -182,8 +198,9 @@ async def update_knowledge_base(
                 }
             }
         else:
+            logger.error(f"knowledge bases {kb_id} update failed")
             return {
-                "code": 200,
+                "code": status.HTTP_400_BAD_REQUEST,
                 "status": "error",
                 "message": f"knowledge bases {kb_id} update failed"
             }
@@ -223,10 +240,16 @@ async def delete_knowledge_bases(
     try:
         logger.info("delete knowledge bases request", kb_id=kb_id)
 
+        # 查询条件
+        query = {
+            'kb_id': kb_id,
+            'flag': 1
+        }
+
         # Update knowledge base
         result = await db.knowledge_bases.update_one(
-            {"kb_id": kb_id},
-            {"$set": {"flag": "-1"}}
+            query,
+            {"$set": {"flag": -1}}
         )
 
         if not result:
@@ -235,15 +258,16 @@ async def delete_knowledge_bases(
                 detail="knowledge bases cannot be deleted (not found or already completed)"
             )
 
-        if result.deleted_count == 1:
+        if result.modified_count == 1:
             return {
                 "code": 200,
                 "status": "success",
                 "message": f"knowledge bases {kb_id} deleted"
             }
         else:
+            logger.error(f"knowledge bases {kb_id} not found")
             return {
-                "code": 200,
+                "code": status.HTTP_400_BAD_REQUEST,
                 "status": "error",
                 "message": f"knowledge bases {kb_id} not found"
             }
