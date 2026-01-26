@@ -47,7 +47,7 @@ async def create_knowledge_base(
     """
     try:
         logger.info(
-            "Create knowledge base request",
+            "create knowledge base request",
             name=request.name,
             category=request.category
         )
@@ -86,13 +86,13 @@ async def create_knowledge_base(
 
     except Exception as e:
         logger.error(
-            "Create knowledge base error",
+            "create knowledge base exception",
             error=str(e),
             exc_info=True
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to create knowledge base"
+            detail="create knowledge base failed"
         )
 
 
@@ -113,10 +113,10 @@ async def update_knowledge_base(
     Returns:
         - Updated knowledge base data
     """
+    kb_id = request.kb_id
     try:
-        kb_id = request.kb_id
         logger.info(
-            "Update knowledge base request",
+            "update knowledge base request",
             kb_id=kb_id,
             updates=request.model_dump(exclude_none=True)
         )
@@ -126,7 +126,7 @@ async def update_knowledge_base(
         if not kb:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Knowledge base {kb_id} not found"
+                detail=f"knowledge base {kb_id} not found"
             )
 
         # Build update data (only include non-None fields)
@@ -160,14 +160,14 @@ async def update_knowledge_base(
         updated_kb.pop("_id", None)
 
         logger.info(
-            "Knowledge base updated",
+            "knowledge base updated",
             kb_id=kb_id,
             fields_updated=list(update_data.keys())
         )
 
         return {
             "code": 200,
-            "message": "Knowledge base updated successfully",
+            "message": "success",
             "data": {
                 "kb_id": updated_kb["kb_id"],
                 "name": updated_kb["name"],
@@ -184,14 +184,70 @@ async def update_knowledge_base(
         raise
     except Exception as e:
         logger.error(
-            "Update knowledge base error",
+            "update knowledge base exception",
             kb_id=kb_id,
             error=str(e),
             exc_info=True
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to update knowledge base"
+            detail="update knowledge base failed"
+        )
+
+
+@router.delete("/delete/{kb_id}")
+async def delete_knowledge_bases(
+    kb_id: str,
+    api_key: str = Depends(get_api_key),
+    db = Depends(get_database)
+):
+    """
+    删除知识库信息。
+
+    nArgs:
+        - kb_id: knowledge bases ID
+        - api_key: API key from auth
+        - db: Database instance
+
+    Returns:
+        - result
+    """
+    try:
+        logger.info("delete knowledge bases request", kb_id=kb_id)
+
+        result = await db.knowledge_bases.delete_one({"kb_id": kb_id})
+
+        if not result:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="knowledge bases cannot be deleted (not found or already completed)"
+            )
+
+        if result.deleted_count == 1:
+            return {
+                "code": 200,
+                "status": "success",
+                "message": f"knowledge bases {kb_id} deleted"
+            }
+        else:
+            return {
+                "code": 200,
+                "status": "error",
+                "message": f"knowledge bases {kb_id} not found"
+            }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            "delete knowledge bases exception",
+            kb_id=kb_id,
+            error=str(e),
+            exc_info=True
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="delete knowledge bases failed"
         )
 
 
@@ -207,16 +263,16 @@ async def list_knowledge_bases(
     """
     获取知识库列表。
 
-    \nArgs:
-        \n- category: Filter by category
-        \n- status_filter: Filter by status
-        \n- page: Page number
-        \n- page_size: Page size
-        \n- api_key: API key from auth
-        \n- db: Database instance
+    Args:
+        - category: Filter by category
+        - status_filter: Filter by status
+        - page: Page number
+        - page_size: Page size
+        - api_key: API key from auth
+        - db: Database instance
 
-    \nReturns:
-        \n- List of knowledge bases
+    Returns:
+        - List of knowledge bases
     """
     try:
         # Build query
@@ -275,8 +331,8 @@ async def list_test_files(
     """
     列出测试文件夹中的所有文件（仅用于测试）。
 
-    \nReturns:
-        \n- List of available test files with download URLs
+    Returns:
+        - List of available test files with download URLs
     """
     try:
         logger.info("List test files request")
@@ -340,11 +396,11 @@ async def download_test_file(
     """
     下载测试文件（仅用于测试）。
 
-    \nArgs:
-        \n- filename: Name of the file to download
+    Args:
+        - filename: Name of the file to download
 
-    \nReturns:
-        \n- File download response
+    Returns:
+        - File download response
     """
     try:
         logger.info("Download test file request", filename=filename)
@@ -408,13 +464,13 @@ async def get_knowledge_base_detail(
     """
     获取知识库详情及前10个文档块。
 
-    \nArgs:
-        \n- kb_id: Knowledge base ID
-        \n- api_key: API key from auth
-        \n- db: Database instance
+    Args:
+        - kb_id: Knowledge base ID
+        - api_key: API key from auth
+        - db: Database instance
 
-    \nReturns:
-        \n- Knowledge base detail information with top 10 document chunks
+    Returns:
+        - Knowledge base detail information with top 10 document chunks
     """
     try:
         logger.info("Get knowledge base detail request", kb_id=kb_id)
