@@ -441,7 +441,7 @@ class RAGEvaluationTest:
                         "load_session_context_ms": node_timings.get("load_session_context", 0),
                         "match_faq_ms": node_timings.get("match_faq", 0),
                         "knowledge_retrieval_ms": node_timings.get("knowledge_retrieval", 0),
-                        "grade_documents_ms": node_timings.get("grade_documents", 0),
+                        "rerank_documents_ms": node_timings.get("rerank_documents", 0),
                         "generate_answer_ms": node_timings.get("generate_answer", 0),
                         "save_conversation_ms": node_timings.get("save_conversation", 0),
                     }

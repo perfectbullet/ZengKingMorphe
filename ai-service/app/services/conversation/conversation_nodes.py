@@ -31,10 +31,11 @@ from app.core.logging import get_logger
 from app.models.database import ConversationModel, SessionModel
 from app.services.conversation.conversation_state import ConversationState, GREETING_KEYWORDS, INTERRUPTION_KEYWORDS
 from app.services.conversation.conversation_helpers import (
-    time_node, select_llm, 
+    time_node, select_llm,
     heuristic_complexity
 )
 from app.services.rag_service import rag_retrieval
+from app.services.reranker_service import get_reranker, NoOpReranker
 
 logger = get_logger(__name__)
 
@@ -659,13 +660,13 @@ class ConversationNodes:
         """
         Document Grading - Calculate relevance score for retrieved documents.
 
-        Uses the top document's RRF score as the overall relevance score.
+        Uses the top document's score as the overall relevance score.
+        Priority: rerank_score (from BGE Reranker) > rrf_score (from hybrid search).
         This score determines if we should fallback to web search.
 
-        RRF Score Normalization:
-        - Raw RRF score range: 0 ~ 2/k (default k=60, so max ~0.033)
-        - Normalized to 0-1 range for threshold comparison
-        - Formula: normalized_rrf = rrf_score * k / 2
+        Score Sources:
+        - rerank_score: BGE Reranker cross-encoder score (preferred, range 0-1+)
+        - rrf_score: Reciprocal Rank Fusion score (fallback, normalized to 0-1)
 
         Args:
             state: Current conversation state
@@ -679,21 +680,31 @@ class ConversationNodes:
             if not docs:
                 state["relevance_score"] = 0.0
             else:
-                # Get raw RRF score
-                raw_rrf_score = docs[0].get("rrf_score", 0.0)
+                # Priority: use rerank_score if available (from BGE Reranker)
+                # Fallback to rrf_score if no reranking was performed
+                top_doc = docs[0]
+                rerank_score = top_doc.get("rerank_score")
 
-                # Normalize RRF score to 0-1 range for threshold comparison
-                # Max possible RRF score = 1/k + 1/k = 2/k (when doc ranks #1 in both searches)
-                rrf_k = 60  # Must match the k value used in _rrf_fusion
-                max_possible_rrf = 2.0 / rrf_k
-                normalized_rrf = (raw_rrf_score / max_possible_rrf) if max_possible_rrf > 0 else 0.0
+                if rerank_score is not None:
+                    # Use BGE Reranker score (already normalized 0-1+)
+                    # Clamp to 0-1 range
+                    state["relevance_score"] = max(0.0, min(1.0, float(rerank_score)))
+                    logger.info(
+                        f"Document grading: rerank_score={rerank_score:.4f}, relevance={state['relevance_score']:.4f}"
+                    )
+                else:
+                    # Fallback: Normalize RRF score to 0-1 range
+                    # Max possible RRF score = 1/k + 1/k = 2/k (when doc ranks #1 in both searches)
+                    raw_rrf_score = top_doc.get("rrf_score", 0.0)
+                    rrf_k = 60  # Must match the k value used in _rrf_fusion
+                    max_possible_rrf = 2.0 / rrf_k
+                    normalized_rrf = (raw_rrf_score / max_possible_rrf) if max_possible_rrf > 0 else 0.0
 
-                # Clamp to 0-1 range
-                state["relevance_score"] = max(0.0, min(1.0, normalized_rrf))
-
-                logger.info(
-                    f"Document grading: raw_rrf={raw_rrf_score:.4f}, normalized_relevance={state['relevance_score']:.4f}"
-                )
+                    # Clamp to 0-1 range
+                    state["relevance_score"] = max(0.0, min(1.0, normalized_rrf))
+                    logger.info(
+                        f"Document grading: raw_rrf={raw_rrf_score:.4f}, normalized_relevance={state['relevance_score']:.4f}"
+                    )
 
         return state
 
@@ -701,89 +712,116 @@ class ConversationNodes:
         """
         Document Reranking - Reorder retrieved docs by semantic relevance.
 
-        Strategy:
-        - Only rerank when 3-10 documents retrieved
-        - Use Grader LLM with JSON output for structured scoring
-        - Sort by new scores for better context ordering
+        Strategy (Hierarchical Retrieval):
+        - Recall layer: Hybrid search returns Top-N documents (N=50-200)
+        - Rerank layer: Use BGE-Reranker to refine to Top-K (K=3-10)
+        - Uses cross-encoder model for accurate relevance scoring
 
-        Configuration: RERANK_ENABLED (default: False)
+        Also calculates relevance_score to determine if web search fallback is needed.
+
+        Configuration: RERANK_ENABLED (default: True)
 
         Args:
             state: Current conversation state
 
         Returns:
-            Updated state with retrieved_docs reordered
+            Updated state with retrieved_docs reordered and relevance_score populated
         """
         async with time_node("rerank_documents", state):
             docs = state.get("retrieved_docs", [])
 
-            rerank_enabled = getattr(settings, 'rerank_enabled', False)
+            # Calculate relevance_score from top document's rerank_score or rrf_score
+            if not docs:
+                state["relevance_score"] = 0.0
+            else:
+                top_doc = docs[0]
+                rerank_score = top_doc.get("rerank_score")
+
+                if rerank_score is not None:
+                    # Use BGE Reranker score (already normalized 0-1+)
+                    state["relevance_score"] = max(0.0, min(1.0, float(rerank_score)))
+                else:
+                    # Fallback: Normalize RRF score to 0-1 range
+                    raw_rrf_score = top_doc.get("rrf_score", 0.0)
+                    rrf_k = 60
+                    max_possible_rrf = 2.0 / rrf_k
+                    normalized_rrf = (raw_rrf_score / max_possible_rrf) if max_possible_rrf > 0 else 0.0
+                    state["relevance_score"] = max(0.0, min(1.0, normalized_rrf))
+
+                logger.info(
+                    "Relevance score calculated",
+                    relevance_score=state["relevance_score"],
+                    rerank_score=top_doc.get("rerank_score"),
+                    rrf_score=top_doc.get("rrf_score")
+                )
+
+            rerank_enabled = getattr(settings, 'rerank_enabled', True)
             if not rerank_enabled:
                 logger.debug("Reranking disabled")
                 return state
 
             # Skip if too few or too many docs
-            if len(docs) <= 2 or len(docs) > 10:
-                logger.debug(f"Document count不适合rerank: {len(docs)}")
+            if len(docs) <= 2:
+                logger.debug(f"Too few documents to rerank: {len(docs)}")
                 return state
 
+            # Get rerank configuration
+            rerank_top_k = getattr(settings, 'rerank_top_k', 10)
+            rerank_type = getattr(settings, 'reranker_type', 'noop')
+
             try:
-                docs_text = "\n\n".join([
-                    f"[文档{i+1}]\n{doc.get('content', '')[:300]}"
-                    for i, doc in enumerate(docs[:5])
-                ])
+                # Prepare documents for reranking
+                documents_to_rerank = [doc.get('content', '') for doc in docs]
+                query = state.get("user_query", "")
 
-                rerank_prompt = f"""请根据用户问题对以下文档进行相关性评分。
+                if not query or not documents_to_rerank:
+                    logger.debug("Missing query or documents for reranking")
+                    return state
 
-用户问题: {state["user_query"]}
-
-{docs_text}
-
-评分标准:
-- 1.0: 完全相关,直接回答了问题
-- 0.7-0.9: 高度相关,包含答案的关键信息
-- 0.4-0.6: 部分相关,需要推理才能回答
-- 0.1-0.3: 低相关,仅提及相关主题
-- 0.0: 不相关
-
-请以JSON格式返回评分,格式如下:
-{{"scores": [0.9, 0.7, 0.5, 0.2, 0.0]}}
-
-只返回JSON,不要有其他内容:"""
-
-                # Get appropriate Grader LLM for current state (hybrid routing)
-                _, grader_llm, model_name = select_llm(
-                    state,
-                    self.workflow.local_llm,
-                    self.workflow.local_grader_llm,
-                    self.workflow.remote_llm,
-                    self.workflow.remote_grader_llm
-                )
-                response = await grader_llm.ainvoke(rerank_prompt)
-                response_text = response.content.strip()
-
+                # Get reranker instance
                 try:
-                    result = json.loads(response_text)
-                    scores = result.get("scores", [])
+                    reranker = get_reranker(reranker_type=rerank_type)
 
-                    if len(scores) == len(docs[:5]):
-                        # Reorder by new scores
-                        indexed_docs = list(enumerate(docs[:5]))
-                        indexed_docs.sort(key=lambda x: scores[x[0]], reverse=True)
-                        reranked_docs = [doc for _, doc in indexed_docs]
-                        if len(docs) > 5:
-                            reranked_docs.extend(docs[5:])
+                    # Perform reranking
+                    rerank_results = await reranker.rerank(
+                        query=query,
+                        documents=documents_to_rerank,
+                        top_k=min(rerank_top_k, len(docs)),
+                    )
 
-                        state["retrieved_docs"] = reranked_docs
+                    # Reorder documents based on reranking results
+                    reranked_docs = [docs[idx] for idx, score in rerank_results]
 
-                        logger.info(
-                            "Documents reranked successfully",
-                            original_scores=[f"{d.get('rrf_score', 0):.3f}" for d in docs[:3]],
-                            new_scores=[f"{s:.3f}" for s in scores[:3]]
+                    # Store rerank scores in docs for debugging
+                    for doc, (idx, score) in zip(reranked_docs, rerank_results):
+                        doc['rerank_score'] = float(score)
+
+                    state["retrieved_docs"] = reranked_docs
+
+                    # Update relevance_score with top reranked document's score
+                    if reranked_docs:
+                        top_rerank_score = reranked_docs[0].get('rerank_score')
+                        if top_rerank_score is not None:
+                            state["relevance_score"] = max(0.0, min(1.0, float(top_rerank_score)))
+
+                    logger.info(
+                        "Documents reranked successfully",
+                        reranker_type=reranker_type,
+                        original_count=len(docs),
+                        reranked_count=len(reranked_docs),
+                        top_scores=[f"{score:.3f}" for _, score in rerank_results[:3]],
+                        relevance_score=state["relevance_score"]
+                    )
+
+                except RuntimeError as e:
+                    # Reranker not available (e.g., FlagEmbedding not installed)
+                    if "FlagEmbedding" in str(e):
+                        logger.warning(
+                            "BGE Reranker not available, using original order. "
+                            "Install with: pip install -U FlagEmbedding"
                         )
-
-                except json.JSONDecodeError as e:
-                    logger.warning(f"Failed to parse rerank JSON: {e}")
+                    else:
+                        raise
 
             except Exception as e:
                 logger.error(f"Document reranking failed: {str(e)}", exc_info=True)
