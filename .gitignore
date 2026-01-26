@@ -38,3 +38,6 @@ MinerU_markdown_*.txt
 *_metahuman.json
 response_*.txt
 response_*.json
+
+# 数据集不必上传
+Digital-Human-Disciplinary-Dataset

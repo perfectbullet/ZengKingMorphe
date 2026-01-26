@@ -26,13 +26,14 @@ class OllamaEmbeddings(Embeddings):
     """Ollama embedding implementation using /api/embeddings endpoint."""
 
     def __init__(
-        self, model: str, base_url: str, batch_size: int = 32, max_tokens: int = 512
+        self, model: str, base_url: str, batch_size: int = 32, max_tokens: int = 8192
     ):
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.batch_size = batch_size
         self.max_tokens = max_tokens
         # Conservative character limit for safety
+        # BGE-M3 supports 8192 tokens, use max_tokens // 2 for character limit
         self.max_chars = max_tokens // 2
 
     def _truncate_text(self, text: str) -> str:
@@ -263,5 +264,5 @@ def get_embedding(settings=None) -> Embeddings:
     return OllamaEmbeddings(
         model=settings.embedding_ollama_model,
         base_url=settings.ollama_base_url,
-        max_tokens=512
+        max_tokens=8192  # BGE-M3 supports 8192 tokens
     )

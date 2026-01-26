@@ -286,14 +286,67 @@ class Settings(BaseSettings):
         description="Cache time-to-live in days for MinerU results"
     )
 
+    # MinerU JSON Structure Parsing Configuration
+    mineru_json_enabled: bool = Field(
+        default=True,
+        description="Enable JSON structure parsing from MinerU for better chunking"
+    )
+    mineru_structure_aware_chunking: bool = Field(
+        default=True,
+        description="Use structure-aware chunking for MinerU JSON (by title/section)"
+    )
+    mineru_chunking_strategy: str = Field(
+        default="hybrid",
+        description="Chunking strategy: by_title, by_page, or hybrid"
+    )
+    mineru_include_images: bool = Field(
+        default=True,
+        description="Include image references in RAG chunks"
+    )
+    mineru_image_captioning: bool = Field(
+        default=False,
+        description="Enable VLM-based image captioning for multi-modal RAG"
+    )
+    mineru_vlm_backend: str = Field(
+        default="qwen_vl",
+        description="VLM backend for image captioning: openai, qwen_vl, or custom"
+    )
+    mineru_vlm_api_key: Optional[str] = Field(
+        default=None,
+        description="VLM API key for image captioning"
+    )
+    mineru_vlm_base_url: Optional[str] = Field(
+        default=None,
+        description="VLM API base URL for image captioning"
+    )
+    mineru_vlm_model: str = Field(
+        default="qwen-vl-max",
+        description="VLM model name for image captioning"
+    )
+    mineru_vlm_timeout: int = Field(
+        default=30,
+        ge=5,
+        description="VLM API request timeout in seconds"
+    )
+
     # RAG Optimization Configuration
     query_rewrite_enabled: bool = Field(
         default=False,
         description="Enable query rewriting using LLM for better retrieval"
     )
     rerank_enabled: bool = Field(
-        default=False,
-        description="Enable document reranking using Grader LLM"
+        default=True,
+        description="Enable document reranking using BGE Reranker"
+    )
+    reranker_type: str = Field(
+        default="bge",
+        description="Reranker type: bge, noop, hybrid"
+    )
+    rerank_top_k: int = Field(
+        default=10,
+        ge=1,
+        le=50,
+        description="Number of documents to return after reranking"
     )
     context_compression_enabled: bool = Field(
         default=False,

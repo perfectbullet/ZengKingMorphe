@@ -112,20 +112,40 @@ class DocumentProcessor:
 
             # Extract text (check if we should use MinerU for PDFs)
             use_mineru = metadata.get("use_mineru", False) if metadata else False
+            mineru_structured_data = None  # 用于存储MinerU JSON结构化数据
 
-            # Auto-detect scanned PDFs and use MinerU for OCR
-            if file_ext == ".pdf" and not use_mineru:
-                use_mineru = await self._detect_scanned_pdf(file_path)
-                if use_mineru:
-                    logger.info(
-                        "Detected scanned PDF, will use MinerU for OCR",
-                        doc_id=doc_id,
-                        file_path=file_path,
+            # 检查是否有外部MinerU JSON文件
+            if settings.mineru_json_enabled:
+                json_file_path = await self._find_mineru_json_file(file_path)
+                if json_file_path:
+                    text_content, mineru_structured_data = await self._extract_text_from_mineru_json(json_file_path)
+                    if text_content:
+                        logger.info("Using external MinerU JSON for text extraction")
+                    else:
+                        # JSON提取失败，使用默认方式
+                        text_content = await self._extract_text(
+                            file_path, file_ext, use_mineru=use_mineru
+                        )
+                else:
+                    # 没有外部JSON，使用默认方式
+                    text_content = await self._extract_text(
+                        file_path, file_ext, use_mineru=use_mineru
                     )
+            else:
+                # 未启用MinerU JSON，使用默认方式
+                # Auto-detect scanned PDFs and use MinerU for OCR
+                if file_ext == ".pdf" and not use_mineru:
+                    use_mineru = await self._detect_scanned_pdf(file_path)
+                    if use_mineru:
+                        logger.info(
+                            "Detected scanned PDF, will use MinerU for OCR",
+                            doc_id=doc_id,
+                            file_path=file_path,
+                        )
 
-            text_content = await self._extract_text(
-                file_path, file_ext, use_mineru=use_mineru
-            )
+                text_content = await self._extract_text(
+                    file_path, file_ext, use_mineru=use_mineru
+                )
 
             # Preprocess text if chunk_config specifies
             if chunk_config:
@@ -139,6 +159,7 @@ class DocumentProcessor:
                 kb_id,
                 file_ext=file_ext,
                 chunk_config=chunk_config,
+                mineru_structured_data=mineru_structured_data,
             )
 
             # Handle different return types: tuple (semantic) or list (traditional)
@@ -399,6 +420,91 @@ class DocumentProcessor:
             logger.info(f"Falling back to basic PDF extraction: {file_path}")
             return await self._extract_pdf_basic(file_path)
 
+    async def _find_mineru_json_file(self, file_path: str) -> Optional[str]:
+        """
+        查找与文件同目录的MinerU JSON文件。
+
+        查找规则：
+        1. 同目录下同文件名的.json文件
+        2. 同目录下包含"MinerU"和原文件名的.json文件
+
+        Args:
+            file_path: 原文件路径
+
+        Returns:
+            MinerU JSON文件路径，如果未找到则返回None
+        """
+        import os
+        from pathlib import Path
+
+        file_dir = Path(file_path).parent
+        file_stem = Path(file_path).stem  # 不含扩展名的文件名
+
+        # 规则1: 同目录下同文件名的.json
+        json_path = file_dir / f"{file_stem}.json"
+        if json_path.exists():
+            logger.info(f"Found MinerU JSON file: {json_path}")
+            return str(json_path)
+
+        # 规则2: 查找包含MinerU和原文件名的JSON文件
+        for json_file in file_dir.glob("*.json"):
+            if "MinerU" in json_file.name and file_stem in json_file.name:
+                logger.info(f"Found MinerU JSON file: {json_file}")
+                return str(json_file)
+
+        return None
+
+    async def _extract_text_from_mineru_json(
+        self,
+        json_file_path: str
+    ) -> tuple[str, Optional[dict]]:
+        """
+        从MinerU JSON文件中提取文本内容。
+
+        Args:
+            json_file_path: MinerU JSON文件路径
+
+        Returns:
+            (文本内容, 结构化数据字典)
+        """
+        try:
+            from app.services.mineru_json_parser import MinerUJsonParser
+
+            parser = MinerUJsonParser()
+            doc = parser.parse_file(json_file_path)
+
+            # 生成增强Markdown（保留结构信息）
+            enhanced_md = doc.to_enhanced_markdown(include_images=False)
+
+            # 结构化数据用于分块
+            structured_data = {
+                "json_file_path": json_file_path,
+                "total_pages": doc.get_total_pages(),
+                "titles": doc.get_all_titles(),
+                "images": doc.get_all_images(),
+                "title_hierarchy": doc.get_title_hierarchy(),
+            }
+
+            logger.info(
+                "Extracted text from MinerU JSON",
+                json_file=json_file_path,
+                pages=doc.get_total_pages(),
+                titles=len(structured_data["titles"]),
+                images=len(structured_data["images"]),
+            )
+
+            return enhanced_md, structured_data
+
+        except Exception as e:
+            logger.error(
+                "Failed to extract text from MinerU JSON",
+                json_file=json_file_path,
+                error=str(e),
+                exc_info=True,
+            )
+            # 返回空字符串，让调用者使用fallback
+            return "", None
+
     async def _extract_docx(self, file_path: str) -> str:
         """Extract text from Word document."""
         try:
@@ -540,6 +646,7 @@ class DocumentProcessor:
         kb_id: str,
         file_ext: Optional[str] = None,
         chunk_config: Optional[Dict[str, Any]] = None,
+        mineru_structured_data: Optional[Dict[str, Any]] = None,
     ) -> List[DocumentChunkModel]:
         """
         Split text into chunks using semantic chunking.
@@ -554,10 +661,17 @@ class DocumentProcessor:
             kb_id: Knowledge base ID
             file_ext: File extension (e.g., '.md', '.html', '.txt', '.pdf')
             chunk_config: Custom chunking configuration (saved for reference only, not used)
+            mineru_structured_data: MinerU JSON结构化数据（用于结构化分块）
 
         Returns:
             List of document chunks
         """
+        # 如果有MinerU结构化数据且启用结构化分块，使用结构化分块
+        if mineru_structured_data and settings.mineru_structure_aware_chunking:
+            return await self._mineru_aware_chunk_text(
+                text, doc_id, kb_id, mineru_structured_data
+            )
+
         # Always use semantic chunking (chunk_config is saved but not used for splitting)
         if settings.enable_semantic_chunking:
             return await self._semantic_chunk_text(text, doc_id, kb_id, file_ext)
@@ -679,6 +793,130 @@ class DocumentProcessor:
         )
 
         return chunks
+
+    async def _mineru_aware_chunk_text(
+        self,
+        text: str,
+        doc_id: str,
+        kb_id: str,
+        mineru_structured_data: Dict[str, Any],
+    ) -> List[DocumentChunkModel]:
+        """
+        使用MinerU结构化数据进行智能分块。
+
+        Args:
+            text: 文本内容（实际上是增强Markdown）
+            doc_id: 文档ID
+            kb_id: 知识库ID
+            mineru_structured_data: MinerU JSON结构化数据
+
+        Returns:
+            文档分块列表
+        """
+        try:
+            from app.services.mineru_aware_chunking import (
+                MinerUAwareChunker,
+                MultiModalChunk,
+                ChunkingStrategy,
+            )
+
+            logger.info(
+                "Using MinerU-aware chunking",
+                doc_id=doc_id,
+                strategy=settings.mineru_chunking_strategy,
+            )
+
+            chunker = MinerUAwareChunker(
+                max_chunk_size=settings.chunk_size * 2,  # 结构化分块可以使用更大的chunk
+                strategy=settings.mineru_chunking_strategy
+            )
+
+            # 需要MinerUDocument对象，这里我们重新解析JSON文件
+            json_file_path = mineru_structured_data.get("json_file_path")
+            if not json_file_path:
+                logger.warning("No JSON file path in structured data, falling back to semantic chunking")
+                return await self._semantic_chunk_text(text, doc_id, kb_id, ".md")
+
+            from app.services.mineru_json_parser import MinerUJsonParser
+            parser = MinerUJsonParser()
+            doc = parser.parse_file(json_file_path)
+
+            # 生成图片描述（如果启用）
+            image_captions = None
+            if settings.mineru_image_captioning and settings.mineru_include_images:
+                from app.services.mineru_image_handler import MinerUImageHandler, VLMBackend
+                handler = MinerUImageHandler(
+                    vlm_backend=VLMBackend(settings.mineru_vlm_backend),
+                    vlm_api_key=settings.mineru_vlm_api_key,
+                    vlm_base_url=settings.mineru_vlm_base_url,
+                    vlm_model=settings.mineru_vlm_model,
+                )
+                images = []
+                for img_info in mineru_structured_data.get("images", []):
+                    from app.services.mineru_image_handler import ImageInfo
+                    images.append(ImageInfo(
+                        url=img_info["url"],
+                        page_idx=img_info["page_idx"],
+                        bbox=tuple(img_info["bbox"]),
+                    ))
+                if images:
+                    image_captions = await handler.generate_captions_batch(images)
+
+            # 进行结构化分块
+            multimodal_chunks = await chunker.chunk_document(
+                doc=doc,
+                doc_id=doc_id,
+                kb_id=kb_id,
+                image_captions=image_captions,
+            )
+
+            # 转换为DocumentChunkModel
+            chunks = []
+            for mm_chunk in multimodal_chunks:
+                # 构建metadata
+                metadata = {
+                    "chunk_type": "mineru_structured",
+                    "summary": "",
+                    "page_idx": mm_chunk.page_idx,
+                    "title_path": mm_chunk.title_path,
+                    "block_types": mm_chunk.block_types,
+                }
+
+                chunk_model = DocumentChunkModel(
+                    chunk_id=mm_chunk.chunk_id,
+                    doc_id=doc_id,
+                    kb_id=kb_id,
+                    content=mm_chunk.content,
+                    chunk_index=mm_chunk.chunk_index,
+                    metadata=metadata,
+                    # MinerU结构化字段
+                    page_idx=mm_chunk.page_idx,
+                    page_indices=mm_chunk.page_indices,
+                    block_types=mm_chunk.block_types,
+                    image_references=mm_chunk.image_references,
+                    image_captions=mm_chunk.image_captions,
+                    title_path=mm_chunk.title_path,
+                    structure_level=mm_chunk.structure_level,
+                )
+                chunks.append(chunk_model)
+
+            logger.info(
+                "MinerU-aware chunking completed",
+                doc_id=doc_id,
+                chunks_count=len(chunks),
+                chunks_with_images=sum(1 for c in chunks if c.image_references),
+            )
+
+            return chunks
+
+        except Exception as e:
+            logger.error(
+                "MinerU-aware chunking failed, falling back to semantic chunking",
+                doc_id=doc_id,
+                error=str(e),
+                exc_info=True,
+            )
+            return await self._semantic_chunk_text(text, doc_id, kb_id, ".md")
 
     async def _semantic_chunk_text(
         self, text: str, doc_id: str, kb_id: str, file_ext: Optional[str] = None
@@ -856,7 +1094,18 @@ class DocumentProcessor:
             )
 
         # Prepare data for batch operations
-        chunk_texts = [chunk.content for chunk in valid_chunks]
+        # For embedding: use enhanced content with title prefix if available
+        chunk_texts = []
+        for chunk in valid_chunks:
+            # Check if chunk has title_path (MinerU structured chunk)
+            if hasattr(chunk, 'title_path') and chunk.title_path:
+                # Use title-prefixed content for embedding
+                title_str = " > ".join(chunk.title_path)
+                chunk_texts.append(f"{title_str}\n\n{chunk.content}")
+            else:
+                # Regular chunk: use content as-is
+                chunk_texts.append(chunk.content)
+
         chunk_ids = [chunk.chunk_id for chunk in valid_chunks]
         chunk_metadatas = [
             {
@@ -864,6 +1113,11 @@ class DocumentProcessor:
                 "kb_id": chunk.kb_id,
                 "chunk_index": chunk.chunk_index,
                 "summary": chunk.metadata.get("summary", "") if chunk.metadata else "",
+                # MinerU结构化元数据
+                "page_idx": chunk.page_idx,
+                "has_images": len(chunk.image_references) > 0 if chunk.image_references else False,
+                "block_types": "|".join(chunk.block_types) if chunk.block_types else "",
+                "structure_level": chunk.structure_level if chunk.structure_level else 0,
             }
             for chunk in valid_chunks
         ]
@@ -883,18 +1137,29 @@ class DocumentProcessor:
             if not chunk_summary and chunk.metadata:
                 chunk_summary = chunk.metadata.get("summary", "")
 
+            es_document = {
+                "chunk_id": chunk.chunk_id,
+                "doc_id": doc_id,
+                "kb_id": kb_id,
+                "content": chunk.content,
+                "summary": chunk_summary,
+                "chunk_index": chunk.chunk_index,
+                "created_at": datetime.utcnow().isoformat(),
+                # MinerU结构化字段
+                "page_idx": chunk.page_idx,
+                "page_indices": chunk.page_indices,
+                "block_types": chunk.block_types,
+                "image_count": len(chunk.image_references) if chunk.image_references else 0,
+                "image_references": chunk.image_references if chunk.image_references else [],
+                "image_captions": chunk.image_captions if chunk.image_captions else [],
+                "title_path": chunk.title_path if chunk.title_path else [],
+                "structure_level": chunk.structure_level if chunk.structure_level else 0,
+            }
+
             await es_db.index_document(
                 index="doc",
                 doc_id=chunk.chunk_id,
-                document={
-                    "chunk_id": chunk.chunk_id,
-                    "doc_id": doc_id,
-                    "kb_id": kb_id,
-                    "content": chunk.content,
-                    "summary": chunk_summary,
-                    "chunk_index": chunk.chunk_index,
-                    "created_at": datetime.utcnow().isoformat(),
-                },
+                document=es_document,
             )
 
             # Update progress if task_id provided

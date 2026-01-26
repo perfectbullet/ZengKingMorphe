@@ -77,6 +77,20 @@ class UserProfileModel(BaseModel):
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
 
+class KnowledgeBaseModel(BaseModel):
+    """Knowledge base model."""
+    kb_id: str
+    name: str                                    # 知识库名称，如 "首饰设计"
+    description: Optional[str] = None             # 描述
+    category: Optional[str] = None               # 分类
+    employee_id: Optional[str] = None            # 关联的数字员工
+    document_count: int = 0                      # 文档数量
+    chunk_count: int = 0                         # 分块数量
+    status: str = "active"                       # active/inactive
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
 class DocumentModel(BaseModel):
     """Document model."""
     doc_id: str
@@ -107,6 +121,15 @@ class DocumentChunkModel(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: Optional[datetime] = None
+
+    # MinerU结构化字段（新增）
+    page_idx: Optional[int] = None                      # 起始页码
+    page_indices: List[int] = Field(default_factory=list)  # 包含的所有页码
+    block_types: List[str] = Field(default_factory=list)   # 包含的块类型 ['text', 'title']
+    image_references: List[str] = Field(default_factory=list)  # 图片URL列表
+    image_captions: List[str] = Field(default_factory=list)    # 图片描述列表
+    title_path: List[str] = Field(default_factory=list)  # 标题路径（面包屑）
+    structure_level: int = 0            # 在文档结构中的层级
 
 
 class IntentLogModel(BaseModel):
@@ -243,3 +266,25 @@ class DigitalEmployeeConfigModel(BaseModel):
     updated_at: datetime = Field(default_factory=datetime.utcnow)
     synced_at: datetime = Field(default_factory=datetime.utcnow)
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class MinerUImageCaptionModel(BaseModel):
+    """MinerU image caption cache model for VLM-generated descriptions."""
+    image_url: str  # Original image URL (used as lookup key)
+    caption: str  # VLM-generated image description
+    context: str = ""  # Surrounding text context when generating caption
+    model_used: str = ""  # VLM model used (e.g., qwen-vl-max)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class MinerUStructuredModel(BaseModel):
+    """MinerU structured document data model."""
+    doc_id: str  # Document ID
+    json_file_path: str  # Path to original MinerU JSON file
+    backend: str = ""  # MinerU backend (vlm)
+    version: str = ""  # MinerU version
+    total_pages: int = 0
+    titles: List[Dict[str, Any]] = Field(default_factory=list)  # All titles with positions
+    images: List[Dict[str, Any]] = Field(default_factory=list)  # All images with URLs
+    title_hierarchy: List[Dict[str, Any]] = Field(default_factory=list)  # Title hierarchy
+    processed_at: datetime = Field(default_factory=datetime.utcnow)

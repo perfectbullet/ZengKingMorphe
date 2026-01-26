@@ -122,7 +122,16 @@ class MongoDB:
                 IndexModel([("employee_id", ASCENDING), ("date", DESCENDING)]),
                 IndexModel([("date", DESCENDING)]),
             ])
-            
+
+            # Knowledge bases collection indexes
+            await self.db.knowledge_bases.create_indexes([
+                IndexModel([("kb_id", ASCENDING)], unique=True),
+                IndexModel([("name", ASCENDING)]),  # 按名称检索
+                IndexModel([("employee_id", ASCENDING)]),
+                IndexModel([("status", ASCENDING)]),
+                IndexModel([("created_at", DESCENDING)]),
+            ])
+
             # Stream chunks collection indexes
             await self.db.stream_chunks.create_indexes([
                 IndexModel([("chunk_id", ASCENDING)], unique=True),
