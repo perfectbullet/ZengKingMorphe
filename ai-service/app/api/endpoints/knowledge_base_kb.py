@@ -66,6 +66,7 @@ async def create_knowledge_base(
             "tags": request.tags,
             "config": request.config.model_dump(),
             "status": "active",
+            "flag": 1,
             "created_at": datetime.utcnow(),
             "updated_at": datetime.utcnow()
         }
@@ -105,13 +106,13 @@ async def update_knowledge_base(
     """
     更新知识库信息。
 
-    Args:
-        - request: Update knowledge base request (includes kb_id)
-        - api_key: API key from auth
-        - db: Database instance
+    \nArgs:
+        \n- request: Update knowledge base request (includes kb_id)
+        \n- api_key: API key from auth
+        \n- db: Database instance
 
-    Returns:
-        - Updated knowledge base data
+    \nReturns:
+        \n- Updated knowledge base data
     """
     kb_id = request.kb_id
     try:
@@ -150,35 +151,42 @@ async def update_knowledge_base(
             )
 
         # Update knowledge base
-        await db.knowledge_bases.update_one(
+        result = await db.knowledge_bases.update_one(
             {"kb_id": kb_id},
             {"$set": update_data}
         )
 
-        # Get updated document
-        updated_kb = await db.knowledge_bases.find_one({"kb_id": kb_id})
-        updated_kb.pop("_id", None)
+        if result.modified_count == 1:
+            # Get updated document
+            updated_kb = await db.knowledge_bases.find_one({"kb_id": kb_id})
+            updated_kb.pop("_id", None)
 
-        logger.info(
-            "knowledge base updated",
-            kb_id=kb_id,
-            fields_updated=list(update_data.keys())
-        )
+            logger.info(
+                "knowledge base updated",
+                kb_id=kb_id,
+                fields_updated=list(update_data.keys())
+            )
 
-        return {
-            "code": 200,
-            "message": "success",
-            "data": {
-                "kb_id": updated_kb["kb_id"],
-                "name": updated_kb["name"],
-                "description": updated_kb["description"],
-                "priority": updated_kb["priority"],
-                "tags": updated_kb.get("tags", []),
-                "status": updated_kb["status"],
-                "created_at": updated_kb["created_at"].isoformat() + "Z",
-                "updated_at": updated_kb["updated_at"].isoformat() + "Z"
+            return {
+                "code": 200,
+                "message": "success",
+                "data": {
+                    "kb_id": updated_kb["kb_id"],
+                    "name": updated_kb["name"],
+                    "description": updated_kb["description"],
+                    "priority": updated_kb["priority"],
+                    "tags": updated_kb.get("tags", []),
+                    "status": updated_kb["status"],
+                    "created_at": updated_kb["created_at"].isoformat() + "Z",
+                    "updated_at": updated_kb["updated_at"].isoformat() + "Z"
+                }
             }
-        }
+        else:
+            return {
+                "code": 200,
+                "status": "error",
+                "message": f"knowledge bases {kb_id} update failed"
+            }
 
     except HTTPException:
         raise
@@ -195,7 +203,7 @@ async def update_knowledge_base(
         )
 
 
-@router.delete("/delete/{kb_id}")
+@router.post("/delete/{kb_id}")
 async def delete_knowledge_bases(
     kb_id: str,
     api_key: str = Depends(get_api_key),
@@ -204,18 +212,22 @@ async def delete_knowledge_bases(
     """
     删除知识库信息。
 
-    nArgs:
-        - kb_id: knowledge bases ID
-        - api_key: API key from auth
-        - db: Database instance
+    \nnArgs:
+        \n- kb_id: knowledge bases ID
+        \n- api_key: API key from auth
+        \n- db: Database instance
 
-    Returns:
-        - result
+    \nReturns:
+        \n- result
     """
     try:
         logger.info("delete knowledge bases request", kb_id=kb_id)
 
-        result = await db.knowledge_bases.delete_one({"kb_id": kb_id})
+        # Update knowledge base
+        result = await db.knowledge_bases.update_one(
+            {"kb_id": kb_id},
+            {"$set": {"flag": "-1"}}
+        )
 
         if not result:
             raise HTTPException(
@@ -263,16 +275,16 @@ async def list_knowledge_bases(
     """
     获取知识库列表。
 
-    Args:
-        - category: Filter by category
-        - status_filter: Filter by status
-        - page: Page number
-        - page_size: Page size
-        - api_key: API key from auth
-        - db: Database instance
+    \nArgs:
+        \n- category: Filter by category
+        \n- status_filter: Filter by status
+        \n- page: Page number
+        \n- page_size: Page size
+        \n- api_key: API key from auth
+        \n- db: Database instance
 
-    Returns:
-        - List of knowledge bases
+    \nReturns:
+        \n- List of knowledge bases
     """
     try:
         # Build query
@@ -331,8 +343,8 @@ async def list_test_files(
     """
     列出测试文件夹中的所有文件（仅用于测试）。
 
-    Returns:
-        - List of available test files with download URLs
+    \nReturns:
+        \n- List of available test files with download URLs
     """
     try:
         logger.info("List test files request")
@@ -396,11 +408,11 @@ async def download_test_file(
     """
     下载测试文件（仅用于测试）。
 
-    Args:
-        - filename: Name of the file to download
+    \nArgs:
+        \n- filename: Name of the file to download
 
-    Returns:
-        - File download response
+    \nReturns:
+        \n- File download response
     """
     try:
         logger.info("Download test file request", filename=filename)
@@ -464,13 +476,13 @@ async def get_knowledge_base_detail(
     """
     获取知识库详情及前10个文档块。
 
-    Args:
-        - kb_id: Knowledge base ID
-        - api_key: API key from auth
-        - db: Database instance
+    \nArgs:
+        \n- kb_id: Knowledge base ID
+        \n- api_key: API key from auth
+        \n- db: Database instance
 
-    Returns:
-        - Knowledge base detail information with top 10 document chunks
+    \nReturns:
+        \n- Knowledge base detail information with top 10 document chunks
     """
     try:
         logger.info("Get knowledge base detail request", kb_id=kb_id)
@@ -536,7 +548,3 @@ async def get_knowledge_base_detail(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to get knowledge base detail"
         )
-
-
-
-
