@@ -110,33 +110,74 @@ class OpenAIMessage(BaseModel):
     content: str = Field(..., description="Message content")
 
 
+class OpenAITool(BaseModel):
+    """OpenAI tool/function calling format."""
+    type: str = Field(default="function", description="Tool type: function")
+    function: Optional[Dict[str, Any]] = Field(None, description="Function definition")
+
+
 class OpenAIChatRequest(BaseModel):
     """OpenAI-style chat completion request."""
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "model": "qwen3:32b",
+                "model": "qwen2.5:7b",
                 "messages": [
-                    {"role": "user", "content": "今天天气怎么样？"}
+                    {"role": "system", "content": "你是一个专业的客服助手。"},
+                    {"role": "user", "content": "胡桃是谁？"}
                 ],
                 "stream": True,
+                "temperature": 0.7,
+                "top_p": 0.9,
+                "max_tokens": 2048,
+                "presence_penalty": 0.0,
+                "frequency_penalty": 0.0,
+                "seed": 42,
+                "n": 1,
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "description": "获取天气信息",
+                            "parameters": {"type": "object", "properties": {}}
+                        }
+                    }
+                ],
                 "employee_id": "hutao",
                 "user_id": "user_123456",
-                "session_id": "sess_20251218_abc123"
+                "session_id": "sess_20251218_abc123",
+                "channel_name": "web",
+                "team_id": "team_001"
             }
         }
     )
-    
+
+    # OpenAI standard parameters
     model: str = Field(default="qwen3:32b", description="Model name")
     messages: List[OpenAIMessage] = Field(..., description="Conversation messages")
     stream: bool = Field(default=False, description="Enable streaming")
-    temperature: Optional[float] = Field(default=0.7, ge=0.0, le=2.0)
-    max_tokens: Optional[int] = Field(default=None, ge=1)
+    temperature: Optional[float] = Field(default=0.7, ge=0.0, le=2.0, description="Sampling temperature")
+    top_p: Optional[float] = Field(default=0.9, ge=0.0, le=1.0, description="Nucleus sampling parameter")
+    max_tokens: Optional[int] = Field(default=None, ge=1, description="Maximum tokens to generate")
+    presence_penalty: Optional[float] = Field(default=0.0, ge=-2.0, le=2.0, description="Presence penalty")
+    frequency_penalty: Optional[float] = Field(default=0.0, ge=-2.0, le=2.0, description="Frequency penalty")
+    seed: Optional[int] = Field(default=None, ge=0, description="Random seed for reproducibility")
+    n: Optional[int] = Field(default=1, ge=1, description="Number of completions to generate")
+    tools: Optional[List[OpenAITool]] = Field(default=None, description="List of tools/functions available")
+
     # Custom fields for our system
     employee_id: str = Field(default="29", description="Digital employee ID")
-    user_id: str = Field('user_20260110', description="User ID")
-    session_id: Optional[str] = Field('sess_29_abc123', description="Session ID")
-    session_id2: Optional[str] = Field('no_session_id2_send', description="Secondary Session ID")
+    user_id: str = Field(default="user_20260122", description="User ID")
+    session_id: Optional[str] = Field(default="sess_4_42478261_29", description="Session ID")
+    channel_name: Optional[str] = Field(default=None, description="Channel name (web, mobile, etc.)")
+    team_id: Optional[str] = Field(default=None, description="Team ID")
+
+    # Extra body for non-OpenAI standard parameters (passed via OpenAI SDK's extra_body)
+    extra_body: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Extra body parameters for non-OpenAI standard fields (channel_name, team_id, user_id, employee_id, etc.)"
+    )
 
 # Session API Schemas
 class CreateSessionRequest(BaseModel):

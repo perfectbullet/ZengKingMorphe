@@ -14,22 +14,22 @@ OpenAI-style streaming client for /api/chat/v1/chat/completions.
 
 【指定服务器】
   # 本地开发服务器
-  python ai-service/scripts/stream_client.py --host http://localhost:8000 --query "你好"
+  python ai-service/scripts/stream_client.py --host http://192.168.8.233:8100 --query "你好"
 
   # 生产服务器
   python ai-service/scripts/stream_client.py --host http://192.168.8.233:8100 --query "你好"
 
 【指定员工/用户/会话】
   python ai-service/scripts/stream_client.py \\
-    --host http://localhost:8000 \\
-    --employee_id financial_analyst \\
-    --user_id user_20260110 \\
-    --session_id sess_financial_analyst_fdaf \\
+    --host http://192.168.8.233:8100 \\
+    --employee_id 29 \\
+    --user_id 3 \\
+    --session_id sess_4_3_29 \\
     --query "失蜡铸造的原理"
 
 【完整示例】
   # 知识库问答
-  python ai-service/scripts/stream_client.py --query "密码学课程的两个主要分支是什么？"
+  python ai-service/scripts/stream_client.py --query "介绍集合的概念"
 
   # 实时信息查询（自动触发联网搜索）
   python ai-service/scripts/stream_client.py --query "北京天气咋样"
@@ -40,10 +40,10 @@ OpenAI-style streaming client for /api/chat/v1/chat/completions.
 =======
 默认参数
 =======
-  --host           http://localhost:8000
-  --employee_id    financial_analyst
-  --user_id        user_20260110
-  --session_id     sess_financial_analyst_fdaf
+  --host           http://192.168.8.233:8100
+  --employee_id    29
+  --user_id        3
+  --session_id     sess_4_3_29
   --model          qwen2.5:7b
 
 =======
@@ -68,7 +68,10 @@ from typing import Iterator, Optional
 
 
 def build_body(model: str, query: str, employee_id: Optional[str],
-               user_id: Optional[str], session_id: Optional[str]) -> dict:
+               user_id: Optional[str], session_id: Optional[str],
+               channel_name: Optional[str] = None,
+               team_id: Optional[str] = None,
+               extra_body: Optional[dict] = None) -> dict:
     messages = [{"role": "user", "content": query}]
     body = {
         "model": model,
@@ -78,6 +81,17 @@ def build_body(model: str, query: str, employee_id: Optional[str],
         "user_id": user_id or "anonymous",
         "session_id": session_id,
     }
+
+    # 添加可选参数
+    if channel_name:
+        body["channel_name"] = channel_name
+    if team_id:
+        body["team_id"] = team_id
+
+    # 合并 extra_body 中的参数
+    if extra_body:
+        body.update(extra_body)
+
     return body
 
 
@@ -225,23 +239,49 @@ def main():
 示例:
   %(prog)s --query "你好"
   %(prog)s --host http://192.168.8.233:8100 --query "北京天气"
+
+  # 使用 channel_name (格式: employee_<team_id>_<user_id>_<employee_id>)
+  %(prog)s --channel_name "employee_4_46935014_29" --query "你好"
+
+  # 使用 extra_body 传递参数
+  %(prog)s --extra-body '{"team_id": "4", "user_id": "46935014", "employee_id": "29"}' --query "你好"
         """
     )
-    parser.add_argument("--host", default="http://localhost:8000", help="Base host (including port), 默认: http://localhost:8000")
-    parser.add_argument("--employee_id", default="financial_analyst", help="Employee ID, 默认: financial_analyst")
-    parser.add_argument("--user_id", default="user_20260110", help="User ID, 默认: user_20260110")
-    parser.add_argument("--session_id", default="sess_financial_analyst_fdaf", help="Session ID, 默认: sess_financial_analyst_fdaf")
+    parser.add_argument("--host", default="http://192.168.8.233:8100", help="Base host (including port), 默认: http://192.168.8.233:8100")
+    parser.add_argument("--employee_id", default="29", help="Employee ID, 默认: 29")
+    parser.add_argument("--user_id", default="3", help="User ID, 默认: 3")
+    parser.add_argument("--session_id", default="sess_4_3_29", help="Session ID, 默认: sess_4_3_29")
     parser.add_argument("--model", default="qwen2.5:7b", help="Model name, 默认: qwen2.5:7b")
+
+    # 新增参数
+    parser.add_argument("--channel_name", default=None, help="Channel name (格式: employee_<team_id>_<user_id>_<employee_id>)")
+    parser.add_argument("--team_id", default=None, help="Team ID")
+    parser.add_argument("--extra-body", default=None, help="Extra body parameters as JSON string, e.g., '{\"team_id\": \"4\"}'")
 
     parser.add_argument("--query", required=True, help="User query text（必填）")
     parser.add_argument("--timeout", type=int, default=60, help="Stream timeout seconds, 默认: 60")
     args = parser.parse_args()
 
     api_key = os.environ.get("API_KEY")
-    body = build_body(args.model, args.query, args.employee_id, args.user_id, args.session_id)
+
+    # 解析 extra_body JSON
+    extra_body = None
+    if args.extra_body:
+        try:
+            extra_body = json.loads(args.extra_body)
+        except json.JSONDecodeError as e:
+            print(f"Error: Invalid JSON in --extra-body: {e}", file=sys.stderr)
+            sys.exit(1)
+
+    body = build_body(
+        args.model, args.query, args.employee_id, args.user_id, args.session_id,
+        channel_name=args.channel_name,
+        team_id=args.team_id,
+        extra_body=extra_body
+    )
 
     rc = run_stream(args.host, body, api_key, timeout=args.timeout)
- 
+
     sys.exit(rc)
 
 

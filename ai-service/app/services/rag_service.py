@@ -125,7 +125,7 @@ class RAGRetrieval:
                             {
                                 "multi_match": {
                                     "query": query,
-                                    "fields": ["content^2", "summary"],
+                                    "fields": ["summary^3", "content"],
                                     "type": "best_fields"
                                 }
                             }

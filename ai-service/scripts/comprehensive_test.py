@@ -50,7 +50,7 @@
 =======================
 默认参数
 =======================
-  --host           http://localhost:8000
+  --host           http://192.168.8.233:8100
   --employee_id    financial_analyst
   --user_id        user_20260110
   --session_id     sess_financial_analyst_fdaf

@@ -78,12 +78,20 @@ def format_sources(
         if len(doc.get("content", "")) > max_content_length:
             content_snippet += "..."
 
+        # Normalize RRF score to 0-1 range for display
+        # RRF score range: 0 ~ 2/k (when k=60, max ~0.033)
+        raw_rrf_score = doc.get("rrf_score", doc.get("score", 0.0))
+        rrf_k = 60  # Must match the k value used in _rrf_fusion
+        max_possible_rrf = 2.0 / rrf_k
+        normalized_score = (raw_rrf_score / max_possible_rrf) if max_possible_rrf > 0 else 0.0
+        normalized_score = max(0.0, min(1.0, normalized_score))
+
         rag_source = {
             "rank": idx,
             "doc_id": doc.get("doc_id", ""),
             "kb_id": doc.get("kb_id", ""),
             "content_snippet": content_snippet,
-            "score": round(doc.get("rrf_score", doc.get("score", 0.0)), 4),
+            "score": round(normalized_score, 4),
         }
 
         # Add chunk_index if available
@@ -183,7 +191,7 @@ async def generate_openai_stream_response(
         if not user_query:
             user_query = request.messages[-1].content if request.messages else ""
 
-        # Build initial state
+        # Build initial state with all parameters from request
         initial_state = {
             "messages": [],
             "user_query": user_query,
@@ -213,6 +221,18 @@ async def generate_openai_stream_response(
             "workflow_start_time": time.time(),
             "node_timings": {},
             "ttfb_ms": None,
+            # LLM parameters from OpenAI request
+            "llm_temperature": request.temperature,
+            "llm_top_p": request.top_p,
+            "llm_max_tokens": request.max_tokens,
+            "llm_presence_penalty": request.presence_penalty,
+            "llm_frequency_penalty": request.frequency_penalty,
+            "llm_seed": request.seed,
+            "llm_n": request.n,
+            "llm_tools": [tool.model_dump() for tool in request.tools] if request.tools else None,
+            # Additional context
+            "channel_name": request.channel_name,
+            "team_id": request.team_id,
         }
 
         # Save user query chunk to DB
@@ -354,11 +374,10 @@ async def generate_openai_stream_response(
                 # Get appropriate LLM for streaming based on hybrid routing
                 streaming_llm, model_name = conversation_workflow.get_streaming_llm(final_state)
                 logger.info(
-                    f"Streaming with LLM: {model_name}",
-                    model=model_name,
-                    intent=final_state.get("intent"),
-                    faq_matched=bool(final_state.get("faq_matched")),
-                    web_search_used=final_state.get("web_search_used", False)
+                    f"Streaming with LLM: {model_name} | "
+                    f"intent={final_state.get('intent')} | "
+                    f"faq_matched={bool(final_state.get('faq_matched'))} | "
+                    f"web_search_used={final_state.get('web_search_used', False)}"
                 )
 
                 # TRUE token-level streaming from LLM
@@ -371,7 +390,7 @@ async def generate_openai_stream_response(
                             first_token_received = True
                             ttfb_ms = int((time.time() - initial_state["workflow_start_time"]) * 1000)
                             final_state["ttfb_ms"] = ttfb_ms
-                            logger.info(f"[TTFB] First token received - ttfb: {ttfb_ms}ms")
+                            logger.info(f"First token received | ttfb_ms={ttfb_ms}")
 
                         full_answer += token
 
@@ -402,7 +421,7 @@ async def generate_openai_stream_response(
                 # Log workflow completion time
                 workflow_end_time = time.time()
                 total_time_ms = int((workflow_end_time - initial_state["workflow_start_time"]) * 1000)
-                logger.info(f"[WORKFLOW] Workflow completed - total: {total_time_ms}ms")
+                logger.info(f"Workflow completed | total_time_ms={total_time_ms} | ttfb_ms={final_state.get('ttfb_ms')}")
 
                 # Update state with generated answer
                 final_state["final_answer"] = full_answer
@@ -463,7 +482,7 @@ async def generate_openai_stream_response(
         yield "[DONE]"
 
     except Exception as e:
-        logger.error(f"OpenAI stream generation error: error={str(e)}", exc_info=True)
+        logger.error(f"OpenAI stream generation error | error={str(e)}", exc_info=True)
 
         # Send error in OpenAI format
         error_chunk_data = {
@@ -483,7 +502,7 @@ async def generate_openai_stream_response(
                 request.employee_id, "error", error_chunk_data
             )
         except Exception as db_error:
-            logger.error(f"Failed to save error chunk to DB: error={str(db_error)}", exc_info=True)
+            logger.error(f"Failed to save error chunk to DB | error={str(db_error)}", exc_info=True)
 
         yield json.dumps(error_chunk_data)
 
@@ -509,7 +528,23 @@ async def openai_chat_completions(
 
     参数说明:
 
-        request: 符合 OpenAI 格式的对话请求
+        request: 符合 OpenAI 格式的对话请求，包含:
+            - model: 模型名称
+            - messages: 对话消息列表
+            - stream: 是否启用流式传输
+            - temperature: 采样温度 (0.0-2.0)
+            - top_p: 核采样参数 (0.0-1.0)
+            - max_tokens: 最大生成token数
+            - presence_penalty: 存在惩罚 (-2.0-2.0)
+            - frequency_penalty: 频率惩罚 (-2.0-2.0)
+            - seed: 随机种子
+            - n: 生成候选数量
+            - tools: 工具/函数调用列表
+            - employee_id: 数字员工ID
+            - user_id: 用户ID
+            - session_id: 会话ID
+            - channel_name: 渠道名称
+            - team_id: 团队ID
 
         api_key: 来自身份验证的应用程序接口密钥
 
@@ -518,21 +553,106 @@ async def openai_chat_completions(
         符合 OpenAI 格式的响应或服务器发送事件（SSE）流
     """
     try:
+        # 处理 extra_body 参数（OpenAI SDK 通过 extra_body 传递非标准参数）
+        effective_team_id = request.team_id
+        effective_user_id = request.user_id
+        effective_employee_id = request.employee_id
+        effective_channel_name = request.channel_name
+
+        # 只有当 team_id/user_id/employee_id 不存在时，才从 channel_name 解析
+        if request.extra_body and "channel_name" in request.extra_body:
+            channel_name = request.extra_body["channel_name"]
+            if channel_name and not effective_channel_name:
+                effective_channel_name = channel_name
+                # 检查是否需要解析（参数缺失时）
+                need_parse = not effective_team_id or not effective_user_id or not effective_employee_id
+
+                if need_parse:
+                    logger.info(f"Received channel_name from extra_body: {channel_name}")
+                    # 解析 channel_name: employee_<team_id>_<user_id>_<employee_id>
+                    parts = channel_name.split('_')
+                    if len(parts) >= 4 and parts[0] == "employee":
+                        try:
+                            parsed_team_id = parts[1]
+                            parsed_user_id = parts[2]
+                            parsed_employee_id = parts[3]
+
+                            # 只覆盖缺失的值
+                            if not effective_team_id:
+                                effective_team_id = parsed_team_id
+                            if not effective_user_id:
+                                effective_user_id = parsed_user_id
+                            if not effective_employee_id:
+                                effective_employee_id = parsed_employee_id
+
+                            logger.info(
+                                f"Parsed from channel_name: team_id={effective_team_id}, "
+                                f"user_id={effective_user_id}, employee_id={effective_employee_id}"
+                            )
+                        except (ValueError, IndexError) as e:
+                            logger.error(f"Failed to parse channel_name '{channel_name}': {e}")
+                    else:
+                        logger.error(f"Invalid channel_name format: '{channel_name}', expected 'employee_<team_id>_<user_id>_<employee_id>'")
+
+        # extra_body 中的直接参数优先级最高（覆盖所有其他来源）
+        if request.extra_body:
+            if "session_id" in request.extra_body and request.extra_body["session_id"]:
+                request.session_id = request.extra_body["session_id"]
+            if "team_id" in request.extra_body and request.extra_body["team_id"]:
+                effective_team_id = request.extra_body["team_id"]
+            if "user_id" in request.extra_body and request.extra_body["user_id"]:
+                effective_user_id = request.extra_body["user_id"]
+            if "employee_id" in request.extra_body and request.extra_body["employee_id"]:
+                effective_employee_id = request.extra_body["employee_id"]
+            if "channel_name" in request.extra_body and request.extra_body["channel_name"] and not effective_channel_name:
+                effective_channel_name = request.extra_body["channel_name"]
+
         # Rate limiting
         await rate_limit_middleware(
-            request=None, user_id=request.user_id, session_id=request.session_id
+            request=None, user_id=effective_user_id, session_id=request.session_id
         )
 
-        logger.info(f"OpenAI chat completion request: {request}")
-        # OpenAI chat completion request: model='qwen2.5:7b' 
-        # messages=[OpenAIMessage(role='user', content='胡桃')] 
-        # stream=True temperature=0.7 max_tokens=None employee_id='hutao' 
-        # user_id='user_123456' session_id='sess_20251218_abc123' 
-        # session_id2='session_id2_default'
+        # 提取最后一条用户消息用于日志
+        last_user_message = ""
+        for msg in reversed(request.messages):
+            if msg.role == "user":
+                last_user_message = msg.content
+                break
+
+        logger.info(
+            f"OpenAI chat completion request | "
+            f"model={request.model} | "
+            f"user_id={effective_user_id} | "
+            f"employee_id={effective_employee_id} | "
+            f"session_id={request.session_id} | "
+            f"stream={request.stream} | "
+            f"temperature={request.temperature} | "
+            f"top_p={request.top_p} | "
+            f"max_tokens={request.max_tokens} | "
+            f"presence_penalty={request.presence_penalty} | "
+            f"frequency_penalty={request.frequency_penalty} | "
+            f"seed={request.seed} | "
+            f"n={request.n} | "
+            f"has_tools={request.tools is not None} | "
+            f"channel_name={effective_channel_name} | "
+            f"team_id={effective_team_id} | "
+            f"extra_body_provided={request.extra_body is not None} | "
+            f"messages_count={len(request.messages)} | "
+            f"last_user_message={last_user_message[:200] if last_user_message else ''}"
+        )
 
         if request.stream:
-            # Return streaming response
-            return EventSourceResponse(generate_openai_stream_response(request))
+            # Return streaming response with effective parameters
+            # 创建一个包含解析后参数的请求副本
+            stream_request = request.model_copy(
+                update={
+                    "user_id": effective_user_id,
+                    "employee_id": effective_employee_id,
+                    "team_id": effective_team_id,
+                    "channel_name": effective_channel_name,
+                }
+            )
+            return EventSourceResponse(generate_openai_stream_response(stream_request))
         else:
             # Non-streaming response (not implemented in this snippet)
             raise HTTPException(
@@ -543,7 +663,7 @@ async def openai_chat_completions(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"OpenAI chat completion error: error={str(e)}", exc_info=True)
+        logger.error(f"OpenAI chat completion error | error={str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to process chat completion",
@@ -592,7 +712,15 @@ async def query_stream_chunks(
         分页的chunk列表及分页信息
     """
     try:
-        logger.info(f"Query stream chunks: user_id={user_id}, employee_id={employee_id}, session_id={session_id}, chat_id={chat_id}, page={page}, page_size={page_size}")
+        logger.info(
+            f"Query stream chunks | "
+            f"user_id={user_id} | "
+            f"employee_id={employee_id} | "
+            f"session_id={session_id} | "
+            f"chat_id={chat_id} | "
+            f"page={page} | "
+            f"page_size={page_size}"
+        )
 
         # Get database instance
         db = await get_database()
@@ -690,7 +818,7 @@ async def query_stream_chunks(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Query stream chunks error: error={str(e)}", exc_info=True)
+        logger.error(f"Query stream chunks error | error={str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to query stream chunks",

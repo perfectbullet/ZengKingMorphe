@@ -180,6 +180,11 @@ class Settings(BaseSettings):
     rate_limit_per_minute: int = Field(default=60, ge=1)
     rate_limit_per_session: int = Field(default=10, ge=1)
     max_concurrent_sessions: int = Field(default=100, ge=1)
+    rate_limit_per_ip_per_minute: int = Field(
+        default=30,
+        ge=1,
+        description="Rate limit per IP address per minute for polling endpoints"
+    )
 
     # Conversation Configuration
     max_context_turns: int = Field(default=10, ge=1)

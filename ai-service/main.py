@@ -21,11 +21,23 @@ from app.api.middleware.error_handler import (
     general_exception_handler
 )
 from app.api.endpoints import chat, session, employee, conversation, webhook, mineru
-from app.api.endpoints import knowledge_base_kb, documents, metrics
+from app.api.endpoints import knowledge_base_kb, documents, metrics, websocket
 
 # Setup logging
 setup_logging()
 logger = get_logger(__name__)
+
+# Uvicorn reload configuration
+UVICORN_RELOAD_EXCLUDES = [
+    "*.log",
+    "*.db",
+    "logs/*",
+    "data/*",
+    ".venv/*",
+    "__pycache__/*",
+    "*.pyc",
+    ".git/*",
+]
 
 
 @asynccontextmanager
@@ -121,6 +133,7 @@ app.include_router(conversation.router, prefix="/api/conversation", tags=["Conve
 app.include_router(webhook.router, prefix="/api/ai", tags=["Webhook"])
 app.include_router(mineru.router, prefix="/api/mineru", tags=["MinerU"])
 app.include_router(metrics.router, prefix="/api/metrics", tags=["Metrics"])
+app.include_router(websocket.router, prefix="/api/chat", tags=["WebSocket"])
 
 
 @app.get("/")
@@ -147,5 +160,7 @@ if __name__ == "__main__":
         host=settings.api_host,
         port=settings.api_port,
         workers=settings.api_workers,
-        reload=settings.debug
+        reload=settings.debug,
+        reload_excludes=UVICORN_RELOAD_EXCLUDES,
+        log_level="warning"
     )

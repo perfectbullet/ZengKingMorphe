@@ -153,6 +153,13 @@ class ConversationWorkflow:
         This is used by the chat endpoint for token-level streaming.
         Returns the LLM instance and model name based on routing strategy.
 
+        Supports dynamic LLM parameters from the request state:
+        - llm_temperature: Sampling temperature
+        - llm_top_p: Nucleus sampling parameter
+        - llm_max_tokens: Maximum tokens to generate
+        - llm_presence_penalty: Presence penalty
+        - llm_frequency_penalty: Frequency penalty
+
         Args:
             state: Current conversation state
 
@@ -160,6 +167,57 @@ class ConversationWorkflow:
             Tuple of (llm, model_name) for streaming
         """
         llm, _, model_name = self.get_active_llm(state)
+
+        # Check if custom LLM parameters are provided in the state
+        temperature = state.get("llm_temperature")
+        top_p = state.get("llm_top_p")
+        max_tokens = state.get("llm_max_tokens")
+
+        # If custom parameters are provided, create a new LLM instance with them
+        if temperature is not None or top_p is not None or max_tokens is not None:
+            # Import LLM classes
+            from langchain_community.chat_models import ChatOllama
+            from langchain_openai import ChatOpenAI
+
+            # Determine which LLM type to use based on the current llm instance
+            if isinstance(llm, ChatOllama):
+                # Create new Ollama LLM with custom parameters
+                base_url = getattr(llm, 'base_url', None)
+                model_name = getattr(llm, 'model_name', None) or getattr(llm, 'model', '')
+                llm = ChatOllama(
+                    base_url=base_url,
+                    model=model_name,
+                    temperature=temperature if temperature is not None else getattr(llm, 'temperature', 0.7),
+                    top_p=top_p if top_p is not None else getattr(llm, 'top_p', None),
+                    num_predict=max_tokens if max_tokens is not None else getattr(llm, 'num_predict', None),
+                    streaming=True,
+                )
+                logger.info(
+                    "Created custom Ollama LLM for streaming",
+                    temperature=temperature,
+                    top_p=top_p,
+                    max_tokens=max_tokens
+                )
+            elif isinstance(llm, ChatOpenAI):
+                # Create new OpenAI LLM with custom parameters
+                # ChatOpenAI uses openai_api_base for base URL in some versions
+                base_url = getattr(llm, 'openai_api_base', None) or getattr(llm, 'base_url', None)
+                api_key = getattr(llm, 'openai_api_key', None) or getattr(llm, 'api_key', None)
+                model_name = getattr(llm, 'model_name', None) or getattr(llm, 'model', '')
+                llm = ChatOpenAI(
+                    base_url=base_url,
+                    api_key=api_key,
+                    model=model_name,
+                    temperature=temperature if temperature is not None else getattr(llm, 'temperature', 0.7),
+                    max_tokens=max_tokens if max_tokens is not None else getattr(llm, 'max_tokens', None),
+                    streaming=True,
+                )
+                logger.info(
+                    "Created custom OpenAI LLM for streaming",
+                    temperature=temperature,
+                    max_tokens=max_tokens
+                )
+
         return llm, model_name
 
     # -------------------------------------------------------------------------

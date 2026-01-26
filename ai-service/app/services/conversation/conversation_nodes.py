@@ -31,7 +31,7 @@ from app.core.logging import get_logger
 from app.models.database import ConversationModel, SessionModel
 from app.services.conversation.conversation_state import ConversationState, GREETING_KEYWORDS, INTERRUPTION_KEYWORDS
 from app.services.conversation.conversation_helpers import (
-    time_node, select_llm, build_generation_messages,
+    time_node, select_llm, 
     heuristic_complexity
 )
 from app.services.rag_service import rag_retrieval
@@ -662,6 +662,11 @@ class ConversationNodes:
         Uses the top document's RRF score as the overall relevance score.
         This score determines if we should fallback to web search.
 
+        RRF Score Normalization:
+        - Raw RRF score range: 0 ~ 2/k (default k=60, so max ~0.033)
+        - Normalized to 0-1 range for threshold comparison
+        - Formula: normalized_rrf = rrf_score * k / 2
+
         Args:
             state: Current conversation state
 
@@ -674,10 +679,21 @@ class ConversationNodes:
             if not docs:
                 state["relevance_score"] = 0.0
             else:
-                # Use top document's RRF score as overall relevance
-                state["relevance_score"] = docs[0].get("rrf_score", 0.0)
+                # Get raw RRF score
+                raw_rrf_score = docs[0].get("rrf_score", 0.0)
 
-            logger.info(f"Document grading: relevance_score={state['relevance_score']:.4f}")
+                # Normalize RRF score to 0-1 range for threshold comparison
+                # Max possible RRF score = 1/k + 1/k = 2/k (when doc ranks #1 in both searches)
+                rrf_k = 60  # Must match the k value used in _rrf_fusion
+                max_possible_rrf = 2.0 / rrf_k
+                normalized_rrf = (raw_rrf_score / max_possible_rrf) if max_possible_rrf > 0 else 0.0
+
+                # Clamp to 0-1 range
+                state["relevance_score"] = max(0.0, min(1.0, normalized_rrf))
+
+                logger.info(
+                    f"Document grading: raw_rrf={raw_rrf_score:.4f}, normalized_relevance={state['relevance_score']:.4f}"
+                )
 
         return state
 
