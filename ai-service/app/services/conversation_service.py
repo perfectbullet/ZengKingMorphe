@@ -7,14 +7,14 @@ This module implements a state-based conversation workflow using LangGraph, supp
 - Dual-LLM architecture (local Ollama + remote OpenAI-style API)
 - Streaming responses with performance monitoring
 
-Workflow Graph (17 nodes):
+Workflow Graph (16 nodes):
     load_employee_config → load_session_context → input_validation
         → classify_query_type
         → [conditional: greeting?] → generate_answer
         → [conditional: realtime?] → web_search
         → [conditional: normal?] → evaluate_complexity → rewrite_query → match_faq
         → [conditional: FAQ matched?] → generate_answer OR intent_recognition
-        → knowledge_retrieval → grade_documents → rerank_documents → compress_context
+        → knowledge_retrieval → rerank_documents → compress_context
         → [conditional: low relevance?] → web_search OR generate_answer
         → generate_answer → verify_answer → save_conversation → END
 """
@@ -265,7 +265,7 @@ class ConversationWorkflow:
         """
         graph = StateGraph(ConversationState)
 
-        # Add all 17 workflow nodes (delegated to nodes container)
+        # Add all 16 workflow nodes (delegated to nodes container)
         graph.add_node("load_employee_config", self.nodes.load_employee_config)
         graph.add_node("load_session_context", self.nodes.load_session_context)
         graph.add_node("input_validation", self.nodes.validate_input)
@@ -275,7 +275,6 @@ class ConversationWorkflow:
         graph.add_node("match_faq", self.nodes.match_faq)
         graph.add_node("intent_recognition", self.nodes.recognize_intent)
         graph.add_node("knowledge_retrieval", self.nodes.knowledge_retrieval)
-        graph.add_node("grade_documents", self.nodes.grade_documents)
         graph.add_node("rerank_documents", self.nodes.rerank_documents)
         graph.add_node("compress_context", self.nodes.compress_context)
         graph.add_node("web_search", self.nodes.web_search)
@@ -320,8 +319,7 @@ class ConversationWorkflow:
         graph.add_edge("intent_recognition", "knowledge_retrieval")
 
         # RAG pipeline edges
-        graph.add_edge("knowledge_retrieval", "grade_documents")
-        graph.add_edge("grade_documents", "rerank_documents")
+        graph.add_edge("knowledge_retrieval", "rerank_documents")
         graph.add_edge("rerank_documents", "compress_context")
 
         # Conditional routing after context compression

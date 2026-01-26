@@ -1,8 +1,15 @@
 """
 Test Ollama embedding integration.
 Validates that Ollama embeddings work correctly with the configured model.
+
+Usage:
+    python tests/test_ollama_embedding.py
+    python tests/test_ollama_embedding.py --url http://192.168.8.233:11434
+    python tests/test_ollama_embedding.py --max-tokens 1024
+    python tests/test_ollama_embedding.py --url http://192.168.8.233:11434 --max-tokens 1024
 """
 import sys
+import argparse
 from pathlib import Path
 
 # Add parent directory to path
@@ -53,18 +60,18 @@ def test_ollama_config():
     return True
 
 
-def test_ollama_embeddings():
+def test_ollama_embeddings(ollama_url: str = None, max_tokens: int = 512):
     """Test Ollama embeddings functionality."""
     print_separator()
     print("🧪 测试Ollama Embedding功能")
     print_separator()
-    
+
     try:
         # Create embedder instance
         embedder = OllamaEmbeddings(
             model=settings.embedding_ollama_model,
-            base_url=settings.ollama_base_url,
-            max_tokens=512
+            base_url=ollama_url if ollama_url else settings.ollama_base_url,
+            max_tokens=max_tokens
         )
         
         print(f"\n创建Embedder实例:")
@@ -130,17 +137,17 @@ def test_ollama_embeddings():
         return False
 
 
-def test_ollama_connection():
+def test_ollama_connection(ollama_url: str = None):
     """Test connection to Ollama server."""
     print_separator()
     print("🔌 测试Ollama服务连接")
     print_separator()
-    
+
     import requests
-    
+
     try:
         # Test Ollama API
-        url = f"{settings.ollama_base_url}/api/tags"
+        url = f"{ollama_url}/api/tags" if ollama_url else f"{settings.ollama_base_url}/api/tags"
         print(f"\n连接测试:")
         print(f"  URL: {url}")
         
@@ -181,37 +188,51 @@ def test_ollama_connection():
 
 def main():
     """Run all tests."""
+    parser = argparse.ArgumentParser(description="测试 Ollama Embedding")
+    parser.add_argument("--url", help="临时覆盖 Ollama 地址")
+    parser.add_argument("--max-tokens", type=int, default=512, help="临时设置 max_tokens")
+    args = parser.parse_args()
+
+    # 应用临时参数
+    ollama_url = args.url or settings.ollama_base_url
+    max_tokens = args.max_tokens
+
     print_separator("=")
     print("🚀 Ollama Embedding集成测试")
     print_separator("=")
-    
+
+    if args.url:
+        print(f"\n📝 临时参数:")
+        print(f"  URL: {ollama_url}")
+        print(f"  Max tokens: {max_tokens}")
+
     # Run tests
     test1_passed = test_ollama_config()
-    
+
     if not test1_passed:
         print("\n⚠️ 配置验证失败，跳过后续测试")
         print_separator("=")
         return False
-    
-    test2_passed = test_ollama_connection()
+
+    test2_passed = test_ollama_connection(ollama_url)
     test3_passed = False
-    
+
     if test2_passed:
-        test3_passed = test_ollama_embeddings()
+        test3_passed = test_ollama_embeddings(ollama_url, max_tokens)
     else:
         print("\n⚠️ 服务连接失败，跳过功能测试")
-    
+
     # Summary
     print_separator("=")
     print("📊 测试总结")
     print_separator("=")
-    
+
     print(f"\n配置验证: {'✅ 通过' if test1_passed else '❌ 失败'}")
     print(f"服务连接: {'✅ 通过' if test2_passed else '❌ 失败'}")
     print(f"功能测试: {'✅ 通过' if test3_passed else '❌ 跳过/失败'}")
-    
+
     all_passed = test1_passed and test2_passed and test3_passed
-    
+
     if all_passed:
         print("\n🎉 所有测试通过！Ollama embedding已就绪")
         print("\n📌 后续步骤:")
@@ -222,12 +243,12 @@ def main():
         print("\n⚠️ 部分测试失败")
         if not test2_passed:
             print("\n故障排查:")
-            print(f"  1. 确认Ollama服务运行: curl {settings.ollama_base_url}/api/tags")
+            print(f"  1. 确认Ollama服务运行: curl {ollama_url}/api/tags")
             print(f"  2. 确认模型已拉取: ollama list")
             print(f"  3. 如需拉取模型: ollama pull {settings.embedding_ollama_model}")
-    
+
     print_separator("=")
-    
+
     return all_passed
 
 

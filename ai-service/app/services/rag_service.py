@@ -21,13 +21,13 @@ class RAGRetrieval:
     ) -> List[Dict[str, Any]]:
         """
         Search for relevant documents using RAG.
-        
+
         Args:
             query: Search query
             kb_ids: Knowledge base IDs to search (optional)
             top_k: Number of results to return
             use_hybrid: Whether to use hybrid search (vector + keyword)
-            
+
         Returns:
             List of relevant documents with scores
         """
@@ -36,11 +36,11 @@ class RAGRetrieval:
                 return await self._hybrid_search(query, kb_ids, top_k)
             else:
                 return await self._vector_search(query, kb_ids, top_k)
-                
+
         except Exception as e:
             logger.error(f"RAG search failed: query={query}, error={str(e)}", exc_info=True)
             raise
-    
+
     async def _vector_search(
         self,
         query: str,
@@ -79,16 +79,21 @@ class RAGRetrieval:
                     distance = results["distances"][0][i] if results.get("distances") else 1.0
                     # Convert distance to similarity score (0-1)
                     similarity = max(0.0, 1.0 - distance)
-                    
+
                     metadata = results["metadatas"][0][i] if results.get("metadatas") else {}
-                    
+
                     documents.append({
                         "content": doc_text,
                         "score": similarity,
                         "doc_id": metadata.get("doc_id"),
                         "kb_id": metadata.get("kb_id"),
                         "chunk_index": metadata.get("chunk_index"),
-                        "source": "vector"
+                        "source": "vector",
+                        # MinerU结构化元数据
+                        "page_idx": metadata.get("page_idx"),
+                        "has_images": metadata.get("has_images", False),
+                        "block_types": metadata.get("block_types", "").split("|") if metadata.get("block_types") else [],
+                        "structure_level": metadata.get("structure_level", 0),
                     })
             
             logger.info(f"Vector search completed: query={query[:100]}, results_count={len(documents)}")
@@ -153,17 +158,26 @@ class RAGRetrieval:
                 for hit in results["hits"]["hits"]:
                     source = hit["_source"]
                     score = hit["_score"]
-                    
+
                     # Normalize score to 0-1 range (approximate)
                     normalized_score = min(1.0, score / 10.0)
-                    
+
                     documents.append({
                         "content": source.get("content", ""),
                         "score": normalized_score,
                         "doc_id": source.get("doc_id"),
                         "kb_id": source.get("kb_id"),
                         "chunk_index": source.get("chunk_index"),
-                        "source": "keyword"
+                        "source": "keyword",
+                        # MinerU结构化字段（从ES获取完整数据）
+                        "page_idx": source.get("page_idx"),
+                        "page_indices": source.get("page_indices", []),
+                        "block_types": source.get("block_types", []),
+                        "image_count": source.get("image_count", 0),
+                        "image_references": source.get("image_references", []),
+                        "image_captions": source.get("image_captions", []),
+                        "title_path": source.get("title_path", []),
+                        "structure_level": source.get("structure_level", 0),
                     })
             
             logger.info(f"Keyword search completed: query={query[:100]}, results_count={len(documents)}")
