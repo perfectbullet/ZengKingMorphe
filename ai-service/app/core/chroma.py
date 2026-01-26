@@ -52,7 +52,7 @@ class ChromaDB:
                     model=settings.embedding_model,
                     api_key=settings.embedding_api_key,
                     base_url=settings.siliconflow_embedding_api_url,
-                    max_tokens=512  # BGE model limit
+                    max_tokens=8192  # BGE-M3 supports 8192 tokens
                 )
                 logger.info(
                     f"Using SiliconFlow embeddings: model={settings.embedding_model}, base_url={settings.siliconflow_embedding_api_url}, has_api_key={bool(settings.siliconflow_api_key or settings.embedding_api_key)}"
@@ -61,7 +61,7 @@ class ChromaDB:
                 embedder = OllamaEmbeddings(
                     model=settings.embedding_ollama_model,
                     base_url=settings.ollama_base_url,
-                    max_tokens=512  # BGE model limit
+                    max_tokens=8192  # BGE-M3 supports 8192 tokens
                 )
                 logger.info(
                     f"Using Ollama embeddings: model={settings.embedding_ollama_model}, base_url={settings.ollama_base_url}"

@@ -203,7 +203,7 @@ class ElasticSearchDB:
     ) -> None:
         """
         Delete a document.
-        
+
         Args:
             index: Index name (faq/doc)
             doc_id: Document ID
@@ -218,6 +218,33 @@ class ElasticSearchDB:
         except Exception as e:
             logger.error(f"Failed to delete document: index={index}, doc_id={doc_id}, error={str(e)}")
 
+            raise
+
+    async def delete_by_query(
+        self,
+        index: str,
+        body: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Delete documents by query.
+
+        Args:
+            index: Index name (faq/doc)
+            body: Delete query body
+
+        Returns:
+            Delete result
+        """
+        try:
+            index_name = self.faq_index if index == "faq" else self.doc_index
+            result = await self.client.delete_by_query(
+                index=index_name,
+                body=body
+            )
+            logger.info(f"Deleted by query: index={index_name}, deleted={result.get('deleted', 0)}")
+            return result
+        except Exception as e:
+            logger.error(f"Failed to delete by query: index={index}, error={str(e)}")
             raise
 
 

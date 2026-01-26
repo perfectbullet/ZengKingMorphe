@@ -399,8 +399,12 @@ class MinerUAwareChunker:
                 if img_url in image_captions:
                     captions.append(image_captions[img_url])
 
+        # 使用 UUID 确保 chunk_id 全局唯一，同时保留可读性
+        unique_id = uuid.uuid4().hex[:8]
+        chunk_id = f"{doc_id}_chunk_{chunk_index}_{unique_id}"
+
         return MultiModalChunk(
-            chunk_id=f"{doc_id}_chunk_{chunk_index}",
+            chunk_id=chunk_id,
             doc_id=doc_id,
             kb_id=kb_id,
             content=content,

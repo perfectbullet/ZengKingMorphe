@@ -43,7 +43,7 @@ from app.services.mineru_json_parser import MinerUJsonParser
 from app.services.mineru_aware_chunking import MinerUAwareChunker, ChunkingStrategy, MultiModalChunk
 from app.core.chroma import chroma_db
 from app.core.elasticsearch import es_db
-from app.core.database import get_database
+from app.core.database import get_database, mongodb
 from app.core.config import settings
 from app.services.rag_service import RAGRetrieval
 from app.utils.embeddings import OllamaEmbeddings, get_embedding
@@ -135,6 +135,26 @@ class RAGE2ETester:
         print(f"  Strategy: {self.strategy}")
         if self.embedding_url:
             print(f"  Embedding URL: {self.embedding_url}")
+
+        # Initialize database connection
+        print(f"\n🔌 Connecting to databases...")
+        try:
+            await mongodb.connect()
+            print(f"  ✅ MongoDB connected")
+        except Exception as e:
+            print(f"  ⚠️ MongoDB connection failed: {e}")
+
+        try:
+            await chroma_db.connect()
+            print(f"  ✅ ChromaDB connected")
+        except Exception as e:
+            print(f"  ⚠️ ChromaDB connection failed: {e}")
+
+        try:
+            await es_db.connect()
+            print(f"  ✅ ElasticSearch connected")
+        except Exception as e:
+            print(f"  ⚠️ ElasticSearch connection failed: {e}")
 
         # Ensure knowledge base exists
         await self.ensure_kb_exists()
@@ -468,26 +488,32 @@ class RAGE2ETester:
 
         # Step 1: Parse
         if not await self.step1_parse_json():
+            await self._cleanup_databases()
             return False
 
         # Step 2: Chunk
         if not await self.step2_chunk_document():
+            await self._cleanup_databases()
             return False
 
         if dry_run:
             print("\n⚠️ Dry run mode: skipping storage and retrieval")
+            await self._cleanup_databases()
             return True
 
         # Step 3: Clear test data
         if not await self.step3_clear_test_data():
+            await self._cleanup_databases()
             return False
 
         # Step 4: Store and vectorize
         if not await self.step4_store_and_vectorize():
+            await self._cleanup_databases()
             return False
 
         # Step 5: Retrieve and score
         if not await self.step5_retrieve_and_score():
+            await self._cleanup_databases()
             return False
 
         # Cleanup if requested
@@ -502,7 +528,17 @@ class RAGE2ETester:
         print(f"  KB Name: {self.kb_name}")
         print(f"  Chunks created: {len(self.chunks)}")
 
+        # Disconnect databases
+        await self._cleanup_databases()
+
         return True
+
+    async def _cleanup_databases(self):
+        """Disconnect from databases."""
+        try:
+            await mongodb.disconnect()
+        except Exception:
+            pass
 
 
 async def main():
