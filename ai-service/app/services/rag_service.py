@@ -1,23 +1,29 @@
 """
-RAG retrieval service with hybrid search.
+RAG retrieval service with hybrid search and reranking.
 """
 from typing import List, Dict, Any, Optional
 from app.core.logging import get_logger
 from app.core.chroma import chroma_db
 from app.core.elasticsearch import es_db
+from app.core.config import settings
 
 logger = get_logger(__name__)
 
 
 class RAGRetrieval:
-    """RAG retrieval service with hybrid search (vector + keyword)."""
-    
+    """RAG retrieval service with hybrid search (vector + keyword) and optional reranking."""
+
+    def __init__(self):
+        """Initialize RAGRetrieval."""
+        self._reranker = None
+
     async def search(
         self,
         query: str,
         kb_ids: Optional[List[str]] = None,
         top_k: int = 5,
-        use_hybrid: bool = True
+        use_hybrid: bool = True,
+        enable_rerank: Optional[bool] = None
     ) -> List[Dict[str, Any]]:
         """
         Search for relevant documents using RAG.
@@ -27,34 +33,104 @@ class RAGRetrieval:
             kb_ids: Knowledge base IDs to search (optional)
             top_k: Number of results to return
             use_hybrid: Whether to use hybrid search (vector + keyword)
+            enable_rerank: Whether to enable reranking (None = use settings.rerank_enabled)
 
         Returns:
-            List of relevant documents with scores
+            List of relevant documents with rerank_score
         """
+        # Determine if reranking is enabled
+        if enable_rerank is None:
+            enable_rerank = settings.rerank_enabled
+
         try:
             if use_hybrid:
-                return await self._hybrid_search(query, kb_ids, top_k)
+                return await self._hybrid_search(query, kb_ids, top_k, enable_rerank)
             else:
-                return await self._vector_search(query, kb_ids, top_k)
+                return await self._vector_search(query, kb_ids, top_k, enable_rerank)
 
         except Exception as e:
             logger.error(f"RAG search failed: query={query}, error={str(e)}", exc_info=True)
             raise
 
+    async def _rerank(
+        self,
+        query: str,
+        documents: List[Dict[str, Any]],
+        top_k: int
+    ) -> List[Dict[str, Any]]:
+        """
+        Rerank documents using the configured reranker.
+
+        Args:
+            query: User query
+            documents: List of retrieved documents with metadata
+            top_k: Number of results to return after reranking
+
+        Returns:
+            Reranked list of documents with rerank_score added
+        """
+        if not documents:
+            return []
+
+        try:
+            from app.services.reranker_service import get_reranker
+
+            # Get reranker instance
+            reranker = get_reranker(reranker_type=settings.reranker_type)
+
+            # Extract document contents for reranking
+            docs_to_rerank = [doc.get("content", "") for doc in documents]
+
+            # Perform reranking
+            rerank_results = await reranker.rerank(query, docs_to_rerank, top_k=len(documents))
+
+            # Reorder documents based on reranking results
+            reranked_docs = []
+            for idx, score in rerank_results:
+                doc = documents[idx].copy()
+                doc["rerank_score"] = float(score)
+                doc["score"] = float(score)  # Unify score to rerank_score
+                # Remove old score fields to keep output clean
+                doc.pop("rrf_score", None)
+                doc.pop("vector_score", None)
+                doc.pop("vector_rank", None)
+                doc.pop("keyword_score", None)
+                doc.pop("keyword_rank", None)
+                reranked_docs.append(doc)
+
+            logger.info(
+                "Documents reranked",
+                original_count=len(documents),
+                reranked_count=len(reranked_docs),
+                top_scores=[f"{d['rerank_score']:.3f}" for d in reranked_docs[:3]]
+            )
+
+            return reranked_docs[:top_k]
+
+        except Exception as e:
+            logger.error(f"Reranking failed: query={query}, error={str(e)}", exc_info=True)
+            # Fallback: return original documents with scores normalized
+            for doc in documents:
+                if "rerank_score" not in doc:
+                    doc["rerank_score"] = doc.get("score", 0.0)
+            return documents[:top_k]
+
     async def _vector_search(
         self,
         query: str,
         kb_ids: Optional[List[str]],
-        top_k: int
+        top_k: int,
+        enable_rerank: bool = False
     ) -> List[Dict[str, Any]]:
         """
         Vector-based semantic search using Chroma.
-        
+
         Args:
             query: Search query
             kb_ids: Knowledge base IDs filter
             top_k: Number of results
-            
+            enable_rerank: Whether to rerank results
+
         Returns:
             Search results
         """
@@ -97,9 +173,13 @@ class RAGRetrieval:
                     })
             
             logger.info(f"Vector search completed: query={query[:100]}, results_count={len(documents)}")
-            
+
+            # Rerank if enabled
+            if enable_rerank and documents:
+                documents = await self._rerank(query, documents, top_k)
+
             return documents
-            
+
         except Exception as e:
             logger.error(f"Vector search failed: query={query}, error={str(e)}", exc_info=True)
             return []
@@ -192,34 +272,43 @@ class RAGRetrieval:
         self,
         query: str,
         kb_ids: Optional[List[str]],
-        top_k: int
+        top_k: int,
+        enable_rerank: bool = False
     ) -> List[Dict[str, Any]]:
         """
         Hybrid search combining vector and keyword search using RRF.
-        
+
         Args:
             query: Search query
             kb_ids: Knowledge base IDs filter
             top_k: Number of results
-            
+            enable_rerank: Whether to rerank results
+
         Returns:
-            Fused search results
+            Fused and optionally reranked search results
         """
         try:
-            # Get results from both searches
-            vector_results = await self._vector_search(query, kb_ids, top_k * 2)
-            keyword_results = await self._keyword_search(query, kb_ids, top_k * 2)
-            
+            # Fetch more results if reranking is enabled
+            fetch_count = top_k * 2 if enable_rerank else top_k
+
+            # Get results from both searches (without reranking during fetch)
+            vector_results = await self._vector_search(query, kb_ids, fetch_count, enable_rerank=False)
+            keyword_results = await self._keyword_search(query, kb_ids, fetch_count)
+
             # Apply Reciprocal Rank Fusion (RRF)
             fused_results = self._rrf_fusion(vector_results, keyword_results, k=60)
-            
+
+            # Rerank if enabled
+            if enable_rerank and fused_results:
+                fused_results = await self._rerank(query, fused_results, top_k)
+
             # Return top-k results
             return fused_results[:top_k]
-            
+
         except Exception as e:
             logger.error(f"Hybrid search failed: query={query}, error={str(e)}", exc_info=True)
             # Fallback to vector search only
-            return await self._vector_search(query, kb_ids, top_k)
+            return await self._vector_search(query, kb_ids, top_k, enable_rerank)
     
     def _create_doc_fusion_entry(
         self,

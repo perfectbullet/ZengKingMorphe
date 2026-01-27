@@ -14,7 +14,6 @@ graph TD;
 	match_faq(match_faq)
 	intent_recognition(intent_recognition)
 	knowledge_retrieval(knowledge_retrieval)
-	grade_documents(grade_documents)
 	rerank_documents(rerank_documents)
 	compress_context(compress_context)
 	web_search(web_search)
@@ -30,10 +29,9 @@ graph TD;
 	compress_context -.-> web_search;
 	evaluate_complexity --> rewrite_query;
 	generate_answer --> verify_answer;
-	grade_documents --> rerank_documents;
 	input_validation --> classify_query_type;
 	intent_recognition --> knowledge_retrieval;
-	knowledge_retrieval --> grade_documents;
+	knowledge_retrieval --> rerank_documents;
 	load_employee_config --> load_session_context;
 	load_session_context --> input_validation;
 	match_faq -.-> generate_answer;

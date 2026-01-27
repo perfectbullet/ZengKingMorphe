@@ -275,7 +275,7 @@ class ConversationWorkflow:
         graph.add_node("match_faq", self.nodes.match_faq)
         graph.add_node("intent_recognition", self.nodes.recognize_intent)
         graph.add_node("knowledge_retrieval", self.nodes.knowledge_retrieval)
-        graph.add_node("rerank_documents", self.nodes.rerank_documents)
+        graph.add_node("grade_documents", self.nodes.grade_documents)
         graph.add_node("compress_context", self.nodes.compress_context)
         graph.add_node("web_search", self.nodes.web_search)
         graph.add_node("generate_answer", self.nodes.generate_answer)
@@ -319,8 +319,8 @@ class ConversationWorkflow:
         graph.add_edge("intent_recognition", "knowledge_retrieval")
 
         # RAG pipeline edges
-        graph.add_edge("knowledge_retrieval", "rerank_documents")
-        graph.add_edge("rerank_documents", "compress_context")
+        graph.add_edge("knowledge_retrieval", "grade_documents")
+        graph.add_edge("grade_documents", "compress_context")
 
         # Conditional routing after context compression
         graph.add_conditional_edges(

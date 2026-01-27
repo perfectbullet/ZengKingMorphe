@@ -95,7 +95,7 @@ class RAGE2ETester:
         json_file: str,
         kb_id: str = "kb_5f2a02bd5dfe",  # 使用用户指定的知识库ID
         kb_name: str = "首饰设计",           # 知识库名称
-        chunk_size: int = 1000,
+        chunk_size: int = 512,  # 默认 512 字符（适配 bge-large-zh-v1.5-2k 的 2048 tokens）
         strategy: str = "hybrid",
         embedding_url: Optional[str] = None,
         clean_after: bool = False,
@@ -145,7 +145,7 @@ class RAGE2ETester:
             print(f"  ⚠️ MongoDB connection failed: {e}")
 
         try:
-            await chroma_db.connect()
+            chroma_db.connect()  # Not async
             print(f"  ✅ ChromaDB connected")
         except Exception as e:
             print(f"  ⚠️ ChromaDB connection failed: {e}")
@@ -283,34 +283,35 @@ class RAGE2ETester:
             return False
 
     async def step3_clear_test_data(self) -> bool:
-        """Step 3: Clear existing test data."""
+        """Step 3: Clear existing test data by kb_id (before test)."""
         print("\n" + "-" * 80)
-        print("🧹 Step 3: Clearing Test Data")
+        print("🧹 Step 3: Clearing Existing Data (by kb_id)")
         print("-" * 80)
 
         try:
             db = await get_database()
 
-            # Delete from MongoDB
-            doc_result = await db.documents.delete_many({"doc_id": self.test_doc_id})
-            chunk_result = await db.document_chunks.delete_many({"doc_id": self.test_doc_id})
+            # Delete from MongoDB by kb_id
+            doc_result = await db.documents.delete_many({"kb_id": self.kb_id})
+            chunk_result = await db.document_chunks.delete_many({"kb_id": self.kb_id})
             print(f"  ✅ MongoDB: deleted {doc_result.deleted_count} docs, {chunk_result.deleted_count} chunks")
 
-            # Delete from ChromaDB
+            # Delete from ChromaDB by kb_id
             if chroma_db.client:
                 try:
-                    chroma_db.doc_collection.delete(where={"doc_id": self.test_doc_id})
-                    print(f"  ✅ ChromaDB: deleted test data")
+                    # 使用 kb_id 过滤删除
+                    chroma_db.doc_collection.delete(where={"kb_id": self.kb_id})
+                    print(f"  ✅ ChromaDB: deleted data for kb_id={self.kb_id}")
                 except Exception as e:
                     print(f"  ⚠️ ChromaDB delete: {e}")
 
-            # Delete from ElasticSearch
+            # Delete from ElasticSearch by kb_id
             try:
                 await es_db.delete_by_query(
                     index="doc",
-                    body={"query": {"term": {"doc_id": self.test_doc_id}}},
+                    body={"query": {"term": {"kb_id": self.kb_id}}},
                 )
-                print(f"  ✅ ElasticSearch: deleted test data")
+                print(f"  ✅ ElasticSearch: deleted data for kb_id={self.kb_id}")
             except Exception as e:
                 print(f"  ⚠️ ElasticSearch delete: {e}")
 
@@ -332,7 +333,7 @@ class RAGE2ETester:
                 embedder = OllamaEmbeddings(
                     model=settings.embedding_ollama_model,
                     base_url=self.embedding_url,
-                    max_tokens=8192,
+                    max_tokens=2048,  # bge-large-zh-v1.5-2k: 2048 tokens
                 )
             else:
                 embedder = get_embedding()
@@ -363,6 +364,15 @@ class RAGE2ETester:
                 })
 
             print(f"  📝 Vectorizing {len(chunk_texts)} chunks...")
+
+            # Test single embedding first to validate model
+            print(f"  📝 Testing single embedding...")
+            try:
+                test_embedding = embedder.embed_query("测试文本")
+                print(f"  ✅ Test embedding dimension: {len(test_embedding)}")
+            except Exception as e:
+                print(f"  ❌ Test embedding failed: {e}")
+                return False
 
             # Store in ChromaDB
             if chroma_db.client:
@@ -439,7 +449,7 @@ class RAGE2ETester:
                 results = await rag.search(
                     query=test_case['query'],
                     kb_ids=[self.kb_id],
-                    top_k=5,
+                    top_k=10,
                 )
 
                 print(f"     Retrieved: {len(results)} results")
@@ -548,19 +558,31 @@ async def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
+  # 完整测试流程
   %(prog)s --json input.json
+
+  # 指定知识库
   %(prog)s --json input.json --kb-id kb_5f2a02bd5dfe --kb-name "首饰设计"
+
+  # 只清理数据（按 kb_id）
+  %(prog)s --clean-only --kb-id kb_5f2a02bd5dfe
+
+  # 只检索查询（使用预定义查询）
+  %(prog)s --query-only --kb-id kb_5f2a02bd5dfe
+
+  # 自定义查询
+  %(prog)s --query-only --kb-id kb_5f2a02bd5dfe --query "什么是珐琅"
+
+  # 其他选项
   %(prog)s --json input.json --chunk-size 1000 --strategy hybrid
   %(prog)s --json input.json --dry-run
   %(prog)s --json input.json --clean-after
-  %(prog)s --json input.json --embedding-url http://192.168.8.233:11434
         """
     )
 
     parser.add_argument(
         "--json",
-        required=True,
-        help="MinerU JSON file path"
+        help="MinerU JSON file path (完整测试模式必需)"
     )
     parser.add_argument(
         "--chunk-size",
@@ -589,6 +611,41 @@ Examples:
         help="Clean test data after running"
     )
     parser.add_argument(
+        "--clean-only",
+        action="store_true",
+        help="Only clean data by kb_id, then exit"
+    )
+    parser.add_argument(
+        "--query-only",
+        action="store_true",
+        help="Only run retrieval queries, skip parsing/chunking/storage"
+    )
+    parser.add_argument(
+        "--sample-only",
+        action="store_true",
+        help="Show sample data from databases by kb_id"
+    )
+    parser.add_argument(
+        "--query",
+        help="Custom query string for --query-only mode"
+    )
+    parser.add_argument(
+        "--top-k",
+        type=int,
+        default=10,
+        help="Number of results to retrieve (default: 10)"
+    )
+    parser.add_argument(
+        "--rerank",
+        action="store_true",
+        help="Enable reranking for retrieval queries"
+    )
+    parser.add_argument(
+        "--no-rerank",
+        action="store_true",
+        help="Disable reranking for retrieval queries"
+    )
+    parser.add_argument(
         "--output",
         "-o",
         help="Save results to JSON file"
@@ -605,6 +662,252 @@ Examples:
     )
 
     args = parser.parse_args()
+
+    # --clean-only 模式：只清理数据
+    if args.clean_only:
+        print("\n" + "=" * 80)
+        print("🧹 Clean Only Mode")
+        print("=" * 80)
+        print(f"KB ID: {args.kb_id}")
+
+        # 连接数据库
+        try:
+            await mongodb.connect()
+            print(f"  ✅ MongoDB connected")
+        except Exception as e:
+            print(f"  ⚠️ MongoDB connection failed: {e}")
+
+        try:
+            chroma_db.connect()
+            print(f"  ✅ ChromaDB connected")
+        except Exception as e:
+            print(f"  ⚠️ ChromaDB connection failed: {e}")
+
+        try:
+            await es_db.connect()
+            print(f"  ✅ ElasticSearch connected")
+        except Exception as e:
+            print(f"  ⚠️ ElasticSearch connection failed: {e}")
+
+        # 执行清理
+        print("\n" + "-" * 80)
+        print("🧹 Cleaning Data (by kb_id)")
+        print("-" * 80)
+
+        try:
+            db = await get_database()
+
+            # MongoDB
+            doc_result = await db.documents.delete_many({"kb_id": args.kb_id})
+            chunk_result = await db.document_chunks.delete_many({"kb_id": args.kb_id})
+            print(f"  ✅ MongoDB: deleted {doc_result.deleted_count} docs, {chunk_result.deleted_count} chunks")
+
+            # ChromaDB
+            if chroma_db.client:
+                try:
+                    chroma_db.doc_collection.delete(where={"kb_id": args.kb_id})
+                    print(f"  ✅ ChromaDB: deleted data for kb_id={args.kb_id}")
+                except Exception as e:
+                    print(f"  ⚠️ ChromaDB delete: {e}")
+
+            # ElasticSearch
+            try:
+                await es_db.delete_by_query(
+                    index="doc",
+                    body={"query": {"term": {"kb_id": args.kb_id}}},
+                )
+                print(f"  ✅ ElasticSearch: deleted data for kb_id={args.kb_id}")
+            except Exception as e:
+                print(f"  ⚠️ ElasticSearch delete: {e}")
+
+            print("\n✅ Clean completed!")
+            await mongodb.disconnect()
+            sys.exit(0)
+
+        except Exception as e:
+            print(f"\n❌ Clean failed: {e}")
+            import traceback
+            traceback.print_exc()
+            sys.exit(1)
+
+    # --query-only 模式：只检索查询
+    if args.query_only:
+        print("\n" + "=" * 80)
+        print("🔍 Query Only Mode")
+        print("=" * 80)
+        print(f"KB ID: {args.kb_id}")
+
+        # 确定 rerank 设置
+        rerank_enabled = args.rerank
+        if args.no_rerank:
+            rerank_enabled = False
+
+        rerank_status = "启用" if rerank_enabled else "禁用"
+        print(f"Rerank: {rerank_status}")
+
+        # 连接数据库
+        try:
+            await mongodb.connect()
+            chroma_db.connect()
+            await es_db.connect()
+            print(f"  ✅ All databases connected")
+        except Exception as e:
+            print(f"  ⚠️ Database connection warning: {e}")
+
+        # 确定查询列表
+        if args.query:
+            queries = [{"type": "自定义", "query": args.query, "description": "用户自定义查询"}]
+        else:
+            queries = TEST_QUERIES
+
+        print(f"\n📝 Running {len(queries)} queries...\n")
+
+        try:
+            for test_case in queries:
+                print("-" * 80)
+                print(f"📝 Query Type: {test_case['type']}")
+                print(f"   Query: {test_case['query']}")
+
+                rag = RAGRetrieval()
+                results = await rag.search(
+                    query=test_case['query'],
+                    kb_ids=[args.kb_id],
+                    top_k=args.top_k,
+                    enable_rerank=rerank_enabled if args.rerank or args.no_rerank else None,
+                )
+
+                print(f"   Retrieved: {len(results)} results\n")
+
+                # 显示所有结果
+                for i, doc in enumerate(results):
+                    content_preview = doc.get('content', '')[:150]
+                    score = doc.get('rrf_score', doc.get('score', 0))
+                    has_images = doc.get('image_count', 0) > 0
+                    title_path = doc.get('title_path', [])
+
+                    print(f"   [{i+1}] Score: {score:.4f} | Images: {has_images}")
+                    if title_path:
+                        print(f"       Path: {' > '.join(title_path)}")
+                    print(f"       Content: {content_preview}...")
+                    print()
+
+            await mongodb.disconnect()
+            sys.exit(0)
+
+        except Exception as e:
+            print(f"\n❌ Query failed: {e}")
+            import traceback
+            traceback.print_exc()
+            sys.exit(1)
+
+    # --sample-only 模式：查看样例数据
+    if args.sample_only:
+        print("\n" + "=" * 80)
+        print("📊 Sample Data Mode")
+        print("=" * 80)
+        print(f"KB ID: {args.kb_id}")
+
+        # 连接数据库
+        try:
+            await mongodb.connect()
+            chroma_db.connect()
+            await es_db.connect()
+            print(f"  ✅ All databases connected")
+        except Exception as e:
+            print(f"  ⚠️ Database connection warning: {e}")
+
+        print("\n" + "-" * 80)
+        print("📦 MongoDB Sample Data")
+        print("-" * 80)
+
+        try:
+            db = await get_database()
+
+            # 统计
+            doc_count = await db.documents.count_documents({"kb_id": args.kb_id})
+            chunk_count = await db.document_chunks.count_documents({"kb_id": args.kb_id})
+            print(f"  📄 Documents: {doc_count}")
+            print(f"  📋 Chunks: {chunk_count}")
+
+            # 样例 chunk
+            if chunk_count > 0:
+                sample_chunks = await db.document_chunks.find({"kb_id": args.kb_id}).limit(3).to_list(None)
+                print(f"\n  Sample chunks (first 3):")
+                for i, chunk in enumerate(sample_chunks):
+                    content_preview = chunk.get('content', '')[:200]
+                    print(f"    [{i+1}] chunk_id: {chunk.get('chunk_id')}")
+                    print(f"        doc_id: {chunk.get('doc_id')}")
+                    print(f"        page_idx: {chunk.get('page_idx')}")
+                    print(f"        content: {content_preview}...")
+                    print()
+        except Exception as e:
+            print(f"  ⚠️ MongoDB query failed: {e}")
+
+        print("\n" + "-" * 80)
+        print("📦 ChromaDB Sample Data")
+        print("-" * 80)
+
+        try:
+            if chroma_db.client and chroma_db.doc_collection:
+                count = chroma_db.doc_collection.count()
+                print(f"  📋 Total chunks in collection: {count}")
+
+                # 获取样例
+                results = chroma_db.doc_collection.get(
+                    where={"kb_id": args.kb_id},
+                    limit=3
+                )
+                print(f"  📋 Chunks for kb_id={args.kb_id}: {len(results.get('ids', []))}")
+
+                if results.get('ids'):
+                    print(f"\n  Sample chunks (first 3):")
+                    for i, chunk_id in enumerate(results['ids'][:3]):
+                        doc = results['documents'][i] if i < len(results['documents']) else ""
+                        metadata = results['metadatas'][i] if i < len(results['metadatas']) else {}
+                        print(f"    [{i+1}] id: {chunk_id}")
+                        print(f"        metadata: {metadata}")
+                        print(f"        content: {doc[:200]}...")
+                        print()
+        except Exception as e:
+            print(f"  ⚠️ ChromaDB query failed: {e}")
+
+        print("\n" + "-" * 80)
+        print("📦 ElasticSearch Sample Data")
+        print("-" * 80)
+
+        try:
+            # 统计
+            count_result = await es_db.client.count(index="doc", body={
+                "query": {"term": {"kb_id": args.kb_id}}
+            })
+            print(f"  📋 Documents for kb_id={args.kb_id}: {count_result['count']}")
+
+            # 获取样例
+            search_result = await es_db.client.search(index="doc", body={
+                "query": {"term": {"kb_id": args.kb_id}},
+                "size": 3
+            })
+
+            if search_result['hits']['hits']:
+                print(f"\n  Sample documents (first 3):")
+                for i, hit in enumerate(search_result['hits']['hits']):
+                    source = hit['_source']
+                    print(f"    [{i+1}] id: {hit['_id']}")
+                    print(f"        chunk_id: {source.get('chunk_id')}")
+                    print(f"        page_idx: {source.get('page_idx')}")
+                    content = source.get('content', '')[:200]
+                    print(f"        content: {content}...")
+                    print()
+        except Exception as e:
+            print(f"  ⚠️ ElasticSearch query failed: {e}")
+
+        await mongodb.disconnect()
+        sys.exit(0)
+
+    # 完整测试模式（需要 json 文件）
+    if not args.json:
+        print(f"❌ Error: --json is required for full test mode", file=sys.stderr)
+        sys.exit(1)
 
     # Check input file
     json_path = Path(args.json)

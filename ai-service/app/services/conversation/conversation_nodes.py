@@ -35,7 +35,6 @@ from app.services.conversation.conversation_helpers import (
     heuristic_complexity
 )
 from app.services.rag_service import rag_retrieval
-from app.services.reranker_service import get_reranker, NoOpReranker
 
 logger = get_logger(__name__)
 
@@ -630,12 +629,13 @@ class ConversationNodes:
                     query_rewritten=state.get("query_rewritten", False)
                 )
 
-                # Perform RAG search
+                # Perform RAG search with reranking enabled
                 results = await rag_retrieval.search(
                     query=search_query,
                     kb_ids=kb_ids if kb_ids else None,
                     top_k=5,
-                    use_hybrid=True
+                    use_hybrid=True,
+                    enable_rerank=True
                 )
 
                 state["retrieved_docs"] = results
@@ -708,29 +708,26 @@ class ConversationNodes:
 
         return state
 
-    async def rerank_documents(self, state: ConversationState) -> ConversationState:
+    async def grade_documents(self, state: ConversationState) -> ConversationState:
         """
-        Document Reranking - Reorder retrieved docs by semantic relevance.
+        Document Grading - Calculate relevance score from retrieved documents.
 
-        Strategy (Hierarchical Retrieval):
-        - Recall layer: Hybrid search returns Top-N documents (N=50-200)
-        - Rerank layer: Use BGE-Reranker to refine to Top-K (K=3-10)
-        - Uses cross-encoder model for accurate relevance scoring
+        Note: Reranking is now done in RAGRetrieval.search(). This node only
+        calculates relevance_score to determine if web search fallback is needed.
 
-        Also calculates relevance_score to determine if web search fallback is needed.
-
-        Configuration: RERANK_ENABLED (default: True)
+        The relevance_score is derived from the top document's rerank_score
+        (computed by RAGRetrieval using Ollama/BGE reranker).
 
         Args:
             state: Current conversation state
 
         Returns:
-            Updated state with retrieved_docs reordered and relevance_score populated
+            Updated state with relevance_score populated
         """
-        async with time_node("rerank_documents", state):
+        async with time_node("grade_documents", state):
             docs = state.get("retrieved_docs", [])
 
-            # Calculate relevance_score from top document's rerank_score or rrf_score
+            # Calculate relevance_score from top document's rerank_score
             if not docs:
                 state["relevance_score"] = 0.0
             else:
@@ -738,93 +735,18 @@ class ConversationNodes:
                 rerank_score = top_doc.get("rerank_score")
 
                 if rerank_score is not None:
-                    # Use BGE Reranker score (already normalized 0-1+)
+                    # Use rerank_score (already normalized 0-1)
                     state["relevance_score"] = max(0.0, min(1.0, float(rerank_score)))
                 else:
-                    # Fallback: Normalize RRF score to 0-1 range
-                    raw_rrf_score = top_doc.get("rrf_score", 0.0)
-                    rrf_k = 60
-                    max_possible_rrf = 2.0 / rrf_k
-                    normalized_rrf = (raw_rrf_score / max_possible_rrf) if max_possible_rrf > 0 else 0.0
-                    state["relevance_score"] = max(0.0, min(1.0, normalized_rrf))
+                    # Fallback: use score field (should be same as rerank_score)
+                    state["relevance_score"] = max(0.0, min(1.0, float(top_doc.get("score", 0.0))))
 
                 logger.info(
-                    "Relevance score calculated",
+                    "Document grading completed",
                     relevance_score=state["relevance_score"],
                     rerank_score=top_doc.get("rerank_score"),
-                    rrf_score=top_doc.get("rrf_score")
+                    docs_count=len(docs)
                 )
-
-            rerank_enabled = getattr(settings, 'rerank_enabled', True)
-            if not rerank_enabled:
-                logger.debug("Reranking disabled")
-                return state
-
-            # Skip if too few or too many docs
-            if len(docs) <= 2:
-                logger.debug(f"Too few documents to rerank: {len(docs)}")
-                return state
-
-            # Get rerank configuration
-            rerank_top_k = getattr(settings, 'rerank_top_k', 10)
-            rerank_type = getattr(settings, 'reranker_type', 'noop')
-
-            try:
-                # Prepare documents for reranking
-                documents_to_rerank = [doc.get('content', '') for doc in docs]
-                query = state.get("user_query", "")
-
-                if not query or not documents_to_rerank:
-                    logger.debug("Missing query or documents for reranking")
-                    return state
-
-                # Get reranker instance
-                try:
-                    reranker = get_reranker(reranker_type=rerank_type)
-
-                    # Perform reranking
-                    rerank_results = await reranker.rerank(
-                        query=query,
-                        documents=documents_to_rerank,
-                        top_k=min(rerank_top_k, len(docs)),
-                    )
-
-                    # Reorder documents based on reranking results
-                    reranked_docs = [docs[idx] for idx, score in rerank_results]
-
-                    # Store rerank scores in docs for debugging
-                    for doc, (idx, score) in zip(reranked_docs, rerank_results):
-                        doc['rerank_score'] = float(score)
-
-                    state["retrieved_docs"] = reranked_docs
-
-                    # Update relevance_score with top reranked document's score
-                    if reranked_docs:
-                        top_rerank_score = reranked_docs[0].get('rerank_score')
-                        if top_rerank_score is not None:
-                            state["relevance_score"] = max(0.0, min(1.0, float(top_rerank_score)))
-
-                    logger.info(
-                        "Documents reranked successfully",
-                        reranker_type=reranker_type,
-                        original_count=len(docs),
-                        reranked_count=len(reranked_docs),
-                        top_scores=[f"{score:.3f}" for _, score in rerank_results[:3]],
-                        relevance_score=state["relevance_score"]
-                    )
-
-                except RuntimeError as e:
-                    # Reranker not available (e.g., FlagEmbedding not installed)
-                    if "FlagEmbedding" in str(e):
-                        logger.warning(
-                            "BGE Reranker not available, using original order. "
-                            "Install with: pip install -U FlagEmbedding"
-                        )
-                    else:
-                        raise
-
-            except Exception as e:
-                logger.error(f"Document reranking failed: {str(e)}", exc_info=True)
 
         return state
 

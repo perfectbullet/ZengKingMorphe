@@ -339,8 +339,12 @@ class Settings(BaseSettings):
         description="Enable document reranking using BGE Reranker"
     )
     reranker_type: str = Field(
-        default="bge",
-        description="Reranker type: bge, noop, hybrid"
+        default="ollama",
+        description="Reranker type: ollama, bge, noop, hybrid"
+    )
+    ollama_reranker_model: str = Field(
+        default="qllama/bge-reranker-v2-m3:latest",
+        description="Ollama reranker model name"
     )
     rerank_top_k: int = Field(
         default=10,
