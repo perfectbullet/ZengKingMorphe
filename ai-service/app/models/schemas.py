@@ -718,3 +718,45 @@ class ExternalEmployeeAPIResponse(BaseModel):
     error: Optional[str] = Field(None, description="错误信息")
     
     model_config = ConfigDict(populate_by_name=True)
+
+
+class ResponseResult():
+    """
+        返回结果对象
+    """
+    @staticmethod
+    def success(data: Any):
+        return {
+                "code": 200,
+                "message": "success",
+                "data": data
+        }
+
+    @staticmethod
+    def error(code: int, message: str, data: Any):
+        return {
+                "code": code,
+                "message": message,
+                "data": data
+        }
+
+
+class CreateDatasetVideoRequest(BaseModel):
+    """创建视频资源请求"""
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "kb_id": "28",
+                "resource_id": 49392,
+                "document_name": "测试视频.mp4",
+                "resource_url": "https://education-test-private.oss-cn-beijing.aliyuncs.com/text/04057b3a-aa93-4848-b60d-9aad3282d714.md?Expires=1769436115&OSSAccessKeyId=LTAI4FctZ3DLxBxVPrqD4sCo&Signature=bvtIhWU%2Ff6dBYodO2vgkfVHqAvo%3D"
+            }
+        }
+    )
+
+    kb_id: str = Field(..., description="团队ID")
+    resource_id: int = Field(..., description="系统资源ID")
+    document_name: str = Field(..., description="文档名称")
+    start_time: Optional[str] = Field(None, description="生效开始时间")
+    end_time: Optional[str] = Field(None, description="生效结束时间")
+    resource_url: str = Field(..., description="系统资源URL")

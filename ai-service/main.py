@@ -20,7 +20,7 @@ from app.api.middleware.error_handler import (
     validation_exception_handler,
     general_exception_handler
 )
-from app.api.endpoints import chat, session, employee, conversation, webhook, mineru
+from app.api.endpoints import chat, session, employee, conversation, webhook, mineru, dataset_videos
 from app.api.endpoints import knowledge_base_kb, documents, metrics, websocket
 
 # Setup logging
@@ -129,6 +129,7 @@ app.include_router(employee.router, prefix="/api/ai/digital-employee", tags=["Di
 # Knowledge base endpoints (split into two files)
 app.include_router(knowledge_base_kb.router, prefix="/api/knowledge-base", tags=["Knowledge Base"])
 app.include_router(documents.router, prefix="/api/knowledge-base/documents", tags=["Documents"])
+app.include_router(dataset_videos.router, prefix="/api/knowledge-base/videos", tags=["Videos"])
 app.include_router(conversation.router, prefix="/api/conversation", tags=["Conversation"])
 app.include_router(webhook.router, prefix="/api/ai", tags=["Webhook"])
 app.include_router(mineru.router, prefix="/api/mineru", tags=["MinerU"])
