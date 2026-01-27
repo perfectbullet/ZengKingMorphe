@@ -61,7 +61,7 @@ class ChromaDB:
                 embedder = OllamaEmbeddings(
                     model=settings.embedding_ollama_model,
                     base_url=settings.ollama_base_url,
-                    max_tokens=8192  # BGE-M3 supports 8192 tokens
+                    max_tokens=2048  # bge-large-zh-v1.5-2k: 2048 tokens (≈800-1000 中文字符)
                 )
                 logger.info(
                     f"Using Ollama embeddings: model={settings.embedding_ollama_model}, base_url={settings.ollama_base_url}"

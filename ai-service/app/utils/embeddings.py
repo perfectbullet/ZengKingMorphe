@@ -4,6 +4,7 @@ Custom embedding implementations for the Digital Employee AI Service.
 
 from typing import List, Optional
 import requests
+import time
 from langchain_core.embeddings import Embeddings
 import numpy as np
 from app.core.logging import get_logger
@@ -26,15 +27,20 @@ class OllamaEmbeddings(Embeddings):
     """Ollama embedding implementation using /api/embeddings endpoint."""
 
     def __init__(
-        self, model: str, base_url: str, batch_size: int = 32, max_tokens: int = 8192
+        self, model: str, base_url: str, batch_size: int = 32, max_tokens: int = 1024
     ):
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.batch_size = batch_size
         self.max_tokens = max_tokens
         # Conservative character limit for safety
-        # BGE-M3 supports 8192 tokens, use max_tokens // 2 for character limit
-        self.max_chars = max_tokens // 2
+        # 中文字符约等于 2-2.5 tokens，使用 max_tokens // 2.5 更安全
+        self.max_chars = int(max_tokens / 2.5)
+        # Request delay to avoid overwhelming Ollama server
+        self.request_delay = 0.5  # 500ms delay between requests (further increased for stability)
+        # Retry config
+        self.max_retries = 3
+        self.retry_delay = 1.0  # seconds
 
     def _truncate_text(self, text: str) -> str:
         """Truncate text to fit within token limit."""
@@ -43,7 +49,7 @@ class OllamaEmbeddings(Embeddings):
         return text[: self.max_chars - 3] + "..."
 
     def _embed_single(self, text: str) -> List[float]:
-        """Embed a single text using Ollama API."""
+        """Embed a single text using Ollama API with retry logic."""
 
         # Check cache first
         cached = embedding_cache.get(text, self.model)
@@ -53,6 +59,20 @@ class OllamaEmbeddings(Embeddings):
         # Truncate if needed
         truncated_text = self._truncate_text(text)
 
+        # Log text length for debugging
+        text_length = len(truncated_text)
+        original_length = len(text)
+        if text_length != original_length:
+            logger.warning(
+                f"Ollama embedding: text truncated from {original_length} to {text_length} chars "
+                f"(max_tokens={self.max_tokens}, max_chars={self.max_chars})"
+            )
+        else:
+            logger.info(
+                f"Ollama embedding: text_length={text_length} chars, "
+                f"max_chars={self.max_chars}, max_tokens={self.max_tokens}"
+            )
+
         url = f"{self.base_url}/api/embeddings"
         payload = {
             "model": self.model,
@@ -60,26 +80,236 @@ class OllamaEmbeddings(Embeddings):
             "keep_alive": -1  # Keep model loaded indefinitely
         }
 
-        try:
-            response = requests.post(url, json=payload, timeout=30.0)
-            response.raise_for_status()
-            result = response.json()
+        last_error = None
+        for attempt in range(self.max_retries):
+            try:
+                response = requests.post(url, json=payload, timeout=60.0)  # Increased timeout
+                response.raise_for_status()
+                result = response.json()
 
-            if "embedding" not in result:
-                raise ValueError(f"No embedding in response: {result}")
+                if "embedding" not in result:
+                    raise ValueError(f"No embedding in response: {result}")
 
-            embedding = result["embedding"]
+                embedding = result["embedding"]
 
-            # Cache the result
-            embedding_cache.set(text, self.model, embedding)
+                # Validate embedding dimension
+                if not embedding or len(embedding) == 0:
+                    raise ValueError(f"Empty embedding returned: {result}")
 
-            return embedding
-        except Exception as e:
-            logger.error(f"Ollama embedding failed: url={url}, model={self.model}, error={str(e)}", exc_info=True)
-            raise
+                # Cache the result
+                embedding_cache.set(text, self.model, embedding)
+
+                return embedding
+
+            except requests.exceptions.HTTPError as e:
+                last_error = e
+                status_code = e.response.status_code if e.response is not None else 0
+
+                # Don't retry on 4xx errors (except 429 rate limit)
+                if 400 <= status_code < 500 and status_code != 429:
+                    logger.error(
+                        f"Ollama embedding failed (client error): url={url}, "
+                        f"status={status_code}, error={str(e)}"
+                    )
+                    raise
+
+                # Retry on 5xx errors or timeouts
+                if attempt < self.max_retries - 1:
+                    wait_time = self.retry_delay * (2 ** attempt)  # Exponential backoff
+                    logger.warning(
+                        f"Ollama embedding failed (attempt {attempt + 1}/{self.max_retries}), "
+                        f"retrying in {wait_time}s: status={status_code}, error={str(e)}"
+                    )
+                    time.sleep(wait_time)
+                else:
+                    logger.error(
+                        f"Ollama embedding failed after {self.max_retries} attempts: "
+                        f"url={url}, status={status_code}, error={str(e)}"
+                    )
+
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                last_error = e
+                if attempt < self.max_retries - 1:
+                    wait_time = self.retry_delay * (2 ** attempt)
+                    logger.warning(
+                        f"Ollama embedding timeout/connection error (attempt {attempt + 1}/{self.max_retries}), "
+                        f"retrying in {wait_time}s: error={str(e)}"
+                    )
+                    time.sleep(wait_time)
+                else:
+                    logger.error(
+                        f"Ollama embedding failed after {self.max_retries} attempts: "
+                        f"url={url}, error={str(e)}"
+                    )
+
+            except Exception as e:
+                last_error = e
+                logger.error(
+                    f"Ollama embedding failed with unexpected error: url={url}, "
+                    f"model={self.model}, error={str(e)}", exc_info=True
+                )
+                raise
+
+        # All retries exhausted
+        raise last_error
+
+    def _embed_batch(self, texts: List[str]) -> List[List[float]]:
+        """Embed multiple texts in a single batch request.
+
+        Ollama API supports batch embeddings via /api/embeddings with input array.
+        However, batch size >= 16 causes quality degradation (see issue #6262).
+        We use batch_size=8 for optimal quality.
+
+        Args:
+            texts: List of texts to embed
+
+        Returns:
+            List of embedding vectors
+        """
+        if not texts:
+            return []
+
+        # Filter out cached texts
+        uncached_indices = []
+        uncached_texts = []
+        cached_results = [None] * len(texts)
+
+        for i, text in enumerate(texts):
+            cached = embedding_cache.get(text, self.model)
+            if cached is not None:
+                cached_results[i] = np.array(cached, dtype=float)
+            else:
+                uncached_indices.append(i)
+                uncached_texts.append(text)
+
+        # If all cached, return immediately
+        if not uncached_texts:
+            return cached_results
+
+        # Truncate uncached texts
+        truncated_texts = [self._truncate_text(t) for t in uncached_texts]
+
+        # Log batch info
+        total_chars = sum(len(t) for t in truncated_texts)
+        logger.info(
+            f"Ollama batch embedding: batch_size={len(truncated_texts)}, "
+            f"total_chars={total_chars}, max_chars={self.max_chars}, cached={len(texts) - len(uncached_texts)}"
+        )
+
+        # Prepare batch request
+        # Ollama API: POST /api/embed with {"model": "...", "input": [...]}
+        # Note: Use /api/embed (not /api/embeddings) for batch support
+        url = f"{self.base_url}/api/embed"
+        payload = {
+            "model": self.model,
+            "input": truncated_texts,  # Batch input
+            "keep_alive": -1
+        }
+
+        last_error = None
+        for attempt in range(self.max_retries):
+            try:
+                response = requests.post(url, json=payload, timeout=120.0)  # Longer timeout for batch
+                response.raise_for_status()
+                result = response.json()
+
+                # Ollama response format differs for single vs batch:
+                # - Single input: {"embedding": [...]}
+                # - Batch input: {"embeddings": [[...], [...], ...]}
+                if "embeddings" in result:
+                    batch_embeddings = result["embeddings"]
+                elif "embedding" in result:
+                    # Single input response - wrap in list
+                    batch_embeddings = [result["embedding"]]
+                else:
+                    raise ValueError(f"No embeddings in batch response: {result}")
+
+                if len(batch_embeddings) != len(uncached_texts):
+                    raise ValueError(
+                        f"Batch embedding count mismatch: expected {len(uncached_texts)}, "
+                        f"got {len(batch_embeddings)}"
+                    )
+
+                # Validate each embedding
+                for i, emb in enumerate(batch_embeddings):
+                    if not emb or len(emb) == 0:
+                        raise ValueError(f"Empty embedding at index {i} in batch response")
+
+                # Cache the results
+                for i, (text, embedding) in enumerate(zip(uncached_texts, batch_embeddings)):
+                    original_text = uncached_texts[i]
+                    embedding_cache.set(original_text, self.model, embedding)
+
+                # Merge cached and new results
+                for idx, embedding in zip(uncached_indices, batch_embeddings):
+                    cached_results[idx] = np.array(embedding, dtype=float)
+
+                return cached_results
+
+            except requests.exceptions.HTTPError as e:
+                last_error = e
+                status_code = e.response.status_code if e.response is not None else 0
+
+                if 400 <= status_code < 500 and status_code != 429:
+                    logger.error(
+                        f"Ollama batch embedding failed (client error): url={url}, "
+                        f"status={status_code}, error={str(e)}"
+                    )
+                    raise
+
+                if attempt < self.max_retries - 1:
+                    wait_time = self.retry_delay * (2 ** attempt)
+                    logger.warning(
+                        f"Ollama batch embedding failed (attempt {attempt + 1}/{self.max_retries}), "
+                        f"retrying in {wait_time}s: status={status_code}, batch_size={len(uncached_texts)}, error={str(e)}"
+                    )
+                    time.sleep(wait_time)
+                else:
+                    logger.error(
+                        f"Ollama batch embedding failed after {self.max_retries} attempts: "
+                        f"url={url}, status={status_code}, batch_size={len(uncached_texts)}, error={str(e)}"
+                    )
+
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                last_error = e
+                if attempt < self.max_retries - 1:
+                    wait_time = self.retry_delay * (2 ** attempt)
+                    logger.warning(
+                        f"Ollama batch embedding timeout/connection error (attempt {attempt + 1}/{self.max_retries}), "
+                        f"retrying in {wait_time}s: batch_size={len(uncached_texts)}, error={str(e)}"
+                    )
+                    time.sleep(wait_time)
+                else:
+                    logger.error(
+                        f"Ollama batch embedding failed after {self.max_retries} attempts: "
+                        f"url={url}, batch_size={len(uncached_texts)}, error={str(e)}"
+                    )
+
+            except Exception as e:
+                last_error = e
+                logger.error(
+                    f"Ollama batch embedding failed with unexpected error: url={url}, "
+                    f"model={self.model}, batch_size={len(uncached_texts)}, error={str(e)}", exc_info=True
+                )
+                raise
+
+        # All retries exhausted - fallback to single requests
+        logger.warning(
+            f"Batch request failed, falling back to single requests for {len(uncached_texts)} texts"
+        )
+        for i, (idx, text) in enumerate(zip(uncached_indices, uncached_texts)):
+            if i > 0:
+                time.sleep(self.request_delay)
+            embedding = self._embed_single(text)
+            cached_results[idx] = np.array(embedding, dtype=float)
+
+        return cached_results
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        """Embed multiple documents."""
+        """Embed multiple documents using batch requests.
+
+        Uses batch_size=8 for optimal quality (batch_size >= 16 causes quality degradation).
+        """
         # Check for truncation
         truncated_count = sum(1 for text in texts if len(text) > self.max_chars)
         if truncated_count > 0:
@@ -89,17 +319,35 @@ class OllamaEmbeddings(Embeddings):
 
         embeddings = []
         cache_hits = 0
-        for text in texts:
-            # Check if cached (already done in _embed_single, but track stats here)
-            cached = embedding_cache.get(text, self.model)
-            if cached is not None:
-                cache_hits += 1
-                embeddings.append(np.array(cached, dtype=float))
-            else:
-                embedding = self._embed_single(text)
-                embeddings.append(np.array(embedding, dtype=float))
+        request_count = 0
 
-        logger.info(f"Ollama request successful: received {len(embeddings)} embeddings, cache_hits={cache_hits}")
+        # Process in batches of 8 (optimal for quality, see GitHub issue #6262)
+        BATCH_SIZE = 8
+        for i in range(0, len(texts), BATCH_SIZE):
+            batch = texts[i:i + BATCH_SIZE]
+
+            # Check cache for entire batch
+            uncached_count = sum(1 for t in batch if embedding_cache.get(t, self.model) is None)
+
+            if uncached_count == 0:
+                # All cached
+                cache_hits += len(batch)
+                for text in batch:
+                    cached = embedding_cache.get(text, self.model)
+                    embeddings.append(np.array(cached, dtype=float))
+            else:
+                # Use batch request
+                if request_count > 0:
+                    time.sleep(self.request_delay)
+
+                batch_embeddings = self._embed_batch(batch)
+                embeddings.extend(batch_embeddings)
+                request_count += 1
+
+                # Track cache hits from batch result
+                cache_hits += sum(1 for t in batch if embedding_cache.get(t, self.model) is not None)
+
+        logger.info(f"Ollama request successful: received {len(embeddings)} embeddings, cache_hits={cache_hits}, batch_requests={request_count}")
 
         # Log cache stats periodically
         stats = embedding_cache.get_stats()
@@ -264,5 +512,5 @@ def get_embedding(settings=None) -> Embeddings:
     return OllamaEmbeddings(
         model=settings.embedding_ollama_model,
         base_url=settings.ollama_base_url,
-        max_tokens=8192  # BGE-M3 supports 8192 tokens
+        max_tokens=2048  # bge-large-zh-v1.5-2k: 2048 tokens (≈800-1000 中文字符)
     )
