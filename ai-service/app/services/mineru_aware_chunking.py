@@ -105,19 +105,42 @@ class ChunkingStrategy:
 
 
 class MinerUAwareChunker:
-    """基于MinerU结构信息的智能分块器"""
+    """基于MinerU结构信息的智能分块器
+
+    注意：以下参数已写死为默认值，调用方传入的参数将被忽略：
+    - max_chunk_size: 512 (适配 bge-large-zh-v1.5-2k 的 2048 tokens)
+    - min_chunk_size: 60 (约 max 的 12%)
+    - chunk_overlap: 50 (约 max 的 10%)
+    - strategy: "hybrid" (混合策略)
+
+    Token 计算：
+    - BGE-large-zh-v1.5-2k 最大 2048 tokens
+    - 中文字符约等于 2-2.5 tokens
+    - 400 字符 ≈ 800-1000 tokens（安全边界）
+    """
+
+    # 写死的默认配置
+    # BGE-large-zh-v1.5-2k: 2048 tokens 限制
+    # 中文字符约等于 2-2.5 tokens，使用 400 字符安全边界 (约 800-1000 tokens)
+    DEFAULT_MAX_CHUNK_SIZE = 400
+    DEFAULT_MIN_CHUNK_SIZE = 60  # 约 max 的 12%
+    DEFAULT_CHUNK_OVERLAP = 50  # 约 max 的 10%
+    DEFAULT_STRATEGY = ChunkingStrategy.HYBRID
 
     def __init__(
         self,
-        max_chunk_size: int = 1000,      # 最大分块大小（字符数）
-        min_chunk_size: int = 100,       # 最小分块大小
-        chunk_overlap: int = 100,        # 分块重叠大小
-        strategy: str = ChunkingStrategy.HYBRID
+        max_chunk_size: int = 400,       # 参数被忽略，使用默认值
+        min_chunk_size: int = 60,        # 参数被忽略，使用默认值
+        chunk_overlap: int = 50,         # 参数被忽略，使用默认值
+        strategy: str = ChunkingStrategy.HYBRID  # 参数被忽略，使用默认值
     ):
-        self.max_chunk_size = max_chunk_size
-        self.min_chunk_size = min_chunk_size
-        self.chunk_overlap = chunk_overlap
-        self.strategy = strategy
+        # 强制使用写死的默认值，忽略调用方传入的参数
+        # (pylint: disable=unused-argument)
+        _ = (max_chunk_size, min_chunk_size, chunk_overlap, strategy)  # 显式忽略
+        self.max_chunk_size = self.DEFAULT_MAX_CHUNK_SIZE
+        self.min_chunk_size = self.DEFAULT_MIN_CHUNK_SIZE
+        self.chunk_overlap = self.DEFAULT_CHUNK_OVERLAP
+        self.strategy = self.DEFAULT_STRATEGY
 
     async def chunk_document(
         self,
@@ -316,17 +339,18 @@ class MinerUAwareChunker:
                 ))
                 chunk_index += 1
             else:
-                # 长页面分割
-                sub_chunks = self._split_long_text(
-                    full_text,
-                    doc_id,
-                    kb_id,
-                    chunk_index,
-                    page.page_idx,
-                    [page.page_idx],
-                    page_images,
-                    image_captions,
-                    title_path
+                # 长页面分割 - 使用段落分割方法保持结构
+                sub_chunks = self._split_long_text_preserve_structure(
+                    texts=page_text,  # 使用原始段落列表
+                    doc_id=doc_id,
+                    kb_id=kb_id,
+                    start_index=chunk_index,
+                    page_idx=page.page_idx,
+                    page_indices=[page.page_idx],
+                    image_references=page_images,
+                    image_captions=image_captions,
+                    title_path=title_path,
+                    block_types=["text"]
                 )
                 chunks.extend(sub_chunks)
                 chunk_index += len(sub_chunks)
@@ -340,32 +364,156 @@ class MinerUAwareChunker:
         kb_id: str,
         image_captions: Optional[Dict[str, str]] = None
     ) -> List[MultiModalChunk]:
-        """混合分块策略
+        """混合分块策略 - 充分利用 MinerU JSON 结构化数据
 
-        优先按标题分块，但如果某个章节过长，则进一步分割。
+        策略：
+        1. 按标题边界自然分割，保持章节语义完整性
+        2. 标题不作为独立内容，必须与后续内容合并
+        3. 单个章节超长时，在段落边界分割（保持段落完整）
+        4. 每个分割后的子块保留标题路径，便于溯源
+        5. 图片与上下文关联，增强检索效果
+        6. 过滤掉内容过少的无效章节（纯标题章节）
+
+        最大 chunk 限制为 400 字符（约 800-1000 tokens，适配 bge-large-zh-v1.5-2k）。
+        最小有效 chunk 限制为 20 字符（过滤掉只有标题的无效章节）。
         """
         chunks = []
         chunk_index = 0
 
-        # 先按标题分块
-        title_chunks = await self._chunk_by_title(doc, doc_id, kb_id, image_captions)
+        # 按标题层级组织内容
+        # 每个 section 包含：标题路径、段落列表、图片列表、页码范围
+        sections = []  # List[Dict]
+        current_section = {
+            "title_path": [],
+            "texts": [],
+            "images": [],
+            "page_indices": set(),
+            "start_page": 0,
+            "block_types": set(),
+            "current_title": None  # 当前章节的标题（不放入 texts，等有内容时再添加）
+        }
 
-        # 检查每个chunk的长度，过长的进行分割
-        for chunk in title_chunks:
-            if len(chunk.content) <= self.max_chunk_size:
-                chunks.append(chunk)
+        for page in doc.pdf_info:
+            current_section["page_indices"].add(page.page_idx)
+
+            for block in page.blocks:
+                # 遇到标题：结束当前章节，开始新章节
+                if block.block_type == BlockType.TITLE:
+                    # 保存当前章节（如果有实际内容）
+                    # 只有 texts 非空（不只是标题）或包含图片时才保存
+                    if current_section["texts"] or current_section["images"]:
+                        sections.append({
+                            "title_path": current_section["title_path"].copy(),
+                            "texts": current_section["texts"].copy(),
+                            "images": current_section["images"].copy(),
+                            "page_indices": list(current_section["page_indices"]),
+                            "start_page": current_section["start_page"],
+                            "block_types": list(current_section["block_types"])
+                        })
+
+                    # 更新标题路径
+                    title_text = block.get_text().strip()
+                    current_section["title_path"] = self._update_title_path(
+                        current_section["title_path"], title_text
+                    )
+
+                    # 重置当前章节（标题暂存，等有内容时再添加到 texts）
+                    current_section["texts"] = []
+                    current_section["images"] = []
+                    current_section["page_indices"] = {page.page_idx}
+                    current_section["start_page"] = page.page_idx
+                    current_section["block_types"] = {"title"}
+                    current_section["current_title"] = title_text
+
+                # 处理文本段落
+                elif block.block_type == BlockType.TEXT:
+                    text = block.get_text().strip()
+                    if text:
+                        # 如果这是第一个文本块且有标题，先添加标题
+                        if not current_section["texts"] and current_section["current_title"]:
+                            current_section["texts"].append(f"## {current_section['current_title']}")
+                        current_section["texts"].append(text)
+                        current_section["block_types"].add("text")
+
+                # 处理列表
+                elif block.block_type == BlockType.LIST:
+                    text = block.get_text().strip()
+                    if text:
+                        # 如果这是第一个内容且有标题，先添加标题
+                        if not current_section["texts"] and current_section["current_title"]:
+                            current_section["texts"].append(f"## {current_section['current_title']}")
+                        # 保持原始列表格式
+                        current_section["texts"].append(text)
+                        current_section["block_types"].add("list")
+
+                # 处理图片
+                elif block.block_type == BlockType.IMAGE:
+                    for img_url in block.get_image_paths():
+                        current_section["images"].append(img_url)
+                        current_section["block_types"].add("image")
+                        # 如果有图片描述，作为文本添加
+                        if image_captions and img_url in image_captions:
+                            # 如果这是第一个内容且有标题，先添加标题
+                            if not current_section["texts"] and current_section["current_title"]:
+                                current_section["texts"].append(f"## {current_section['current_title']}")
+                            current_section["texts"].append(f"[图片: {image_captions[img_url]}]")
+
+        # 保存最后一个章节（过滤掉只有标题没有实际内容的章节）
+        if current_section["texts"] or current_section["images"]:
+            sections.append({
+                "title_path": current_section["title_path"].copy(),
+                "texts": current_section["texts"].copy(),
+                "images": current_section["images"].copy(),
+                "page_indices": list(current_section["page_indices"]),
+                "start_page": current_section["start_page"],
+                "block_types": list(current_section["block_types"])
+            })
+
+        # 最小有效 chunk 长度（过滤掉只有标题的无效章节）
+        MIN_VALID_CHUNK_LENGTH = 20
+
+        # 将章节转换为 chunks，处理超长章节
+        split_count = 0
+        skipped_count = 0
+        for section in sections:
+            # 合并章节文本
+            section_text = "\n".join(section["texts"])
+            section_length = len(section_text)
+
+            # 过滤掉内容过少的无效章节
+            if section_length < MIN_VALID_CHUNK_LENGTH:
+                skipped_count += 1
+                continue
+
+            if section_length <= self.max_chunk_size:
+                # 章节长度合适，直接作为一个 chunk
+                chunks.append(self._create_chunk(
+                    doc_id=doc_id,
+                    kb_id=kb_id,
+                    content=section_text,
+                    chunk_index=chunk_index,
+                    page_idx=section["start_page"],
+                    page_indices=section["page_indices"],
+                    image_references=section["images"],
+                    image_captions=image_captions,
+                    title_path=section["title_path"],
+                    block_types=section["block_types"]
+                ))
+                chunk_index += 1
             else:
-                # 分割长chunk
-                sub_chunks = self._split_long_text(
-                    chunk.content,
-                    doc_id,
-                    kb_id,
-                    chunk_index,
-                    chunk.page_idx,
-                    chunk.page_indices,
-                    chunk.image_references,
-                    image_captions,
-                    chunk.title_path
+                # 章节超长，按段落边界分割
+                split_count += 1
+                sub_chunks = self._split_long_text_preserve_structure(
+                    texts=section["texts"],
+                    doc_id=doc_id,
+                    kb_id=kb_id,
+                    start_index=chunk_index,
+                    page_idx=section["start_page"],
+                    page_indices=section["page_indices"],
+                    image_references=section["images"],
+                    image_captions=image_captions,
+                    title_path=section["title_path"],
+                    block_types=section["block_types"]
                 )
                 chunks.extend(sub_chunks)
                 chunk_index += len(sub_chunks)
@@ -373,6 +521,31 @@ class MinerUAwareChunker:
         # 重新编号
         for i, chunk in enumerate(chunks):
             chunk.chunk_index = i
+
+        # 验证并记录结果
+        if chunks:
+            chunk_lengths = [len(c.content) for c in chunks]
+            max_length = max(chunk_lengths)
+            min_length = min(chunk_lengths)
+            avg_length = sum(chunk_lengths) / len(chunk_lengths)
+            over_limit = [length for length in chunk_lengths if length > self.max_chunk_size]
+
+            if over_limit:
+                logger.error(
+                    f"分块完成但有{len(over_limit)}个超长chunk! "
+                    f"最大: {max_length}, 最小: {min_length}, 平均: {avg_length:.1f}, "
+                    f"限制: {self.max_chunk_size}, 总数: {len(chunks)}"
+                )
+            else:
+                skip_msg = f", 跳过{skipped_count}个过短章节" if skipped_count > 0 else ""
+                logger.info(
+                    f"分块完成: 共{len(chunks)}个chunk, "
+                    f"最大: {max_length}, 最小: {min_length}, 平均: {avg_length:.1f}, "
+                    f"限制: {self.max_chunk_size}, 章节数: {len(sections)}, 分割了{split_count}个长章节"
+                    f"{skip_msg}"
+                )
+        else:
+            logger.warning("分块完成但生成了0个chunk")
 
         return chunks
 
@@ -418,9 +591,9 @@ class MinerUAwareChunker:
             structure_level=len(title_path)
         )
 
-    def _split_long_text(
+    def _split_long_text_preserve_structure(
         self,
-        text: str,
+        texts: List[str],
         doc_id: str,
         kb_id: str,
         start_index: int,
@@ -428,58 +601,148 @@ class MinerUAwareChunker:
         page_indices: List[int],
         image_references: List[str],
         image_captions: Optional[Dict[str, str]],
-        title_path: List[str]
+        title_path: List[str],
+        block_types: List[str]
     ) -> List[MultiModalChunk]:
-        """分割长文本"""
+        """按段落边界分割长文本，保持段落完整性和结构信息
+
+        策略：
+        1. 计算 title 的长度，在判断是否超限时要把 title 长度算上
+        2. 如果单个段落超过限制，对半分，递归处理直到不超过限制
+        3. 过滤掉过短的分割结果（小于 20 字符）
+        """
+        # 计算 title 长度（标题会作为前缀添加到 content 中）
+        title_prefix = "\n".join(title_path) if title_path else ""
+        title_length = len(title_prefix) + 2 if title_prefix else 0  # +2 for possible newlines
+
+        # 实际可用于内容的长度
+        available_length = self.max_chunk_size - title_length
+
         chunks = []
-        paragraphs = text.split("\n\n")
-
-        current_chunk = ""
         chunk_index = start_index
+        MIN_VALID_CHUNK_LENGTH = 20  # 最小有效 chunk 长度
 
-        for para in paragraphs:
-            if len(current_chunk) + len(para) <= self.max_chunk_size:
-                current_chunk += para + "\n\n"
+        current_paragraphs = []
+        current_length = 0
+
+        def split_half(text: str) -> List[str]:
+            """对半分文本，如果还超长则递归分割"""
+            if len(text) <= available_length:
+                return [text]
+            # 对半分
+            mid = len(text) // 2
+            # 尝试在标点符号处分割（在中点附近50字符范围内搜索）
+            best_pos = -1
+            for sep in ["。", "！", "？", "\n\n", "；", ";", "，", ",", "、"]:
+                pos = text.find(sep, max(0, mid - 50), min(len(text), mid + 50))
+                if pos != -1:
+                    best_pos = pos + len(sep)
+                    break
+            if best_pos > 0:
+                split_pos = best_pos
             else:
-                # 保存当前chunk
-                if current_chunk.strip():
+                split_pos = mid
+
+            part1 = text[:split_pos].strip()
+            part2 = text[split_pos:].strip()
+
+            result = []
+            if part1:
+                result.extend(split_half(part1))
+            if part2:
+                result.extend(split_half(part2))
+            return result
+
+        for para in texts:
+            para_length = len(para)
+
+            # 如果单个段落就超长（考虑 title 长度），对半分
+            if para_length > available_length:
+                # 先保存当前累积的内容
+                if current_paragraphs:
+                    content = "\n".join(current_paragraphs)
                     chunks.append(self._create_chunk(
                         doc_id=doc_id,
                         kb_id=kb_id,
-                        content=current_chunk.strip(),
+                        content=content,
                         chunk_index=chunk_index,
                         page_idx=page_idx,
                         page_indices=page_indices,
                         image_references=image_references,
                         image_captions=image_captions,
                         title_path=title_path,
-                        block_types=["text"]
+                        block_types=block_types
+                    ))
+                    chunk_index += 1
+                    current_paragraphs = []
+                    current_length = 0
+
+                # 对半分超长段落
+                parts = split_half(para)
+                for part in parts:
+                    chunks.append(self._create_chunk(
+                        doc_id=doc_id,
+                        kb_id=kb_id,
+                        content=part,
+                        chunk_index=chunk_index,
+                        page_idx=page_idx,
+                        page_indices=page_indices,
+                        image_references=image_references,
+                        image_captions=image_captions,
+                        title_path=title_path,
+                        block_types=block_types
+                    ))
+                    chunk_index += 1
+                continue
+
+            # 检查添加这个段落是否会超限（考虑 title 长度）
+            if current_length + para_length + 1 <= available_length:
+                current_paragraphs.append(para)
+                current_length += para_length + 1  # +1 for newline
+            else:
+                # 保存当前 chunk
+                if current_paragraphs:
+                    chunks.append(self._create_chunk(
+                        doc_id=doc_id,
+                        kb_id=kb_id,
+                        content="\n".join(current_paragraphs),
+                        chunk_index=chunk_index,
+                        page_idx=page_idx,
+                        page_indices=page_indices,
+                        image_references=image_references,
+                        image_captions=image_captions,
+                        title_path=title_path,
+                        block_types=block_types
                     ))
                     chunk_index += 1
 
-                # 添加重叠部分
-                if self.chunk_overlap > 0 and current_chunk:
-                    overlap_text = current_chunk[-self.chunk_overlap:]
-                    current_chunk = overlap_text + "\n\n" + para + "\n\n"
-                else:
-                    current_chunk = para + "\n\n"
+                # 开始新 chunk
+                current_paragraphs = [para]
+                current_length = para_length
 
-        # 保存最后一个chunk
-        if current_chunk.strip():
+        # 保存最后一个 chunk
+        if current_paragraphs:
             chunks.append(self._create_chunk(
                 doc_id=doc_id,
                 kb_id=kb_id,
-                content=current_chunk.strip(),
+                content="\n".join(current_paragraphs),
                 chunk_index=chunk_index,
                 page_idx=page_idx,
                 page_indices=page_indices,
                 image_references=image_references,
                 image_captions=image_captions,
                 title_path=title_path,
-                block_types=["text"]
+                block_types=block_types
             ))
 
-        return chunks
+        # 过滤掉过短的 chunk（分割时可能产生极短片段）
+        valid_chunks = [c for c in chunks if len(c.content) >= MIN_VALID_CHUNK_LENGTH]
+
+        # 重新编号
+        for i, chunk in enumerate(valid_chunks):
+            chunk.chunk_index = start_index + i
+
+        return valid_chunks
 
     def _get_text_length(self, texts: List[str]) -> int:
         """计算文本列表的总长度"""
@@ -528,7 +791,7 @@ async def chunk_mineru_document(
     doc_id: str,
     kb_id: str,
     strategy: str = ChunkingStrategy.HYBRID,
-    max_chunk_size: int = 1000,
+    max_chunk_size: int = 400,  # 最大分块大小（字符）- 适配 bge-large-zh-v1.5-2k (2048 tokens)
     image_captions: Optional[Dict[str, str]] = None
 ) -> List[MultiModalChunk]:
     """便捷函数：对MinerU JSON文档进行分块
