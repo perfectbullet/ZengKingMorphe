@@ -9,7 +9,7 @@ print("Testing OllamaEmbeddings fix...")
 
 try:
     embedder = OllamaEmbeddings(
-        model="smartcreation/bge-large-zh-v1.5:latest",
+        model="bge-large-zh-v1.5-2k:latest",
         base_url="http://192.168.8.233:11434"
     )
     
@@ -24,6 +24,7 @@ try:
     print("\nTest 2: Batch texts")
     texts = ["文本1", "文本2"]
     results = embedder.embed_documents(texts)
+    print(results)
     print(f"✓ Results type: {type(results)}")
     print(f"✓ Results count: {len(results)}")
     print(f"✓ First result type: {type(results[0])}")

@@ -23,9 +23,9 @@ except ImportError:
 
 
 async def test_websocket_chunks(
-    user_id: str = "42478261",
+    user_id: str = "3",
     employee_id: str = "29",
-    session_id: str = "sess_4_42478261_29",
+    session_id: str = "sess_4_3_29",
     host: str = "192.168.8.233",
     port: int = 8100,
 ):
@@ -116,8 +116,8 @@ def main():
     )
     parser.add_argument(
         "--user-id",
-        default="42478261",
-        help="User ID (default: 42478261)"
+        default="3",
+        help="User ID (default: 3)"
     )
     parser.add_argument(
         "--employee-id",
@@ -126,8 +126,8 @@ def main():
     )
     parser.add_argument(
         "--session-id",
-        default="sess_4_42478261_29",
-        help="Session ID (default: sess_4_42478261_29)"
+        default="sess_4_3_29",
+        help="Session ID (default: sess_4_3_29)"
     )
     parser.add_argument(
         "--host",

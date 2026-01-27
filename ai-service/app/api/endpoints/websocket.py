@@ -14,7 +14,6 @@ logger = get_logger(__name__)
 router = APIRouter()
 
 # Configuration constants
-INITIAL_CHUNK_COUNT = 20  # Number of recent chunks to fetch on connection
 POLL_INTERVAL = 0.5  # Polling interval in seconds
 HEARTBEAT_INTERVAL = 30  # Heartbeat interval in seconds
 MAX_CHUNKS_PER_POLL = 100  # Maximum chunks to fetch per poll
@@ -28,7 +27,7 @@ async def websocket_stream_chunks(
     session_id: str = Query(..., description="Session ID"),
 ):
     """
-    WebSocket endpoint for real-time stream chunks updates.
+    WebSocket endpoint for real-time stream chunks updates (new chunks only, no history).
 
     Connection parameters:
     - user_id: User ID (required)
@@ -36,14 +35,16 @@ async def websocket_stream_chunks(
     - session_id: Session ID (required)
 
     Behavior:
-    1. On connection, fetch the latest N chunks and send them
-    2. Poll for new chunks periodically (created_at >= last_timestamp, excluding sent)
+    1. On connection, start monitoring from current time (no history sent)
+    2. Poll for new chunks periodically (created_at >= last_timestamp)
     3. Send new chunks to the client as they arrive
     4. Send heartbeat messages periodically to keep connection alive
 
     Message formats:
     - Chunk data: Full chunk object with chunk_id, chunk_type, chunk_data, etc.
     - Heartbeat: {"type": "heartbeat", "timestamp": "ISO8601 timestamp"}
+
+    Note: Use REST API /api/chat/stream/chunks to query historical chunks.
     """
     await websocket.accept()
     logger.info(
@@ -67,27 +68,13 @@ async def websocket_stream_chunks(
             "session_id": session_id,
         }
 
-        # Initial query: get the latest N chunks
-        initial_chunks = await db.stream_chunks.find(
-            query_filter
-        ).sort("created_at", -1).limit(INITIAL_CHUNK_COUNT).to_list(length=INITIAL_CHUNK_COUNT)
-
-        if initial_chunks:
-            # Reverse to send in chronological order (oldest to newest)
-            for chunk in reversed(initial_chunks):
-                chunk_id = chunk.get("chunk_id")
-                if chunk_id and chunk_id not in sent_chunk_ids:
-                    await send_chunk(websocket, chunk)
-                    sent_chunk_ids.add(chunk_id)
-                    last_timestamp = chunk.get("created_at")
-
-            logger.info(
-                "Sent initial chunks",
-                count=len(sent_chunk_ids),
-                last_timestamp=last_timestamp.isoformat() if last_timestamp else None
-            )
-        else:
-            logger.info("No existing chunks found for session")
+        # Start monitoring from current time (no history sent)
+        logger.info(
+            "WebSocket connected, starting real-time monitoring from now",
+            user_id=user_id,
+            employee_id=employee_id,
+            session_id=session_id
+        )
 
         # Start heartbeat and polling tasks
         heartbeat_task = asyncio.create_task(send_heartbeat(websocket))
@@ -224,17 +211,9 @@ async def poll_new_chunks(
                     sent_count=len(current_sent)
                 )
             else:
-                # No last_timestamp, fetch only the latest one
-                latest = await db.stream_chunks.find_one(
-                    query_filter,
-                    sort=[("created_at", -1)]
-                )
-                if latest:
-                    chunk_id = latest.get("chunk_id")
-                    if chunk_id and chunk_id not in current_sent:
-                        await send_chunk(websocket, latest)
-                        current_sent.add(chunk_id)
-                        state["last_timestamp"] = latest.get("created_at")
+                # First poll: set current time as starting point (no history sent)
+                state["last_timestamp"] = datetime.utcnow()
+                logger.debug("First poll: starting real-time monitoring from now")
                 continue
 
             # Query new chunks (ascending by created_at)
