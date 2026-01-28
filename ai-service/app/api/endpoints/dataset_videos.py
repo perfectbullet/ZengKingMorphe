@@ -30,12 +30,21 @@ async def create_dataset_video(
 ):
     """
         创建知识库视频资源
+
+        Args:
+        - request: create_dataset_video request
+        - api_key: API key from auth
+        - db: Database instance
+
+    Returns:
+        - Created dataset video data
     """
     try:
-        # kb = await db.knowledge_bases.find_one({"kb_id": request.kb_id})
-        # if not kb:
-        #     return ResponseResult.error(status.HTTP_404_NOT_FOUND, f"Knowledge base {request.kb_id} not found", None)
-
+        logger.info(
+            "create_dataset_video request",
+            name=request.name,
+            category=request.category
+        )
         hash_obj = hashlib.md5(f"{request.document_name}_{request.kb_id}_{datetime.utcnow().timestamp()}".encode())
         doc_id = f"video_{hash_obj.hexdigest()[:12]}"
 
@@ -52,7 +61,8 @@ async def create_dataset_video(
                         request.resource_url, timeout=aiohttp.ClientTimeout(total=120)
                 ) as response:
                     if response.status != 200:
-                        return ResponseResult.error(status.HTTP_400_BAD_REQUEST, "Failed to download file from URL", None)
+                        return ResponseResult.error(status.HTTP_400_BAD_REQUEST,
+                                                    "Failed to download file from URL", None)
 
                     # Save file to disk
                     with open(file_path, "wb") as f:
@@ -93,14 +103,18 @@ async def create_dataset_video(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Create RAG document error", error=str(e), exc_info=True)
+        logger.error(
+            "create_dataset_video exception",
+            error=str(e),
+            exc_info=True
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to create RAG document",
+            detail="create_dataset_video error",
         )
 
 
-@router.post("/delete/{video_id}")
+@router.delete("/delete/{video_id}")
 async def delete_dataset_video(
     video_id: str,
     api_key: str = Depends(get_api_key),
@@ -111,6 +125,8 @@ async def delete_dataset_video(
 
         nArgs:
             - video_id: video ID
+            - api_key: API key from auth
+            - db: Database instance
 
         Returns:
             - result
@@ -118,28 +134,21 @@ async def delete_dataset_video(
     try:
         logger.info("delete_dataset_video request", video_id=video_id)
 
-        # 查询条件
-        query = {
-            'doc_id': video_id,
-            'flag': 1
-        }
-
         # Update knowledge base
-        result = await db.documents.update_one(
-            query,
-            {"$set": {"flag": -1}}
-        )
+        result = await db.documents.delete_one({'doc_id': video_id})
 
         if not result:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="delete_dataset_video (not found or already completed)"
+                detail="delete_dataset_video cannot be deleted (not found or already completed)"
             )
 
-        if result.modified_count == 1:
-            return ResponseResult.success()
+        if result.deleted_count == 1:
+            return ResponseResult.success(None)
         else:
-            return ResponseResult.error(status.HTTP_400_BAD_REQUEST, "error", f"delete_dataset_video {video_id} not found")
+            logger.error(f"delete_dataset_video {video_id} not found")
+            return ResponseResult.error(status.HTTP_400_BAD_REQUEST, "error",
+                                        f"delete_dataset_video {video_id} not found")
 
     except HTTPException:
         raise
