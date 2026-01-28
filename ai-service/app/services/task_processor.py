@@ -568,6 +568,37 @@ class DocumentTaskProcessor:
             logger.error(f"FAQ vectorization task failed: task_id={task_id}, error={str(e)}", exc_info=True)
             raise
 
+    async def restart_task(
+        self,
+        task_id: str,
+        kb_id: str,
+        filename: str,
+        file_path: str,
+        category: Optional[str] = None,
+        chunk_config: Optional[Dict] = None,  # Custom chunk configuration
+        doc_id: Optional[str] = None,  # Pre-generated doc_id (for immediate return)
+        resource_id: Optional[int] = None  # External system resource ID):
+    ) -> str:
+        # Add to queue
+        await self.task_queue.put({
+            "task_id": task_id,
+            "kb_id": kb_id,
+            "filename": filename,
+            "file_path": file_path,
+            "category": category,
+            "chunk_config": chunk_config,
+            "doc_id": doc_id,  # Pass doc_id to processing
+            "resource_id": resource_id
+        })
+
+        logger.info(
+            "Document task submitted",
+            doc_id=doc_id,
+            task_id=task_id
+        )
+
+        return task_id
+
 
 # Global task processor instance
 task_processor = DocumentTaskProcessor()

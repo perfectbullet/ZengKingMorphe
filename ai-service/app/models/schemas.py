@@ -340,10 +340,10 @@ class CreateKnowledgeBaseRequest(BaseModel):
 class UpdateKnowledgeBaseRequest(BaseModel):
     """Update knowledge base request schema."""
     kb_id: str = Field(..., description="Knowledge base ID")
-    name: Optional[str] = Field(..., description="Knowledge base ID")
+    name: Optional[str] = Field(..., description="Knowledge base Name")
     description: Optional[str] = ""
-    priority: Optional[str] = ""
-    tags: Optional[List[str]] = []
+    priority: Optional[str] = "medium"
+    tags: List[str] = Field(default_factory=list)
 
 
 # Document API Schemas
