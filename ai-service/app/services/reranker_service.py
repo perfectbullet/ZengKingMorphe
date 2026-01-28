@@ -2,7 +2,7 @@
 BGE Reranker Service
 
 Provides document reranking using BGE-Reranker models for improved RAG retrieval quality.
-Supports Ollama API, local (FlagEmbedding library) and remote (API) reranking backends.
+Supports BGE API, local (FlagEmbedding library) and remote (API) reranking backends.
 """
 import asyncio
 import aiohttp
@@ -53,7 +53,7 @@ class BGEReranker(BaseReranker):
 
     def __init__(
         self,
-        model_name_or_path: str = "BAAI/bge-ranker-large",
+        model_name_or_path: str = "BAAI/bge-reranker-large",
         device: str = "cpu",  # cpu or cuda
         batch_size: int = 32,
         use_fp16: bool = False,
@@ -184,36 +184,48 @@ class BGEReranker(BaseReranker):
             return [(i, 0.0) for i in range(min(top_k, len(documents)))]
 
 
-class OllamaReranker(BaseReranker):
+class BGEAPIReranker(BaseReranker):
     """
-    Reranker using Ollama API with BGE Reranker models.
+    Reranker using BGE Reranker API.
 
-    Uses Ollama's /api/generate endpoint to compute relevance scores.
-    Supports any reranker model available in Ollama, e.g., qllama/bge-reranker-v2-m3.
+    Uses the dedicated /v1/rerank endpoint for true reranking
+    (not embedding-based similarity).
+
+    API Format:
+        POST {base_url}/v1/rerank
+        Headers: Authorization: Bearer {api_key}
+        Body: {"model": "...", "query": "...", "documents": [...]}
 
     Advantages:
-    - No need to install FlagEmbedding library
-    - Reuses existing Ollama infrastructure
-    - Unified model management
+    - True reranking (not embedding similarity)
+    - No text length limitations
+    - Single API call for all documents
     """
 
     def __init__(
         self,
         base_url: str = None,
+        api_key: str = None,
         model: str = None,
         timeout: int = 120,
     ):
         """
-        Initialize Ollama Reranker.
+        Initialize BGE API Reranker.
 
         Args:
-            base_url: Ollama base URL (default: from settings.ollama_base_url)
-            model: Model name (default: from settings.ollama_reranker_model)
+            base_url: BGE Reranker API base URL (default: from settings.bge_reranker_api_url)
+            api_key: BGE Reranker API key (default: from settings.bge_reranker_api_key)
+            model: Model name (default: from settings.bge_reranker_model)
             timeout: Request timeout in seconds
         """
-        self.base_url = (base_url or settings.ollama_base_url).rstrip("/")
-        self.model = model or settings.ollama_reranker_model
+        self.base_url = (base_url or settings.bge_reranker_api_url).rstrip("/")
+        self.api_key = api_key or settings.bge_reranker_api_key
+        self.model = model or settings.bge_reranker_model
         self.timeout = timeout
+        self._headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
 
     async def rerank(
         self,
@@ -222,7 +234,7 @@ class OllamaReranker(BaseReranker):
         top_k: int = 10,
     ) -> List[Tuple[int, float]]:
         """
-        Rerank documents using Ollama API.
+        Rerank documents using BGE Reranker API.
 
         Args:
             query: User query
@@ -238,93 +250,54 @@ class OllamaReranker(BaseReranker):
         top_k = min(top_k, len(documents))
 
         logger.info(
-            "Ollama reranking",
+            "BGE API reranking",
             model=self.model,
             query_length=len(query),
             documents_count=len(documents),
             top_k=top_k,
         )
 
-        scores = []
-
-        # Compute score for each document
-        for idx, doc in enumerate(documents):
-            try:
-                score = await self._compute_score(query, doc)
-                scores.append((idx, score))
-            except Exception as e:
-                logger.warning(
-                    "Failed to compute score for document",
-                    index=idx,
-                    error=str(e),
-                )
-                scores.append((idx, 0.0))
-
-        # Sort by score descending
-        scores.sort(key=lambda x: x[1], reverse=True)
-
-        logger.info(
-            "Ollama reranking completed",
-            top_k=min(top_k, len(scores)),
-            max_score=max(scores, key=lambda x: x[1])[1] if scores else 0,
-            min_score=min(scores, key=lambda x: x[1])[1] if scores else 0,
-        )
-
-        return scores[:top_k]
-
-    async def _compute_score(self, query: str, document: str) -> float:
-        """
-        Compute relevance score for a query-document pair using Ollama.
-
-        Uses a prompt that asks the model to rate relevance on a scale of 0-1.
-        """
-        prompt = f"""Rate the relevance of the following document to the query on a scale from 0.0 to 1.0.
-Respond with ONLY a single number (e.g., 0.85).
-
-Query: {query}
-
-Document: {document[:2000]}
-
-Relevance score:"""
-
-        url = f"{self.base_url}/api/generate"
+        url = f"{self.base_url}/v1/rerank"
         payload = {
             "model": self.model,
-            "prompt": prompt,
-            "stream": False,
-            "options": {
-                "temperature": 0.0,  # Deterministic output
-                "num_predict": 10,   # Only need a short number
-            }
+            "query": query,
+            "documents": documents
         }
 
+        timeout = aiohttp.ClientTimeout(total=self.timeout)
+
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=payload, timeout=self.timeout) as response:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(url, json=payload, headers=self._headers) as response:
                     if response.status != 200:
-                        raise RuntimeError(f"Ollama API error: {response.status}")
+                        error_body = await response.text()
+                        raise RuntimeError(f"BGE API error: status={response.status}, body={error_body[:200]}")
 
                     data = await response.json()
-                    response_text = data.get("response", "").strip()
-
-                    # Extract numeric score from response
-                    # Handle various formats: "0.85", "Score: 0.85", etc.
-                    import re
-                    match = re.search(r"(\d+\.?\d*)", response_text)
-                    if match:
-                        score = float(match.group(1))
-                        # Normalize to 0-1 range
-                        return max(0.0, min(1.0, score))
-                    else:
-                        logger.warning("Could not extract score from response", response=response_text[:100])
-                        return 0.5  # Default to neutral score
 
         except asyncio.TimeoutError:
-            logger.error("Ollama API timeout")
-            return 0.0
+            logger.warning("BGE API timeout")
+            return [(i, 0.0) for i in range(top_k)]
         except Exception as e:
-            logger.error("Ollama API error", error=str(e))
-            return 0.0
+            logger.error("BGE API error", error=str(e), exc_info=True)
+            return [(i, 0.0) for i in range(top_k)]
+
+        # Parse results
+        results = data.get("results", [])
+        indexed_scores = [(r.get("index", i), r.get("relevance_score", 0.0)) for i, r in enumerate(results)]
+        indexed_scores.sort(key=lambda x: x[1], reverse=True)
+
+        logger.info(
+            "BGE API reranking completed",
+            top_k=min(top_k, len(indexed_scores)),
+            max_score=max(indexed_scores, key=lambda x: x[1])[1] if indexed_scores else 0,
+        )
+
+        return indexed_scores[:top_k]
+
+
+# Keep OllamaReranker as alias for backward compatibility (deprecated)
+OllamaReranker = BGEAPIReranker
 
 
 class NoOpReranker(BaseReranker):
@@ -460,14 +433,14 @@ _reranker: Optional[BaseReranker] = None
 
 
 def get_reranker(
-    reranker_type: str = "ollama",
+    reranker_type: str = "bge_api",
     **kwargs
 ) -> BaseReranker:
     """
     Get or create the global reranker instance.
 
     Args:
-        reranker_type: Type of reranker ("ollama", "bge", "noop", "hybrid")
+        reranker_type: Type of reranker ("bge_api", "ollama" (legacy), "bge", "noop", "hybrid")
         **kwargs: Additional arguments for reranker initialization
 
     Returns:
@@ -480,11 +453,14 @@ def get_reranker(
 
     logger.info("Creating reranker", type=reranker_type)
 
-    if reranker_type == "ollama":
-        base_url = kwargs.get("base_url", settings.ollama_base_url)
-        model = kwargs.get("model", settings.ollama_reranker_model)
+    if reranker_type == "bge_api":
+        base_url = kwargs.get("base_url", settings.bge_reranker_api_url)
+        api_key = kwargs.get("api_key", settings.bge_reranker_api_key)
+        model = kwargs.get("model", settings.bge_reranker_model)
         timeout = kwargs.get("timeout", 120)
-        _reranker = OllamaReranker(base_url=base_url, model=model, timeout=timeout)
+        _reranker = BGEAPIReranker(base_url=base_url, api_key=api_key, model=model, timeout=timeout)
+    elif reranker_type == "ollama":  # Backward compatibility, maps to bge_api
+        _reranker = BGEAPIReranker()
     elif reranker_type == "bge":
         model_path = kwargs.get("model_path", "BAAI/bge-reranker-large")
         device = kwargs.get("device", "cpu")
@@ -492,7 +468,7 @@ def get_reranker(
     elif reranker_type == "noop":
         _reranker = NoOpReranker()
     elif reranker_type == "hybrid":
-        primary_type = kwargs.get("primary_type", "ollama")
+        primary_type = kwargs.get("primary_type", "bge_api")
         primary = get_reranker(primary_type, **kwargs)
         _reranker = HybridReranker(
             primary_reranker=primary,
@@ -510,7 +486,7 @@ async def rerank_documents(
     query: str,
     documents: List[str],
     top_k: int = 10,
-    reranker_type: str = "ollama",
+    reranker_type: str = "bge_api",
 ) -> List[Tuple[int, float]]:
     """
     Convenience function to rerank documents.

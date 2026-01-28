@@ -190,7 +190,7 @@ def main():
     """Run all tests."""
     parser = argparse.ArgumentParser(description="测试 Ollama Embedding")
     parser.add_argument("--url", help="临时覆盖 Ollama 地址")
-    parser.add_argument("--max-tokens", type=int, default=512, help="临时设置 max_tokens")
+    parser.add_argument("--max-tokens", type=int, default=1024, help="临时设置 max_tokens")
     args = parser.parse_args()
 
     # 应用临时参数

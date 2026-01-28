@@ -308,7 +308,7 @@ class RAGE2ETester:
             # Delete from ElasticSearch by kb_id
             try:
                 await es_db.delete_by_query(
-                    index="doc",
+                    index=es_db.doc_index,
                     body={"query": {"term": {"kb_id": self.kb_id}}},
                 )
                 print(f"  ✅ ElasticSearch: deleted data for kb_id={self.kb_id}")
@@ -397,7 +397,7 @@ class RAGE2ETester:
                 }
 
                 await es_db.index_document(
-                    index="doc",
+                    index=es_db.doc_index,
                     doc_id=chunk.chunk_id,
                     document=es_document,
                 )
@@ -638,7 +638,7 @@ Examples:
     parser.add_argument(
         "--rerank",
         action="store_true",
-        help="Enable reranking for retrieval queries"
+        help="Enable reranking for retrieval queries (default: enabled)"
     )
     parser.add_argument(
         "--no-rerank",
@@ -713,7 +713,7 @@ Examples:
             # ElasticSearch
             try:
                 await es_db.delete_by_query(
-                    index="doc",
+                    index=es_db.doc_index,
                     body={"query": {"term": {"kb_id": args.kb_id}}},
                 )
                 print(f"  ✅ ElasticSearch: deleted data for kb_id={args.kb_id}")
@@ -737,10 +737,12 @@ Examples:
         print("=" * 80)
         print(f"KB ID: {args.kb_id}")
 
-        # 确定 rerank 设置
-        rerank_enabled = args.rerank
+        # 确定 rerank 设置（默认启用）
+        rerank_enabled = True  # 默认启用
         if args.no_rerank:
             rerank_enabled = False
+        elif args.rerank:
+            rerank_enabled = True
 
         rerank_status = "启用" if rerank_enabled else "禁用"
         print(f"Rerank: {rerank_status}")
@@ -773,7 +775,7 @@ Examples:
                     query=test_case['query'],
                     kb_ids=[args.kb_id],
                     top_k=args.top_k,
-                    enable_rerank=rerank_enabled if args.rerank or args.no_rerank else None,
+                    enable_rerank=rerank_enabled,
                 )
 
                 print(f"   Retrieved: {len(results)} results\n")
@@ -877,13 +879,13 @@ Examples:
 
         try:
             # 统计
-            count_result = await es_db.client.count(index="doc", body={
+            count_result = await es_db.client.count(index=es_db.doc_index, body={
                 "query": {"term": {"kb_id": args.kb_id}}
             })
             print(f"  📋 Documents for kb_id={args.kb_id}: {count_result['count']}")
 
             # 获取样例
-            search_result = await es_db.client.search(index="doc", body={
+            search_result = await es_db.client.search(index=es_db.doc_index, body={
                 "query": {"term": {"kb_id": args.kb_id}},
                 "size": 3
             })
