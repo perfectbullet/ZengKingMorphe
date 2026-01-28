@@ -104,7 +104,7 @@ class Settings(BaseSettings):
         default="openai_style",
         description="Embedding type: openai_style, siliconflow, or ollama",
     )
-    embedding_model: str = Field(default="BAAI/bge-large-zh-v1.5")
+    embedding_model: str = Field(default="bge-large-zh-v1.5-2k:latest")
     embedding_base_url: str = Field(
         default="http://localhost:50009", description="Embedding service base URL"
     )
@@ -129,7 +129,7 @@ class Settings(BaseSettings):
 
     # Ollama Embedding Configuration
     embedding_ollama_model: str = Field(
-        default="smartcreation/bge-large-zh-v1.5:latest",
+        default="bge-large-zh-v1.5-2k:latest",
         description="Ollama embedding model name",
     )
 
@@ -339,12 +339,32 @@ class Settings(BaseSettings):
         description="Enable document reranking using BGE Reranker"
     )
     reranker_type: str = Field(
-        default="ollama",
-        description="Reranker type: ollama, bge, noop, hybrid"
+        default="bge_api",
+        description="Reranker type: bge_api, ollama (legacy), bge, noop, hybrid"
     )
     ollama_reranker_model: str = Field(
         default="qllama/bge-reranker-v2-m3:latest",
         description="Ollama reranker model name"
+    )
+
+    # BGE Reranker API Configuration
+    bge_reranker_api_url: str = Field(
+        default="http://192.168.8.233:6006",
+        description="BGE Reranker API base URL"
+    )
+    bge_reranker_api_key: str = Field(
+        default="sk-aaabbbcccdddeeefffggghhhiiijjjkkk",
+        description="BGE Reranker API key"
+    )
+    bge_reranker_model: str = Field(
+        default="bge-reranker-v2-m3",
+        description="BGE Reranker model name"
+    )
+    reranker_max_text_length: int = Field(
+        default=200,
+        ge=50,
+        le=512,
+        description="Maximum text length in characters for reranker input (truncated if exceeded)"
     )
     rerank_top_k: int = Field(
         default=10,

@@ -26,132 +26,173 @@ class ChromaEmbeddingWrapper:
 class OllamaEmbeddings(Embeddings):
     """Ollama embedding implementation using /api/embeddings endpoint."""
 
+    # 智能降级截断限制: 512 → 384 → 抛异常
+    TRUNCATE_LIMITS = [512, 384]
+
     def __init__(
-        self, model: str, base_url: str, batch_size: int = 32, max_tokens: int = 1024
+        self, model: str, base_url: str, batch_size: int = 32, max_tokens: int = 1024,
+        max_chars: int = 512, enable_fallback: bool = True,
     ):
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.batch_size = batch_size
         self.max_tokens = max_tokens
-        # Conservative character limit for safety
-        # 中文字符约等于 2-2.5 tokens，使用 max_tokens // 2.5 更安全
-        self.max_chars = int(max_tokens / 2.5)
+        # 固定字符限制，支持智能降级
+        self.max_chars = max_chars
+        self.enable_fallback = enable_fallback
         # Request delay to avoid overwhelming Ollama server
         self.request_delay = 0.5  # 500ms delay between requests (further increased for stability)
         # Retry config
         self.max_retries = 3
         self.retry_delay = 1.0  # seconds
 
-    def _truncate_text(self, text: str) -> str:
-        """Truncate text to fit within token limit."""
-        if len(text) <= self.max_chars:
+    def _truncate_text(self, text: str, level: int = 0) -> str:
+        """
+        智能截断文本，支持降级策略。
+
+        Args:
+            text: 原始文本
+            level: 降级级别 (0=512, 1=384, 2+=直接抛异常)
+
+        Returns:
+            截断后的文本
+        """
+        if level >= len(self.TRUNCATE_LIMITS):
+            raise ValueError(
+                f"Text still too long after {len(self.TRUNCATE_LIMITS)} truncation attempts. "
+                f"Original length: {len(text)} chars"
+            )
+
+        limit = self.TRUNCATE_LIMITS[level]
+        if len(text) <= limit:
             return text
-        return text[: self.max_chars - 3] + "..."
+        return text[:limit - 3] + "..."
 
     def _embed_single(self, text: str) -> List[float]:
-        """Embed a single text using Ollama API with retry logic."""
+        """
+        Embed a single text using Ollama API with intelligent fallback.
+
+        智能降级策略: 512字符 → 384字符 → 抛异常
+        当 API 调用失败时，自动降低截断限制重试。
+        """
 
         # Check cache first
         cached = embedding_cache.get(text, self.model)
         if cached is not None:
             return cached
 
-        # Truncate if needed
-        truncated_text = self._truncate_text(text)
-
-        # Log text length for debugging
-        text_length = len(truncated_text)
         original_length = len(text)
-        if text_length != original_length:
-            logger.warning(
-                f"Ollama embedding: text truncated from {original_length} to {text_length} chars "
-                f"(max_tokens={self.max_tokens}, max_chars={self.max_chars})"
-            )
-        else:
-            logger.info(
-                f"Ollama embedding: text_length={text_length} chars, "
-                f"max_chars={self.max_chars}, max_tokens={self.max_tokens}"
-            )
 
-        url = f"{self.base_url}/api/embeddings"
-        payload = {
-            "model": self.model,
-            "prompt": truncated_text,
-            "keep_alive": -1  # Keep model loaded indefinitely
-        }
+        # 智能降级循环: 尝试不同的截断级别
+        for level in range(len(self.TRUNCATE_LIMITS)):
+            truncated_text = self._truncate_text(text, level=level)
+            text_length = len(truncated_text)
 
-        last_error = None
-        for attempt in range(self.max_retries):
-            try:
-                response = requests.post(url, json=payload, timeout=60.0)  # Increased timeout
-                response.raise_for_status()
-                result = response.json()
-
-                if "embedding" not in result:
-                    raise ValueError(f"No embedding in response: {result}")
-
-                embedding = result["embedding"]
-
-                # Validate embedding dimension
-                if not embedding or len(embedding) == 0:
-                    raise ValueError(f"Empty embedding returned: {result}")
-
-                # Cache the result
-                embedding_cache.set(text, self.model, embedding)
-
-                return embedding
-
-            except requests.exceptions.HTTPError as e:
-                last_error = e
-                status_code = e.response.status_code if e.response is not None else 0
-
-                # Don't retry on 4xx errors (except 429 rate limit)
-                if 400 <= status_code < 500 and status_code != 429:
-                    logger.error(
-                        f"Ollama embedding failed (client error): url={url}, "
-                        f"status={status_code}, error={str(e)}"
-                    )
-                    raise
-
-                # Retry on 5xx errors or timeouts
-                if attempt < self.max_retries - 1:
-                    wait_time = self.retry_delay * (2 ** attempt)  # Exponential backoff
-                    logger.warning(
-                        f"Ollama embedding failed (attempt {attempt + 1}/{self.max_retries}), "
-                        f"retrying in {wait_time}s: status={status_code}, error={str(e)}"
-                    )
-                    time.sleep(wait_time)
-                else:
-                    logger.error(
-                        f"Ollama embedding failed after {self.max_retries} attempts: "
-                        f"url={url}, status={status_code}, error={str(e)}"
-                    )
-
-            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
-                last_error = e
-                if attempt < self.max_retries - 1:
-                    wait_time = self.retry_delay * (2 ** attempt)
-                    logger.warning(
-                        f"Ollama embedding timeout/connection error (attempt {attempt + 1}/{self.max_retries}), "
-                        f"retrying in {wait_time}s: error={str(e)}"
-                    )
-                    time.sleep(wait_time)
-                else:
-                    logger.error(
-                        f"Ollama embedding failed after {self.max_retries} attempts: "
-                        f"url={url}, error={str(e)}"
-                    )
-
-            except Exception as e:
-                last_error = e
-                logger.error(
-                    f"Ollama embedding failed with unexpected error: url={url}, "
-                    f"model={self.model}, error={str(e)}", exc_info=True
+            # Log truncation info
+            if text_length != original_length:
+                logger.info(
+                    f"Ollama embedding: level={level}, text truncated from {original_length} to {text_length} chars "
+                    f"(limit={self.TRUNCATE_LIMITS[level]})"
                 )
-                raise
 
-        # All retries exhausted
-        raise last_error
+            url = f"{self.base_url}/api/embeddings"
+            payload = {
+                "model": self.model,
+                "prompt": truncated_text,
+                "keep_alive": -1  # Keep model loaded indefinitely
+            }
+
+            # 尝试 API 调用（带重试机制）
+            last_error = None
+            for attempt in range(self.max_retries):
+                try:
+                    response = requests.post(url, json=payload, timeout=60.0)
+                    response.raise_for_status()
+                    result = response.json()
+
+                    if "embedding" not in result:
+                        raise ValueError(f"No embedding in response: {result}")
+
+                    embedding = result["embedding"]
+
+                    # Validate embedding dimension
+                    if not embedding or len(embedding) == 0:
+                        raise ValueError(f"Empty embedding returned: {result}")
+
+                    # Cache the result
+                    embedding_cache.set(text, self.model, embedding)
+
+                    logger.info(
+                        f"Ollama embedding successful: level={level}, "
+                        f"text_length={text_length} chars, vector_dim={len(embedding)}"
+                    )
+                    return embedding
+
+                except requests.exceptions.HTTPError as e:
+                    last_error = e
+                    status_code = e.response.status_code if e.response is not None else 0
+
+                    # Don't retry on 4xx errors (except 429 rate limit)
+                    if 400 <= status_code < 500 and status_code != 429:
+                        logger.error(
+                            f"Ollama embedding failed (client error): url={url}, "
+                            f"status={status_code}, error={str(e)}"
+                        )
+                        # 对于 4xx 错误，尝试下一级降级
+                        break
+
+                    # Retry on 5xx errors or timeouts
+                    if attempt < self.max_retries - 1:
+                        wait_time = self.retry_delay * (2 ** attempt)
+                        logger.warning(
+                            f"Ollama embedding failed (attempt {attempt + 1}/{self.max_retries}), "
+                            f"retrying in {wait_time}s: status={status_code}"
+                        )
+                        time.sleep(wait_time)
+                    else:
+                        logger.error(
+                            f"Ollama embedding failed after {self.max_retries} attempts: "
+                            f"status={status_code}"
+                        )
+                        # 尝试下一级降级
+                        break
+
+                except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                    last_error = e
+                    if attempt < self.max_retries - 1:
+                        wait_time = self.retry_delay * (2 ** attempt)
+                        logger.warning(
+                            f"Ollama embedding timeout/connection error (attempt {attempt + 1}/{self.max_retries}), "
+                            f"retrying in {wait_time}s"
+                        )
+                        time.sleep(wait_time)
+                    else:
+                        logger.error(f"Ollama embedding failed after {self.max_retries} attempts")
+                        # 尝试下一级降级
+                        break
+
+                except Exception as e:
+                    last_error = e
+                    logger.error(
+                        f"Ollama embedding failed with unexpected error: {str(e)}", exc_info=True
+                    )
+                    # 尝试下一级降级
+                    break
+
+            # 如果所有重试都失败，继续下一级降级
+            if level < len(self.TRUNCATE_LIMITS) - 1:
+                logger.warning(
+                    f"Ollama embedding failed at level {level}, trying level {level + 1} "
+                    f"with limit {self.TRUNCATE_LIMITS[level + 1]} chars"
+                )
+
+        # 所有降级级别都失败
+        raise ValueError(
+            f"Ollama embedding failed after {len(self.TRUNCATE_LIMITS)} truncation attempts. "
+            f"Original length: {original_length} chars. "
+            f"Attempted limits: {self.TRUNCATE_LIMITS}. "
+            f"Last error: {str(last_error) if last_error else 'Unknown'}"
+        )
 
     def _embed_batch(self, texts: List[str]) -> List[List[float]]:
         """Embed multiple texts in a single batch request.
@@ -512,5 +553,5 @@ def get_embedding(settings=None) -> Embeddings:
     return OllamaEmbeddings(
         model=settings.embedding_ollama_model,
         base_url=settings.ollama_base_url,
-        max_tokens=2048  # bge-large-zh-v1.5-2k: 2048 tokens (≈800-1000 中文字符)
+        max_tokens=1024  # 统一 max_tokens=1024
     )

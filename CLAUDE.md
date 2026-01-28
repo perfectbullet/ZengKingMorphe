@@ -4,15 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-A LangGraph-based conversational AI service providing RAG (Retrieval-Augmented Generation), multi-turn dialogue, knowledge base management, and web search for digital employee interactions. Built with FastAPI, supporting multiple LLM backends (OpenAI, Ollama), and using a three-tier storage architecture (ChromaDB for vectors, ElasticSearch for keywords, MongoDB for metadata).
+A LangGraph-based conversational AI service providing RAG (Retrieval-Augmented Generation), multi-turn dialogue, knowledge base management, and web search for digital employee interactions. Built with FastAPI, supporting multiple LLM backends with intelligent routing.
 
-**Tech Stack**: FastAPI + LangGraph + OpenAI/Ollama + ChromaDB + ElasticSearch + MongoDB + Tavily Web Search + MinerU PDF Parsing
+**Tech Stack**: FastAPI + LangGraph + DeepSeek/Qwen (Ollama/OpenAI) + ChromaDB + ElasticSearch + MongoDB + Tavily + BGE Reranker
 
 **Service Architecture**:
 - **ai-service** - FastAPI backend (port 8100 in Docker, 8000 local)
-- **mongodb** - Document metadata and conversation records (port 27117)
-- **chroma** - Vector embeddings (port 8101)
-- **elasticsearch** - BM25 keyword search (port 9320)
+- **mongodb** - Document metadata and conversations (port 27017)
+- **chroma** - Vector embeddings (port 8001)
+- **elasticsearch** - BM25 keyword search (port 9200)
 
 ---
 
@@ -80,15 +80,17 @@ python -m pytest tests/
 # Run specific test file
 python -m pytest tests/test_web_search.py -v
 
-# Run standalone test script (alternative method)
-python tests/test_web_search.py
+# Reranker test (BGE API)
+PYTHONPATH=. python scripts/test_ollama_reranker.py
 
-# MinerU PDF processing test
-python tests/test_mineru_client.py process --file path/to/document.pdf --save-md
+# RAG e2e test with query mode
+PYTHONPATH=. python scripts/test_rag_e2e.py --query-only --kb-id kb_5f2a02bd5dfe --query "test query"
 
-# RAG evaluation
-python scripts/rag_evaluation_test.py
-python scripts/e2e_rag_evaluation.py
+# RAG e2e test with sample data view
+PYTHONPATH=. python scripts/test_rag_e2e.py --sample-only --kb-id kb_5f2a02bd5dfe
+
+# Full RAG e2e test with JSON input
+PYTHONPATH=. python scripts/test_rag_e2e.py --json input.json --kb-id kb_5f2a02bd5dfe
 ```
 
 ---
@@ -97,16 +99,17 @@ python scripts/e2e_rag_evaluation.py
 
 ### LangGraph Conversation Workflow
 
-The core conversation engine is a **16-node StateGraph** ([ai-service/app/services/conversation_service.py](ai-service/app/services/conversation_service.py)):
+The core conversation engine is a **17-node StateGraph** ([ai-service/app/services/conversation_service.py](ai-service/app/services/conversation_service.py)):
 
-**Flow**: `load_employee_config → load_session_context → input_validation → evaluate_complexity → rewrite_query → check_realtime_query → match_faq → recognize_intent → knowledge_retrieval → grade_documents → rerank_documents → compress_context → web_search → generate_answer → verify_answer → save_conversation`
+**Flow**: `load_employee_config → load_session_context → input_validation → classify_query_type → [conditional branches] → evaluate_complexity → rewrite_query → check_realtime_query → match_faq → recognize_intent → knowledge_retrieval → rerank_documents → compress_context → [conditional: low_relevance?] → web_search → generate_answer → verify_answer → save_conversation`
 
 **Key Routing Logic**:
-- **Realtime queries** (weather, news, stock prices) → bypass FAQ/RAG, direct to web search
+- **classify_query_type**: Detects greetings, sensitive words, or forbidden topics
+- **Realtime queries** → bypass FAQ/RAG, direct to web search
 - **FAQ matched** → skip RAG, generate answer directly
 - **Greeting intent** → skip RAG, generate answer directly
 - **Low relevance score** (< `settings.relevance_threshold`, default 0.6) → trigger web search as fallback
-- **Otherwise** → RAG retrieval → document grading → reranking → context compression → LLM generation
+- **Otherwise** → RAG retrieval → reranking → context compression → LLM generation
 
 **State Management**: `ConversationState` TypedDict with 28 fields flows through all nodes, including:
 - Core: `user_query`, `user_id`, `session_id`, `employee_id`
@@ -132,7 +135,7 @@ Knowledge base documents stored across **3 databases** ([ai-service/app/services
 rrf_score = 1 / (rank + k)  # where k=60 is the constant
 ```
 - Combines vector search and keyword search results
-- Reranks documents based on combined scores
+- Optionally reranks with BGE Reranker API (default: enabled)
 - Default `top_k=5` for each search method
 
 ### MinerU PDF Parsing
@@ -190,8 +193,9 @@ Background service to prevent Ollama model unloading ([ai-service/app/services/o
 
 ### ElasticSearch Indices
 
-- `digital_employee_*` - BM25 keyword search index (prefix configurable via `ES_INDEX_PREFIX`)
-- Supports full-text search on document content
+- `digital_employee_doc` - Document chunks (prefix configurable via `es_index_prefix`)
+- `digital_employee_faq` - FAQ entries
+- **Important**: Always use `es_db.doc_index` and `es_db.faq_index` instead of hardcoded `"doc"` or `"faq"`
 
 ---
 
@@ -274,27 +278,49 @@ for line in response.iter_lines(decode_unicode=True):
 
 ## LLM Configuration
 
+### LLM Routing Modes
+
+The system supports three routing modes (configured via `llm_routing_mode`):
+
+| Mode | Description | Use Case |
+|------|-------------|----------|
+| `local_only` | Uses local Ollama for all queries | Offline, privacy, cost savings |
+| `remote_only` | Uses external API (DeepSeek via SiliconFlow) | Best quality, complex tasks |
+| `hybrid` | Auto-selects based on query complexity (default threshold: 7.0) | Balanced performance/cost |
+
 ### Switching Backends
 
-**Option 1: OpenAI-style API** (default: SiliconFlow/DeepSeek)
+**Option 1: OpenAI-style API** (SiliconFlow/DeepSeek - default for complex queries)
 ```bash
 # .env-local file
-USE_OLLAMA=false
 OPENAI_API_KEY=sk-...
 OPENAI_API_BASE=https://api.siliconflow.cn/v1
 OPENAI_MODEL=deepseek-ai/DeepSeek-V3.1-Terminus
 OPENAI_GRADER_MODEL=deepseek-ai/DeepSeek-V3
-SILICONFLOW_API_KEY=sk-...  # Required for SiliconFlow
 ```
 
-**Option 2: Local Ollama**
+**Option 2: Local Ollama** (default for simple queries)
 ```bash
 # .env-local file
-USE_OLLAMA=true
 OLLAMA_BASE_URL=http://192.168.8.233:11434
 OLLAMA_MODEL=qwen2.5:7b
 OLLAMA_GRADER_MODEL=qwen2.5:7b
 OLLAMA_KEEP_ALIVE_INTERVAL=180  # Seconds, 0 to disable
+```
+
+### BGE Reranker Configuration
+
+**BGE API Reranker** (default, no text length limits):
+```bash
+BGE_RERANKER_API_URL=http://192.168.8.233:6006
+BGE_RERANKER_API_KEY=sk-aaabbbcccdddeeefffggghhhiiijjjkkk
+BGE_RERANKER_MODEL=bge-reranker-v2-m3
+RERANKER_TYPE=bge_api
+```
+
+**Local BGE Reranker** (requires FlagEmbedding):
+```bash
+RERANKER_TYPE=bge
 ```
 
 ### Embedding Configuration
@@ -306,14 +332,117 @@ Embeddings are handled separately from LLM:
 EMBEDDING_TYPE=openai_style
 EMBEDDING_MODEL=BAAI/bge-large-zh-v1.5
 EMBEDDING_BASE_URL=http://localhost:50009
-EMBEDDING_API_KEY=
 
 # Option 2: SiliconFlow embeddings
 EMBEDDING_TYPE=siliconflow
 SILICONFLOW_API_KEY=sk-...
 ```
 
-**Embedding Cache**: LRU cache implemented in `app/services/embedding_cache.py` to reduce redundant API calls.
+**Embedding Cache**: LRU cache in `app/services/embedding_cache.py` reduces redundant API calls.
+
+### OllamaEmbeddings (当前配置)
+
+**代码位置**: `app/utils/embeddings.py:26-362`
+
+**配置**:
+```bash
+OLLAMA_BASE_URL=http://192.168.8.233:11434
+EMBEDDING_OLLAMA_MODEL=bge-large-zh-v1.5:2k  # 或其他 embedding 模型
+```
+
+**字符限制**:
+- `max_tokens`: 1024 (默认)
+- `max_chars`: `int(max_tokens / 2.5)` ≈ 408 字符
+- 超长文本会被自动截断并添加 `...`
+
+**API 调用**:
+```python
+POST {base_url}/api/embeddings
+{
+    "model": "bge-large-zh-v1.5:2k",
+    "prompt": "文本内容",
+    "keep_alive": -1  # 保持模型加载
+}
+```
+
+**调用链路**:
+```
+document_service._process_chunks()
+  ↓ 构建 chunk_texts
+chroma_db.add_documents(documents=chunk_texts, ...)
+  ↓
+collection.add(documents, ...)  # ChromaDB 内部
+  ↓
+ChromaEmbeddingWrapper.__call__(input)
+  ↓
+OllamaEmbeddings.embed_documents(texts)
+  ↓
+OllamaEmbeddings._embed_batch(texts)
+  ↓
+POST /api/embeddings (逐个调用，非批量)
+```
+
+**传入 Embedding 的文本格式**:
+- **普通分块**: `chunk.content`
+- **MinerU分块**: `"{title_str}\n\n{chunk.content}"` (标题路径作为前缀)
+
+**DocumentModel 字段** (`app/models/database.py:94-109`):
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `doc_id` | str | 文档ID |
+| `filename` | str | 文件名 |
+| `kb_id` | str | 知识库ID |
+| `category` | str\|None | 分类 |
+| `size` | int | 文件大小 |
+| `format` | str | 文件格式 (PDF/Word/TXT/Markdown/HTML) |
+| `chunks_count` | int | 分块数量 |
+| `vectors_count` | int | 向量数量 |
+| `status` | str | processing/completed/failed |
+| `error_message` | str\|None | 错误信息 |
+| `segment_config` | Dict\|None | 自定义分块配置 |
+| `metadata` | Dict | 元数据 |
+| `uploaded_at` | datetime | 上传时间 |
+| `processed_at` | datetime\|None | 处理完成时间 |
+
+**DocumentChunkModel 字段** (`app/models/database.py:112-133`):
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| **基础字段** | | |
+| `chunk_id` | str | 分块ID |
+| `doc_id` | str | 所属文档ID |
+| `kb_id` | str | 知识库ID |
+| `content` | str | **分块内容 (传入 embedding)** |
+| `chunk_index` | int | 分块索引 |
+| `summary` | Dict\|None | 分块摘要 |
+| `vector_id` | str\|None | ChromaDB 向量ID |
+| `metadata` | Dict | 元数据 |
+| `created_at` | datetime | 创建时间 |
+| `updated_at` | datetime\|None | 更新时间 |
+| **MinerU结构化字段** | | |
+| `page_idx` | int\|None | 起始页码 |
+| `page_indices` | List[int] | 包含的所有页码 |
+| `block_types` | List[str] | 块类型 ['text', 'title'] |
+| `image_references` | List[str] | 图片URL列表 |
+| `image_captions` | List[str] | 图片描述列表 |
+| `title_path` | List[str] | **标题路径 (会前缀到 content)** |
+| `structure_level` | int | 文档结构层级 |
+
+### BGE Reranker Docker Deployment
+
+For GPU-accelerated reranking:
+
+```bash
+# CPU mode
+docker run -d --name bge-reranker-v2-m3 -p 6006:6006 wkao/bge-reranker-v2-m3:latest
+
+# GPU mode (requires NVIDIA Container Toolkit)
+docker run -d --name bge-reranker-v2-m3 --gpus all -p 6006:6006 wkao/bge-reranker-v2-m3:latest
+```
+
+**Requirements for GPU**:
+- NVIDIA GPU Driver ≥ 535.86.10
+- CUDA 12.2+
+- NVIDIA Container Toolkit installed
 
 ---
 
@@ -339,8 +468,9 @@ AI service calls Java backend via `JAVA_API_BASE_URL`:
 
 | Component | Path | Description |
 |-----------|------|-------------|
-| LangGraph workflow | [ai-service/app/services/conversation_service.py](ai-service/app/services/conversation_service.py) | 15-node StateGraph for conversation flow |
+| LangGraph workflow | [ai-service/app/services/conversation_service.py](ai-service/app/services/conversation_service.py) | 17-node StateGraph for conversation flow |
 | RAG hybrid search | [ai-service/app/services/rag_service.py](ai-service/app/services/rag_service.py) | Vector + keyword search with RRF fusion |
+| BGE Reranker | [ai-service/app/services/reranker_service.py](ai-service/app/services/reranker_service.py) | BGEAPIReranker for document reranking |
 | Document service | [ai-service/app/services/document_service.py](ai-service/app/services/document_service.py) | Document CRUD and chunk management |
 | MinerU client | [ai-service/app/services/mineru_client.py](ai-service/app/services/mineru_client.py) | PDF parsing with caching/chunking |
 | MinerU API | [ai-service/app/api/endpoints/mineru.py](ai-service/app/api/endpoints/mineru.py) | Web interface for PDF processing |
@@ -353,15 +483,15 @@ AI service calls Java backend via `JAVA_API_BASE_URL`:
 | Logging wrapper | [ai-service/app/core/logging.py](ai-service/app/core/logging.py) | Loguru-based structured logging |
 | Database connections | [ai-service/app/core/database.py](ai-service/app/core/database.py) | MongoDB (Motor) connection |
 | Chroma connection | [ai-service/app/core/chroma.py](ai-service/app/core/chroma.py) | ChromaDB client wrapper |
-| ElasticSearch connection | [ai-service/app/core/elasticsearch.py](ai-service/app/core/elasticsearch.py) | ES client wrapper |
+| ElasticSearch connection | [ai-service/app/core/elasticsearch.py](ai-service/app/core/elasticsearch.py) | ES client wrapper (index prefix: `digital_employee_`) |
 | Data models | [ai-service/app/models/database.py](ai-service/app/models/database.py) | MongoDB document models |
 | API schemas | [ai-service/app/models/schemas.py](ai-service/app/models/schemas.py) | Pydantic request/response models |
 | App entry | [ai-service/main.py](ai-service/main.py) | FastAPI app with lifespan management |
 | Task processor | [ai-service/app/services/task_processor.py](ai-service/app/services/task_processor.py) | Background task queue |
 | Embedding cache | [ai-service/app/services/embedding_cache.py](ai-service/app/services/embedding_cache.py) | LRU cache for embeddings |
 | Ollama keep-alive | [ai-service/app/services/ollama_keepalive.py](ai-service/app/services/ollama_keepalive.py) | Prevents model unloading |
-| RAG evaluation script | [ai-service/scripts/e2e_rag_evaluation.py](ai-service/scripts/e2e_rag_evaluation.py) | End-to-end RAG testing |
-| Test configuration | [ai-service/tests/conftest.py](ai-service/tests/conftest.py) | Pytest fixtures and setup |
+| Reranker test | [ai-service/scripts/test_ollama_reranker.py](ai-service/scripts/test_ollama_reranker.py) | BGE Reranker API test script |
+| RAG e2e test | [ai-service/scripts/test_rag_e2e.py](ai-service/scripts/test_rag_e2e.py) | End-to-end RAG testing |
 
 ---
 
