@@ -28,7 +28,7 @@ from app.core.chroma import chroma_db
 
 from app.services.task_processor import task_processor
 from app.services.document_service import generate_doc_id
-from app.models.schemas import CreateRagDocumentRequest, CreateRagDocumentResponse
+from app.models.schemas import CreateRagDocumentRequest, CreateRagDocumentResponse, SegmentVo, ResponseResult
 
 logger = get_logger(__name__)
 
@@ -592,6 +592,7 @@ async def create_rag_document_with_segment(
         # Submit async task with pre-generated doc_id
         task_id = await task_processor.submit_task(
             kb_id=request.kb_id,
+            enhance=request.enhance,
             filename=request.document_name,
             file_path=str(file_path),
             category=None,
@@ -620,4 +621,169 @@ async def create_rag_document_with_segment(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create RAG document",
+        )
+
+
+@router.post("/set_segment")
+async def set_segment(
+    request: SegmentVo,
+    api_key: str = Depends(get_api_key),
+    db = Depends(get_database)
+):
+    """
+        设置文档或视频资源是否知识增强
+
+        nArgs:
+            - request: 文档分段设置
+            - api_key: API key from auth
+            - db: Database instance
+
+        Returns:
+            - result
+        """
+    doc_id = request.doc_id
+    try:
+        logger.info(f"set_segment {doc_id} request")
+
+        doc = await db.documents.find_one({"doc_id": doc_id})
+
+        if not doc:
+            return ResponseResult.error(status.HTTP_404_NOT_FOUND, "error", f"set_segment not found")
+
+        chunk_config = {
+            "is_space_flag": request.is_space_flag,
+            "is_menu_flag": request.is_menu_flag,
+            "segment_type": request.segment_type,
+            "is_segment_union_flag": request.is_segment_union_flag,
+            "segment_union_max_length": request.segment_union_max_length,
+            "segment_identifier_type": request.segment_identifier_type,
+            "identifier_default": request.identifier_default,
+            "identifier_customize": request.identifier_customize,
+        }
+        update_data = {
+            "status": "processing",
+            "segment_config": chunk_config
+        }
+
+        result = await db.documents.update_one(
+            {"doc_id": doc_id},
+            {"$set": update_data}
+        )
+
+        if result and result.modified_count == 1:
+            logger.info(f"set_segment {doc_id} success")
+
+            task = await db.document_tasks.find_one({"doc_id": doc_id})
+
+            if not task:
+                return ResponseResult.error(status.HTTP_404_NOT_FOUND, "error",
+                                            f"set_segment {doc_id} task not found")
+
+            await task_processor.restart_task(
+                kb_id=task["kb_id"],
+                filename=task["filename"],
+                file_path=task["file_path"],
+                category=task["category"],
+                chunk_config=task["metadata"]["chunk_config"],
+                doc_id=task["doc_id"],
+                resource_id=task["metadata"]["resource_id"],
+            )
+
+            return ResponseResult.success(None)
+        else:
+            return ResponseResult.error(status.HTTP_400_BAD_REQUEST, "error", f"set_segment {doc_id} failed")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("set_segment exception",
+                     error=str(e),
+                     exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="set_segment error"
+        )
+
+
+@router.get("/get_study_file/{doc_id}")
+async def get_study_file(
+    doc_id: str,
+    api_key: str = Depends(get_api_key),
+    db = Depends(get_database)
+):
+    """
+        获取文件学习后的分段知识文件（返回json格式的字符串）
+
+        nArgs:
+            - doc_id: 文档id
+            - api_key: API key from auth
+            - db: Database instance
+
+        Returns:
+            - result
+        """
+    try:
+        logger.info(f"get_study_file {doc_id} request")
+
+        doc = await db.documents.find_one({"doc_id": doc_id})
+
+        if not doc:
+            return ResponseResult.error(status.HTTP_404_NOT_FOUND, "error", f"get_study_file not found")
+
+        # 功能待实现
+
+        return ResponseResult.success(None)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("get_study_file exception",
+                     error=str(e),
+                     exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="get_study_file error"
+        )
+
+
+@router.post("/upload_study_file")
+async def upload_study_file(
+    doc_id: str,
+    json_content: str,
+    api_key: str = Depends(get_api_key),
+    db = Depends(get_database)
+):
+    """
+        上传文件学习后的分段知识文件（json格式）
+
+        nArgs:
+            - doc_id: 文档id
+            - json_content: 分段知识文件
+            - api_key: API key from auth
+            - db: Database instance
+
+        Returns:
+            - result
+        """
+    try:
+        logger.info(f"update_study_file {doc_id} request")
+
+        doc = await db.documents.find_one({"doc_id": doc_id})
+
+        if not doc:
+            return ResponseResult.error(status.HTTP_404_NOT_FOUND, "error", f"update_study_file not found")
+
+        # 功能待实现
+
+        return ResponseResult.success(None)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("update_study_file exception",
+                     error=str(e),
+                     exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="update_study_file error"
         )

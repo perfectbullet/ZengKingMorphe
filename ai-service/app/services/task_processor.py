@@ -32,6 +32,7 @@ class DocumentTaskProcessor:
     async def submit_task(
         self,
         kb_id: str,
+        enhance: int,
         filename: str,
         file_path: str,
         category: Optional[str] = None,
@@ -44,6 +45,7 @@ class DocumentTaskProcessor:
 
         Args:
             kb_id: Knowledge base ID
+            enhance: 设置文档或视频资源是否知识增强：0=不增强，1=增强
             filename: Original filename
             file_path: Path to uploaded file
             category: Document category
@@ -61,6 +63,7 @@ class DocumentTaskProcessor:
         task_model = DocumentTaskModel(
             task_id=task_id,
             kb_id=kb_id,
+            enhance=enhance,
             filename=filename,
             file_path=file_path,
             category=category,
@@ -85,6 +88,7 @@ class DocumentTaskProcessor:
         await self.task_queue.put({
             "task_id": task_id,
             "kb_id": kb_id,
+            "enhance": enhance,
             "filename": filename,
             "file_path": file_path,
             "category": category,
@@ -238,7 +242,9 @@ class DocumentTaskProcessor:
             self.active_tasks.pop(task_id, None)
     
     async def _process_with_progress(self, task_data: Dict) -> str:
-        """Process document with progress updates."""
+        """Process document with progress updates.
+            保存文档
+        """
         task_id = task_data["task_id"]
 
         # Call original document processor
@@ -247,6 +253,7 @@ class DocumentTaskProcessor:
             file_path=task_data["file_path"],
             filename=task_data["filename"],
             kb_id=task_data["kb_id"],
+            enhance=task_data["enhance"],
             category=task_data.get("category"),
             task_id=task_id,  # Pass task_id for progress tracking
             chunk_config=task_data.get("chunk_config"),  # Pass chunk_config
@@ -572,6 +579,7 @@ class DocumentTaskProcessor:
         self,
         task_id: str,
         kb_id: str,
+        enhance: str,
         filename: str,
         file_path: str,
         category: Optional[str] = None,
@@ -583,6 +591,7 @@ class DocumentTaskProcessor:
         await self.task_queue.put({
             "task_id": task_id,
             "kb_id": kb_id,
+            "enhance": enhance,
             "filename": filename,
             "file_path": file_path,
             "category": category,
@@ -592,7 +601,7 @@ class DocumentTaskProcessor:
         })
 
         logger.info(
-            "Document task submitted",
+            f"Document task {task_id} submitted",
             doc_id=doc_id,
             task_id=task_id
         )

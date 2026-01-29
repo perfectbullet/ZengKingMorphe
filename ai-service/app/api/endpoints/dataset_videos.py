@@ -76,6 +76,7 @@ async def create_dataset_video(
         # 创建任务
         task_id = await task_processor.submit_task(
                 kb_id=request.kb_id,
+                enhance=request.enhance,
                 filename=request.document_name,
                 file_path=str(file_path),
                 category=None,
@@ -180,7 +181,7 @@ async def restart_task(
             - result
         """
     try:
-        logger.info("restart_task request", task_id=task_id)
+        logger.info(f"restart_task {task_id} request")
 
         task = await db.document_tasks.find_one({"task_id": task_id})
 
@@ -215,7 +216,7 @@ async def restart_task(
         )
 
 
-@router.post("set_enhance/{video_id}")
+@router.post("/set_enhance")
 async def set_enhance(
     doc_id: str,
     enhance: int,
@@ -235,7 +236,7 @@ async def set_enhance(
             - result
         """
     try:
-        logger.info("set_enhance request", doc_id=doc_id)
+        logger.info(f"set_enhance {doc_id} request")
 
         doc = await db.documents.find_one({"doc_id": doc_id})
 
@@ -249,6 +250,24 @@ async def set_enhance(
         )
 
         if result and result.modified_count == 1:
+            logger.info(f"set_enhance {doc_id} success")
+
+            task = await db.document_tasks.find_one({"doc_id": doc_id})
+
+            if not task:
+                return ResponseResult.error(status.HTTP_404_NOT_FOUND, "error",
+                                            f"set_enhance {doc_id} task not found")
+
+            await task_processor.restart_task(
+                kb_id=task["kb_id"],
+                filename=task["filename"],
+                file_path=task["file_path"],
+                category=task["category"],
+                chunk_config=task["metadata"]["chunk_config"],
+                doc_id=task["doc_id"],
+                resource_id=task["metadata"]["resource_id"],
+            )
+
             return ResponseResult.success(None)
         else:
             return ResponseResult.error(status.HTTP_400_BAD_REQUEST, "error", f"set_enhance {doc_id} failed")

@@ -446,6 +446,7 @@ class SegmentVo(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
+                "doc_id": "doc_994051b1c13e",
                 "is_space_flag": 1,
                 "is_menu_flag": 1,
                 "segment_type": 1,
@@ -457,7 +458,8 @@ class SegmentVo(BaseModel):
             }
         }
     )
-    
+
+    doc_id: str = Field(..., description="文档ID")
     is_space_flag: int = Field(0, description="文本预处理：删除连续空格、换行、制表符：0=不启用，1=启用")
     is_menu_flag: int = Field(0, description="文本预处理：删除目录、页眉、页脚：0=不启用，1=启用")
     segment_type: int = Field(0, description="分段方式：0=换行切分，1=分段标识符切分")
@@ -474,6 +476,7 @@ class CreateRagDocumentRequest(BaseModel):
         json_schema_extra={
             "example": {
                 "kb_id": "kb_id_abc123",
+                "enhance": 1,
                 "resource_id": 48907,
                 "document_name": "首饰雕蜡工艺-全本.txt",
                 "segment_flag": 1,
@@ -501,6 +504,7 @@ class CreateRagDocumentRequest(BaseModel):
     segment_flag: int = Field(0, description="分段策略：0=自动分段，1=自定义文档分段")
     segment_vo: Optional[SegmentVo] = Field(None, description="RAG文档分段设置")
     resource_url: str = Field(..., description="系统资源URL")
+    enhance: int = Field(..., description="设置文档或视频资源是否知识增强：0=不增强，1=增强")
 
 
 class CreateRagDocumentResponse(BaseModel):
@@ -746,7 +750,8 @@ class CreateDatasetVideoRequest(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "kb_id": "28",
+                "kb_id": "team_28",
+                "enhance": 1,
                 "resource_id": 49392,
                 "document_name": "测试视频.mp4",
                 "resource_url": "https://education-test-private.oss-cn-beijing.aliyuncs.com/text/04057b3a-aa93-4848-b60d-9aad3282d714.md?Expires=1769436115&OSSAccessKeyId=LTAI4FctZ3DLxBxVPrqD4sCo&Signature=bvtIhWU%2Ff6dBYodO2vgkfVHqAvo%3D"
@@ -760,3 +765,4 @@ class CreateDatasetVideoRequest(BaseModel):
     start_time: Optional[str] = Field(None, description="生效开始时间")
     end_time: Optional[str] = Field(None, description="生效结束时间")
     resource_url: str = Field(..., description="系统资源URL")
+    enhance: int = Field(..., description="设置文档或视频资源是否知识增强：0=不增强，1=增强")

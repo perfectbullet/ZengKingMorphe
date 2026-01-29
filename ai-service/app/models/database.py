@@ -96,9 +96,10 @@ class DocumentModel(BaseModel):
     doc_id: str
     filename: str
     kb_id: str
+    enhance: int = 1  # 0=不增强，1=增强
     category: Optional[str] = None
     size: int = 0
-    format: str  # PDF/Word/TXT/Markdown/HTML
+    format: str  # PDF/DOCX/TXT/MD/HTML/MP4
     chunks_count: int = 0
     vectors_count: int = 0
     status: str = "processing"  # processing/completed/failed

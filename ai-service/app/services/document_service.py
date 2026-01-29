@@ -40,6 +40,7 @@ class DocumentProcessor:
             ".txt": self._extract_txt,
             ".md": self._extract_markdown,
             ".html": self._extract_html,
+            ".mp4": self._extract_mp4,
         }
 
     async def process_document(
@@ -47,6 +48,7 @@ class DocumentProcessor:
         file_path: str,
         filename: str,
         kb_id: str,
+        enhance: int,
         category: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
         task_id: Optional[str] = None,  # Add task_id for progress tracking
@@ -61,6 +63,7 @@ class DocumentProcessor:
             file_path: Path to the document file
             filename: Original filename
             kb_id: Knowledge base ID
+            enhance: 设置文档或视频资源是否知识增强：0=不增强，1=增强
             category: Document category (optional)
             metadata: Additional metadata (optional)
             task_id: Task ID for progress tracking (optional)
@@ -72,10 +75,6 @@ class DocumentProcessor:
             Document ID
         """
         try:
-            # Use provided doc_id or generate a new one
-            if not doc_id:
-                doc_id = self._generate_doc_id(filename, kb_id)
-
             # Get file info
             file_size = os.path.getsize(file_path)
             file_ext = os.path.splitext(filename)[1].lower()
@@ -85,30 +84,39 @@ class DocumentProcessor:
             if resource_id:
                 doc_metadata["resource_id"] = resource_id
 
-            # Create document record
+            # 插入文档记录
             db = await get_database()
-            doc_model = DocumentModel(
-                doc_id=doc_id,
-                filename=filename,
-                kb_id=kb_id,
-                category=category,
-                size=file_size,
-                format=file_ext[1:].upper(),
-                status="processing",
-                segment_config=chunk_config,  # Save segment configuration
-                metadata=doc_metadata,
-            )
 
-            await db.documents.insert_one(doc_model.model_dump())
+            # 文档记录不存在则新建，否则更新（重现学习，修改增强）
+            doc = await db.documents.find_one({"doc_id": doc_id})
 
-            logger.info(
-                "Started processing document",
-                doc_id=doc_id,
-                filename=filename,
-                kb_id=kb_id,
-                custom_chunking=bool(chunk_config),
-                resource_id=resource_id,
-            )
+            if not doc:
+                doc_model = DocumentModel(
+                    doc_id=doc_id,
+                    filename=filename,
+                    kb_id=kb_id,
+                    enhance=enhance,
+                    category=category,
+                    size=file_size,
+                    format=file_ext[1:].upper(),
+                    status="processing",
+                    segment_config=chunk_config,  # Save segment configuration
+                    metadata=doc_metadata,
+                )
+
+                result = await db.documents.insert_one(doc_model.model_dump())
+
+                if result and result.inserted_id:
+                    logger.info(
+                        "insert-document",
+                        doc_id=doc_id,
+                        filename=filename,
+                        kb_id=kb_id,
+                        custom_chunking=bool(chunk_config),
+                        resource_id=resource_id,
+                    )
+                else:
+                    logger.error(f"insert-document {doc_id} failed")
 
             # Extract text (check if we should use MinerU for PDFs)
             use_mineru = metadata.get("use_mineru", False) if metadata else False
@@ -556,6 +564,17 @@ class DocumentProcessor:
         except Exception as e:
             logger.error(
                 "Failed to extract HTML", file=file_path, error=str(e), exc_info=True
+            )
+            raise
+
+    async def _extract_mp4(self, file_path: str) -> str:
+        """Extract text from MP4 file."""
+        try:
+            # 功能还未实现
+            return ""
+        except Exception as e:
+            logger.error(
+                "Failed to extract MP4", file=file_path, error=str(e), exc_info=True
             )
             raise
 
@@ -1185,10 +1204,6 @@ class DocumentProcessor:
         await db.document_chunks.insert_many(chunk_docs)
 
         logger.info(f"Stored chunks: doc_id={doc_id}, chunks_count={len(valid_chunks)}")
-
-    def _generate_doc_id(self, filename: str, kb_id: str) -> str:
-        """Generate unique document ID."""
-        return generate_doc_id(filename, kb_id)
 
 
 def generate_doc_id(filename: str, kb_id: str) -> str:
