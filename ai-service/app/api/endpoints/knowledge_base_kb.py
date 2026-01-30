@@ -33,25 +33,21 @@ logger.info(f"Upload directory configured: {UPLOAD_DIR}")
 async def create_knowledge_base(
     request: CreateKnowledgeBaseRequest,
     api_key: str = Depends(get_api_key),
-    db = Depends(get_database)
+    db=Depends(get_database)
 ):
     """
-    创建知识库。
+        创建知识库。
 
-    Args:
-        - request: create_knowledge_base request
-        - api_key: API key from auth
-        - db: Database instance
+        Args:
+            - request: create_knowledge_base request
+            - api_key: API key from auth
+            - db: Database instance
 
-    Returns:
-        - Created knowledge base data
+        Returns:
+            - Created knowledge base data
     """
     try:
-        logger.info(
-            "create_knowledge_base request",
-            name=request.name,
-            category=request.category
-        )
+        logger.info(f"create_knowledge_base request name={request.name} category={request.category}")
 
         # Generate KB ID
         kb_id = f"kb_{hashlib.md5(f'{request.name}_{datetime.utcnow().timestamp()}'.encode()).hexdigest()[:12]}"
@@ -82,16 +78,11 @@ async def create_knowledge_base(
             }
             return ResponseResult.success(data)
         else:
-            logger.error(f"create_knowledge_base failed")
             return ResponseResult.error(status.HTTP_400_BAD_REQUEST, "error",
                                         "create_knowledge_base failed")
 
     except Exception as e:
-        logger.error(
-            "create_knowledge_base exception",
-            error=str(e),
-            exc_info=True
-        )
+        logger.error(f"create_knowledge_base exception error={str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="create_knowledge_base error"
@@ -102,34 +93,28 @@ async def create_knowledge_base(
 async def update_knowledge_base(
     request: UpdateKnowledgeBaseRequest,
     api_key: str = Depends(get_api_key),
-    db = Depends(get_database)
+    db=Depends(get_database)
 ):
     """
-    更新知识库信息。
+        更新知识库信息。
 
-    Args:
-        - request: Update knowledge base request (includes kb_id)
-        - api_key: API key from auth
-        - db: Database instance
+        Args:
+            - request: Update knowledge base request (includes kb_id)
+            - api_key: API key from auth
+            - db: Database instance
 
-    Returns:
-        - Updated knowledge base data
+        Returns:
+            - Updated knowledge base data
     """
     kb_id = request.kb_id
     try:
-        logger.info(
-            "update_knowledge_base request",
-            kb_id=kb_id,
-            updates=request.model_dump(exclude_none=True)
-        )
+        logger.info(f"update_knowledge_base request kb_id={kb_id} updates={request.model_dump(exclude_none=True)}")
 
         # Check if knowledge base exists
         kb = await db.knowledge_bases.find_one({'kb_id': kb_id})
         if not kb:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"update_knowledge_base {kb_id} not found"
-            )
+            return ResponseResult.error(status.HTTP_404_NOT_FOUND, "error",
+                                        f"update_knowledge_base not found kb_id={kb_id}")
 
         # Build update data (only include non-None fields)
         update_data = {}
@@ -180,19 +165,13 @@ async def update_knowledge_base(
             }
             return ResponseResult.success(data)
         else:
-            logger.error(f"update_knowledge_base {kb_id} update failed")
             return ResponseResult.error(status.HTTP_400_BAD_REQUEST, "error",
                                         "update_knowledge_base failed")
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(
-            "update_knowledge_base exception",
-            kb_id=kb_id,
-            error=str(e),
-            exc_info=True
-        )
+        logger.error(f"update_knowledge_base exception kb_id={kb_id} error={str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="update_knowledge_base error"
@@ -203,47 +182,39 @@ async def update_knowledge_base(
 async def delete_knowledge_bases(
     kb_id: str,
     api_key: str = Depends(get_api_key),
-    db = Depends(get_database)
+    db=Depends(get_database)
 ):
     """
-    删除知识库信息。
+        删除知识库信息。
 
-    nArgs:
-        - kb_id: knowledge bases ID
-        - api_key: API key from auth
-        - db: Database instance
+        nArgs:
+            - kb_id: knowledge bases ID
+            - api_key: API key from auth
+            - db: Database instance
 
-    Returns:
-        - result
+        Returns:
+            - result
     """
     try:
-        logger.info("delete_knowledge_bases request", kb_id=kb_id)
+        logger.info(f"delete_knowledge_bases request kb_id={kb_id}")
 
-        # Update knowledge base
+        # 删除数据
         result = await db.knowledge_bases.delete_one({'kb_id': kb_id})
 
         if not result:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="delete_knowledge_bases cannot be deleted (not found or already completed)"
-            )
+            return ResponseResult.error(status.HTTP_404_NOT_FOUND, "error",
+                                        f"delete_knowledge_bases not found kb_id={kb_id}")
 
         if result.deleted_count == 1:
             return ResponseResult.success(None)
         else:
-            logger.error(f"delete_knowledge_bases {kb_id} not found")
-            return ResponseResult.error(status.HTTP_400_BAD_REQUEST, "error",
-                                        f"delete_knowledge_bases {kb_id} not found")
+            return ResponseResult.error(status.HTTP_404_NOT_FOUND, "error",
+                                        f"delete_knowledge_bases not found kb_id={kb_id}")
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(
-            "delete_knowledge_bases exception",
-            kb_id=kb_id,
-            error=str(e),
-            exc_info=True
-        )
+        logger.error(f"delete_knowledge_bases exception kb_id={kb_id} error={str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="delete_knowledge_bases error"

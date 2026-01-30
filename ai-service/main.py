@@ -20,7 +20,8 @@ from app.api.middleware.error_handler import (
     validation_exception_handler,
     general_exception_handler
 )
-from app.api.endpoints import chat, session, employee, conversation, webhook, mineru, dataset_videos
+from app.api.endpoints import chat, session, employee, conversation, mineru, dataset_video, sensitive_word, \
+    major_word, dataset_faq
 from app.api.endpoints import knowledge_base_kb, documents, metrics, websocket
 
 # Setup logging
@@ -129,12 +130,14 @@ app.include_router(employee.router, prefix="/api/ai/digital-employee", tags=["Di
 # Knowledge base endpoints (split into two files)
 app.include_router(knowledge_base_kb.router, prefix="/api/knowledge-base", tags=["Knowledge Base"])
 app.include_router(documents.router, prefix="/api/knowledge-base/documents", tags=["Documents"])
-app.include_router(dataset_videos.router, prefix="/api/knowledge-base/videos", tags=["Videos"])
+app.include_router(dataset_video.router, prefix="/api/knowledge-base/video", tags=["Video"])
 app.include_router(conversation.router, prefix="/api/conversation", tags=["Conversation"])
-app.include_router(webhook.router, prefix="/api/ai", tags=["Webhook"])
 app.include_router(mineru.router, prefix="/api/mineru", tags=["MinerU"])
 app.include_router(metrics.router, prefix="/api/metrics", tags=["Metrics"])
 app.include_router(websocket.router, prefix="/api/chat", tags=["WebSocket"])
+app.include_router(dataset_faq.router, prefix="/api/dataset_faq", tags=["dataset_faq"])
+app.include_router(major_word.router, prefix="/api/major_word", tags=["major_word"])
+app.include_router(sensitive_word.router, prefix="/api/sensitive_word", tags=["sensitive_word"])
 
 
 @app.get("/")

@@ -5,13 +5,17 @@ Document processing service.
 import os
 import re
 import hashlib
+from pathlib import Path
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 import aiofiles
+import aiohttp
+from fastapi import HTTPException
 from pypdf import PdfReader
 from docx import Document
 from bs4 import BeautifulSoup
 from langchain_text_splitters import RecursiveCharacterTextSplitter, Language
+from starlette import status
 
 from app.core.logging import get_logger
 from app.core.config import settings
@@ -19,6 +23,7 @@ from app.core.database import get_database
 from app.core.chroma import chroma_db
 from app.core.elasticsearch import es_db
 from app.models.database import DocumentModel, DocumentChunkModel
+from app.models.schemas import ResponseResult
 
 # Import semantic chunking and hierarchical summarization
 from app.services.semantic_chunking import (
@@ -29,6 +34,10 @@ from app.services.semantic_chunking import (
 
 logger = get_logger(__name__)
 
+# 临时文件下载目录 (ai-service/upload_docs from project root)
+UPLOAD_DIR = Path(__file__).parent.parent.parent.parent / "upload_docs"
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+logger.info("Upload directory configured", upload_dir=str(UPLOAD_DIR))
 
 class DocumentProcessor:
     """Document processing service for RAG."""
@@ -1208,19 +1217,72 @@ class DocumentProcessor:
 
 def generate_doc_id(filename: str, kb_id: str) -> str:
     """
-    Generate unique document ID.
+        Generate unique document ID.
 
-    Args:
-        filename: Document filename
-        kb_id: Knowledge base ID
+        Args:
+            filename: Document filename
+            kb_id: Knowledge base ID
 
-    Returns:
-        Unique document ID
+        Returns:
+            Unique document ID
     """
     timestamp = datetime.utcnow().timestamp()
     content = f"{filename}_{kb_id}_{timestamp}"
     hash_obj = hashlib.md5(content.encode())
     return f"doc_{hash_obj.hexdigest()[:12]}"
+
+
+def generate_video_id(filename: str, kb_id: str) -> str:
+    """
+        Generate unique document ID.
+
+        Args:
+            filename: Document filename
+            kb_id: Knowledge base ID
+
+        Returns:
+            Unique document ID
+    """
+    timestamp = datetime.utcnow().timestamp()
+    content = f"{filename}_{kb_id}_{timestamp}"
+    hash_obj = hashlib.md5(content.encode())
+    return f"video_{hash_obj.hexdigest()[:12]}"
+
+
+def download_file(
+        file_name: str,
+        resource_id: int,
+        resource_url: str) -> str:
+    try:
+        # Generate temporary file path (using pathlib)
+        file_ext = os.path.splitext(file_name)[1] or ".txt"
+        temp_filename = f"java_upload_{resource_id}_{datetime.utcnow().timestamp()}{file_ext}"
+        file_path = UPLOAD_DIR / temp_filename
+
+        # Download file with timeout
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                    resource_url, timeout=aiohttp.ClientTimeout(total=120)
+            ) as response:
+                if response.status != 200:
+                    return ResponseResult.error(status.HTTP_400_BAD_REQUEST,
+                                                "Failed to download file from URL", None)
+
+                # Save file to disk
+                with open(file_path, "wb") as f:
+                    async for chunk in response.content.iter_chunked(8192):
+                        f.write(chunk)
+
+        logger.info(f"download_file resource_id={resource_id} file_path={file_path}")
+
+        return str(file_path)
+
+    except aiohttp.ClientError as e:
+        logger.error(f"download_file exception resource_id={resource_id}, error=str(e)")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to download file: {str(e)}",
+        )
 
 
 # Global document processor instance

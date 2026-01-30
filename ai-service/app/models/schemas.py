@@ -358,7 +358,7 @@ class DocumentUploadResponse(BaseModel):
 class SyncNotifyRequest(BaseModel):
     """Sync notify webhook request schema."""
     event_type: str = Field(..., description="Event type: create/update/delete")
-    word_ids: List[str] = Field(..., description="Word IDs")
+    id: int = Field(..., description="主键id")
     timestamp: str = Field(..., description="Timestamp")
 
 

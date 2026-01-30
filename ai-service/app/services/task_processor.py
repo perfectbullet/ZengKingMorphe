@@ -586,7 +586,7 @@ class DocumentTaskProcessor:
         chunk_config: Optional[Dict] = None,  # Custom chunk configuration
         doc_id: Optional[str] = None,  # Pre-generated doc_id (for immediate return)
         resource_id: Optional[int] = None  # External system resource ID):
-    ) -> str:
+    ):
         # Add to queue
         await self.task_queue.put({
             "task_id": task_id,
@@ -600,13 +600,7 @@ class DocumentTaskProcessor:
             "resource_id": resource_id
         })
 
-        logger.info(
-            f"Document task {task_id} submitted",
-            doc_id=doc_id,
-            task_id=task_id
-        )
-
-        return task_id
+        logger.info(f"restart_task task_id={task_id} doc_id={doc_id}")
 
 
 # Global task processor instance

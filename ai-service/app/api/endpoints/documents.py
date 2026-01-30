@@ -2,11 +2,8 @@
 Document management API endpoints.
 """
 
-import os
 import shutil
-import aiohttp
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 from fastapi import (
@@ -27,17 +24,12 @@ from app.core.database import get_database
 from app.core.chroma import chroma_db
 
 from app.services.task_processor import task_processor
-from app.services.document_service import generate_doc_id
+from app.services.document_service import generate_doc_id, download_file, UPLOAD_DIR
 from app.models.schemas import CreateRagDocumentRequest, CreateRagDocumentResponse, SegmentVo, ResponseResult
 
 logger = get_logger(__name__)
 
 router = APIRouter()
-
-# Temporary upload directory (ai-service/upload_docs from project root)
-UPLOAD_DIR = Path(__file__).parent.parent.parent.parent / "upload_docs"
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-logger.info("Upload directory configured", upload_dir=str(UPLOAD_DIR))
 
 
 def _format_datetime(dt: Optional[datetime]) -> Optional[str]:
@@ -108,16 +100,16 @@ async def upload_documents(
     api_key: str = Depends(get_api_key),
 ):
     """
-    上传并处理文档（支持同步/异步模式）。
+        上传并处理文档（支持同步/异步模式）。
 
-    \nArgs:
-        \n- files: Files to upload
-        \n- kb_id: Knowledge base ID
-        \n- category: Document category
-        \n- api_key: API key from auth
+        \nArgs:
+            \n- files: Files to upload
+            \n- kb_id: Knowledge base ID
+            \n- category: Document category
+            \n- api_key: API key from auth
 
-    \nReturns:
-        \n- Upload results (sync mode: doc_id list; async mode: task_id list)
+        \nReturns:
+            \n- Upload results (sync mode: doc_id list; async mode: task_id list)
     """
     try:
         if len(files) > 50:
@@ -150,7 +142,7 @@ async def upload_documents(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Upload documents error", error=str(e), exc_info=True)
+        logger.error(f"Upload documents error error={str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to upload documents",
@@ -168,19 +160,19 @@ async def list_documents(
     db=Depends(get_database),
 ):
     """
-    获取文档列表。
+        获取文档列表。
 
-    \nArgs:
-        \n- kb_id: Knowledge base ID
-        \n- category: Document category
-        \n- status_filter: Processing status
-        \n- page: Page number
-        \n- page_size: Page size
-        \n- api_key: API key from auth
-        \n- db: Database instance
+        \nArgs:
+            \n- kb_id: Knowledge base ID
+            \n- category: Document category
+            \n- status_filter: Processing status
+            \n- page: Page number
+            \n- page_size: Page size
+            \n- api_key: API key from auth
+            \n- db: Database instance
 
-    \nReturns:
-        \n- List of documents
+        \nReturns:
+            \n- List of documents
     """
     try:
         # Build query filter
@@ -217,19 +209,16 @@ async def list_documents(
             for doc in docs
         ]
 
-        return {
-            "code": 200,
-            "message": "success",
-            "data": {
-                "total": total,
-                "page": page,
-                "page_size": page_size,
-                "items": items,
-            },
+        data = {
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "items": items,
         }
+        return ResponseResult.success(data)
 
     except Exception as e:
-        logger.error("List documents error", error=str(e), exc_info=True)
+        logger.error(f"List documents error error={str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to list documents",
@@ -238,21 +227,23 @@ async def list_documents(
 
 @router.get("/{doc_id}")
 async def get_document_detail(
-    doc_id: str, api_key: str = Depends(get_api_key), db=Depends(get_database)
+    doc_id: str,
+    api_key: str = Depends(get_api_key),
+    db=Depends(get_database)
 ):
     """
-    获取文档详情（包含切片统计和所属知识库信息）。
+        获取文档详情（包含切片统计和所属知识库信息）。
 
-    \nArgs:
-        \n- doc_id: Document ID
-        \n- api_key: API key from auth
-        \n- db: Database instance
+        \nArgs:
+            \n- doc_id: Document ID
+            \n- api_key: API key from auth
+            \n- db: Database instance
 
-    \nReturns:
-        \n- Document details with chunks summary and knowledge base info
+        \nReturns:
+            \n- Document details with chunks summary and knowledge base info
     """
     try:
-        logger.info("Get document detail request", doc_id=doc_id)
+        logger.info(f"get_document_detail request doc_id={doc_id}")
 
         # Get document from MongoDB
         doc = await db.documents.find_one({"doc_id": doc_id})
@@ -293,17 +284,15 @@ async def get_document_detail(
             "knowledge_base": kb_info,
         }
 
-        return {"code": 200, "message": "success", "data": doc_data}
+        return ResponseResult.success(doc_data)
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(
-            "Get document detail error", doc_id=doc_id, error=str(e), exc_info=True
-        )
+        logger.error(f"get_document_detail exception doc_id={doc_id}, error={str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to get document detail",
+            detail="get_document_detail error",
         )
 
 
@@ -316,17 +305,17 @@ async def get_document_chunks(
     db=Depends(get_database),
 ):
     """
-    获取文档切片列表（包含切片文本、长度、分层摘要等详细信息）。
+        获取文档切片列表（包含切片文本、长度、分层摘要等详细信息）。
 
-    \nArgs:
-        \n- doc_id: Document ID
-        \n- page: Page number
-        \n- page_size: Page size
-        \n- api_key: API key from auth
-        \n- db: Database instance
+        \nArgs:
+            \n- doc_id: Document ID
+            \n- page: Page number
+            \n- page_size: Page size
+            \n- api_key: API key from auth
+            \n- db: Database instance
 
-    \nReturns:
-        \n- List of document chunks with text content, summaries, and hierarchical summary info
+        \nReturns:
+            \n- List of document chunks with text content, summaries, and hierarchical summary info
     """
     try:
         logger.info(
@@ -408,78 +397,65 @@ async def get_task_status(
     _ip_rate_limit: None = Depends(ip_rate_limit_dependency),
 ):
     """
-    查询文档处理任务状态。
+        查询文档处理任务状态。
 
-    \nArgs:
-        \n- task_id: Task ID
-        \n- api_key: API key from auth
+        \nArgs:
+            \n- task_id: Task ID
+            \n- api_key: API key from auth
 
-    \nReturns:
-        \n- Task status information (status, progress, doc_id, error, etc.)
+        \nReturns:
+            \n- Task status information (status, progress, doc_id, error, etc.)
     """
     try:
-        logger.debug("Get task status request", task_id=task_id)
+        logger.info(f"get_task_status request task_id={task_id}")
 
         task = await task_processor.get_task_status(task_id)
 
         if not task:
-            # raise HTTPException(
-            #     status_code=status.HTTP_404_NOT_FOUND,
-            #     detail=f"Task {task_id} not found"
-            # )
-            # 这样改的目的是不想看到过多的日志
-            return {"code": 404, "status": "Task {task_id} not found", "detail": "Task {task_id} not found", "data": task, "status_code": status.HTTP_404_NOT_FOUND}
-        logger.info("Get task status request", task_id=task_id)
-        return {"code": 200, "status": "success", "data": task}
+            return ResponseResult.error(status.HTTP_404_NOT_FOUND, "error",
+                                        f"get_task_status {task_id} not found")
+
+        ResponseResult.success(task)
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(
-            "Get task status error", task_id=task_id, error=str(e), exc_info=True
-        )
+        logger.error(f"get_task_status exception task_id={task_id} error={str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to get task status",
+            detail="get_task_status error",
         )
 
 
 @router.delete("/tasks/{task_id}")
 async def cancel_task(task_id: str, api_key: str = Depends(get_api_key)):
     """
-    取消文档处理任务。
+        取消文档处理任务。
 
-    \nArgs:
-        \n- task_id: Task ID
-        \n- api_key: API key from auth
+        \nArgs:
+            \n- task_id: Task ID
+            \n- api_key: API key from auth
 
-    \nReturns:
-        \n- Cancellation result
+        \nReturns:
+            \n- Cancellation result
     """
     try:
-        logger.info("Cancel task request", task_id=task_id)
+        logger.info(f"cancel_task request task_id={task_id}")
 
         cancelled = await task_processor.cancel_task(task_id)
 
         if not cancelled:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Task cannot be cancelled (not found or already completed)",
-            )
+            return ResponseResult.error(status.HTTP_400_BAD_REQUEST, "error", "cancel_task failed")
 
-        return {
-            "code": 200,
-            "status": "success",
-            "message": f"Task {task_id} cancelled",
-        }
+        return ResponseResult.success(None)
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Cancel task error", task_id=task_id, error=str(e), exc_info=True)
+        logger.error(f"cancel_task exception task_id={task_id} error={str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to cancel task",
+            detail="cancel_task error",
         )
 
 
@@ -490,88 +466,39 @@ async def create_rag_document_with_segment(
     db=Depends(get_database),
 ):
     """
-    创建RAG文档（Java平台集成接口，支持自定义分段策略）。
+        创建RAG文档（Java平台集成接口，支持自定义分段策略）。
 
-    该接口接受Java平台的文档创建请求，支持：
-    - 从URL下载文档
-    - 自定义文本预处理（删除空格/换行/目录）
-    - 自定义分段策略（换行切分/标识符切分）
-    - 分段合并与最大长度控制
-    - 系统内置或自定义分隔符
-    - 文档处理在后台异步进行，实时更新任务状态
+        该接口接受Java平台的文档创建请求，支持：
+        - 从URL下载文档
+        - 自定义文本预处理（删除空格/换行/目录）
+        - 自定义分段策略（换行切分/标识符切分）
+        - 分段合并与最大长度控制
+        - 系统内置或自定义分隔符
+        - 文档处理在后台异步进行，实时更新任务状态
 
-    Args:
-        request: 创建RAG文档请求（包含分段配置）
-        api_key: API key from auth
-        db: Database instance
+        Args:
+            request: 创建RAG文档请求（包含分段配置）
+            api_key: API key from auth
+            db: Database instance
 
-    Returns:
-        创建结果（立即返回doc_id和task_id，后续可通过task_id查询处理进度）
+        Returns:
+            创建结果（立即返回doc_id和task_id，后续可通过task_id查询处理进度）
     """
+    kb_id = request.kb_id
     try:
         logger.info(
-            "Create RAG document with segment config",
-            kb_id=request.kb_id,
-            document_name=request.document_name,
-            resource_id=request.resource_id,
-            segment_flag=request.segment_flag,
+            f"create_rag_document_with_segment "
+            f"request kb_id={kb_id} "
+            f"document_name={request.document_name} "
+            f"resource_id={request.resource_id} "
+            f"segment_flag={request.segment_flag}"
         )
 
-        # Verify knowledge base exists
-        kb = await db.knowledge_bases.find_one({"kb_id": request.kb_id})
+        # 校验知识库是否存在
+        kb = await db.knowledge_bases.find_one({"kb_id": kb_id})
         if not kb:
-            logger.warning(
-                f"Knowledge base not found: kb_id={request.kb_id}",
-                available_kbs=await db.knowledge_bases.find(
-                    {}, {"kb_id": 1, "name": 1}
-                ).to_list(None),
-            )
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Knowledge base {request.kb_id} not found",
-            )
-
-        # Generate doc_id immediately (before async processing)
-        doc_id = generate_doc_id(request.document_name, request.kb_id)
-
-        # Download file from resource_url
-        file_path = None
-        try:
-            # Generate temporary file path (using pathlib)
-            file_ext = os.path.splitext(request.document_name)[1] or ".txt"
-            temp_filename = f"java_upload_{request.resource_id}_{datetime.utcnow().timestamp()}{file_ext}"
-            file_path = UPLOAD_DIR / temp_filename
-
-            # Download file with timeout
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    request.resource_url, timeout=aiohttp.ClientTimeout(total=120)
-                ) as response:
-                    if response.status != 200:
-                        raise HTTPException(
-                            status_code=status.HTTP_400_BAD_REQUEST,
-                            detail=f"Failed to download file from URL: HTTP {response.status}",
-                        )
-
-                    # Save file to disk
-                    with open(file_path, "wb") as f:
-                        async for chunk in response.content.iter_chunked(8192):
-                            f.write(chunk)
-
-            logger.info(
-                "Downloaded file from URL",
-                url=request.resource_url,
-                file_path=str(file_path),
-            )
-
-        except aiohttp.ClientError as e:
-            logger.error(
-                "Failed to download file", url=request.resource_url, error=str(e)
-            )
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Failed to download file: {str(e)}",
-            )
+            return ResponseResult.error(status.HTTP_404_NOT_FOUND, "error",
+                                        f"create_rag_document_with_segment knowledge base not found kb_id={kb_id}")
 
         # Build chunk_config from segment_vo
         chunk_config = None
@@ -587,11 +514,17 @@ async def create_rag_document_with_segment(
                 "identifier_default": segment.identifier_default,
                 "identifier_customize": segment.identifier_customize,
             }
-            logger.info("Using custom segment config", chunk_config=chunk_config)
+            logger.info(f"create_rag_document_with_segment chunk_config={chunk_config}")
 
-        # Submit async task with pre-generated doc_id
+        # 下载远程服务器上的文档文件
+        file_path = download_file(request.document_name, request.resource_id, request.resource_url)
+
+        # 生成唯一文档id
+        doc_id = generate_doc_id(request.document_name, kb_id)
+
+        # 添加到文档任务列表中
         task_id = await task_processor.submit_task(
-            kb_id=request.kb_id,
+            kb_id=kb_id,
             enhance=request.enhance,
             filename=request.document_name,
             file_path=str(file_path),
@@ -601,26 +534,23 @@ async def create_rag_document_with_segment(
             resource_id=request.resource_id,
         )
 
-        return CreateRagDocumentResponse(
-            code=200,
-            message="success",
-            data={
-                "doc_id": doc_id,
-                "task_id": task_id,
-                "status": "processing",
-                "resource_id": request.resource_id,
-                "document_name": request.document_name,
-                "kb_id": request.kb_id,
-            },
-        )
+        data = {
+            "doc_id": doc_id,
+            "task_id": task_id,
+            "status": "processing",
+            "resource_id": request.resource_id,
+            "document_name": request.document_name,
+            "kb_id": request.kb_id,
+        }
+        return ResponseResult.success(data)
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Create RAG document error", error=str(e), exc_info=True)
+        logger.error(f"create_rag_document_with_segment exception error={str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to create RAG document",
+            detail="create_rag_document_with_segment error",
         )
 
 
@@ -628,7 +558,7 @@ async def create_rag_document_with_segment(
 async def set_segment(
     request: SegmentVo,
     api_key: str = Depends(get_api_key),
-    db = Depends(get_database)
+    db=Depends(get_database)
 ):
     """
         设置文档或视频资源是否知识增强
@@ -640,15 +570,15 @@ async def set_segment(
 
         Returns:
             - result
-        """
+    """
     doc_id = request.doc_id
     try:
-        logger.info(f"set_segment {doc_id} request")
+        logger.info(f"set_segment request doc_id={doc_id}")
 
         doc = await db.documents.find_one({"doc_id": doc_id})
 
         if not doc:
-            return ResponseResult.error(status.HTTP_404_NOT_FOUND, "error", f"set_segment not found")
+            return ResponseResult.error(status.HTTP_404_NOT_FOUND, "error", "set_segment not found")
 
         chunk_config = {
             "is_space_flag": request.is_space_flag,
@@ -671,13 +601,12 @@ async def set_segment(
         )
 
         if result and result.modified_count == 1:
-            logger.info(f"set_segment {doc_id} success")
+            logger.info(f"set_segment success doc_id={doc_id}")
 
             task = await db.document_tasks.find_one({"doc_id": doc_id})
 
             if not task:
-                return ResponseResult.error(status.HTTP_404_NOT_FOUND, "error",
-                                            f"set_segment {doc_id} task not found")
+                return ResponseResult.error(status.HTTP_404_NOT_FOUND, "error", "set_segment task not found")
 
             await task_processor.restart_task(
                 kb_id=task["kb_id"],
@@ -691,14 +620,12 @@ async def set_segment(
 
             return ResponseResult.success(None)
         else:
-            return ResponseResult.error(status.HTTP_400_BAD_REQUEST, "error", f"set_segment {doc_id} failed")
+            return ResponseResult.error(status.HTTP_400_BAD_REQUEST, "error", "set_segment failed")
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("set_segment exception",
-                     error=str(e),
-                     exc_info=True)
+        logger.error(f"set_segment exception doc_id={doc_id} error={str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="set_segment error"
@@ -709,7 +636,7 @@ async def set_segment(
 async def get_study_file(
     doc_id: str,
     api_key: str = Depends(get_api_key),
-    db = Depends(get_database)
+    db=Depends(get_database)
 ):
     """
         获取文件学习后的分段知识文件（返回json格式的字符串）
@@ -721,14 +648,14 @@ async def get_study_file(
 
         Returns:
             - result
-        """
+    """
     try:
-        logger.info(f"get_study_file {doc_id} request")
+        logger.info(f"get_study_file request doc_id={doc_id}")
 
         doc = await db.documents.find_one({"doc_id": doc_id})
 
         if not doc:
-            return ResponseResult.error(status.HTTP_404_NOT_FOUND, "error", f"get_study_file not found")
+            return ResponseResult.error(status.HTTP_404_NOT_FOUND, "error", "get_study_file not found")
 
         # 功能待实现
 
@@ -737,9 +664,7 @@ async def get_study_file(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("get_study_file exception",
-                     error=str(e),
-                     exc_info=True)
+        logger.error(f"get_study_file exception doc_id={doc_id} error={str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="get_study_file error"
@@ -751,7 +676,7 @@ async def upload_study_file(
     doc_id: str,
     json_content: str,
     api_key: str = Depends(get_api_key),
-    db = Depends(get_database)
+    db=Depends(get_database)
 ):
     """
         上传文件学习后的分段知识文件（json格式）
@@ -764,14 +689,14 @@ async def upload_study_file(
 
         Returns:
             - result
-        """
+    """
     try:
-        logger.info(f"update_study_file {doc_id} request")
+        logger.info(f"update_study_file request doc_id={doc_id}")
 
         doc = await db.documents.find_one({"doc_id": doc_id})
 
         if not doc:
-            return ResponseResult.error(status.HTTP_404_NOT_FOUND, "error", f"update_study_file not found")
+            return ResponseResult.error(status.HTTP_404_NOT_FOUND, "error", "update_study_file not found")
 
         # 功能待实现
 
@@ -780,9 +705,7 @@ async def upload_study_file(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("update_study_file exception",
-                     error=str(e),
-                     exc_info=True)
+        logger.error(f"update_study_file exception doc_id={doc_id} error={str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="update_study_file error"
