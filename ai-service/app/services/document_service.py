@@ -1249,7 +1249,7 @@ def generate_video_id(filename: str, kb_id: str) -> str:
     return f"video_{hash_obj.hexdigest()[:12]}"
 
 
-def download_file(
+async def download_file(
         file_name: str,
         resource_id: int,
         resource_url: str) -> str:
