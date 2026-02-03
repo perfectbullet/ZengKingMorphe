@@ -35,6 +35,7 @@ from app.services.conversation.conversation_helpers import (
     heuristic_complexity
 )
 from app.services.rag_service import rag_retrieval
+from app.services.math_textbook_retrieval import math_textbook_retrieval, MATH_KB_ID
 
 logger = get_logger(__name__)
 
@@ -92,10 +93,13 @@ class ConversationNodes:
 
             employee.pop("_id", None)
             state["employee_config"] = employee
+            kb_ids = employee.get("kb_ids", [])
             logger.info(
                 "Employee config loaded",
                 employee_id=state["employee_id"],
-                name=employee.get("name")
+                name=employee.get("name"),
+                kb_ids=kb_ids,
+                kb_count=len(kb_ids)
             )
 
         return state
@@ -474,7 +478,7 @@ class ConversationNodes:
                     state["faq_matched"] = None
                     return state
 
-                faq_sim_threshold = digital_config.get("faq_sim_threshold", 0.0)
+                faq_sim_threshold = digital_config.get("faq_sim_threshold", 0.7)
                 faq_top_k = digital_config.get("faq_top_k", 3)
 
                 logger.info(
@@ -611,6 +615,10 @@ class ConversationNodes:
         2. Use rewritten query if available
         3. Perform hybrid search (vector + BM25 + RRF fusion)
 
+        Special handling for math textbook knowledge base (kb_9abcbe4aa557):
+        - Uses math_textbook_retrieval which returns context_text (answers)
+        - Other knowledge bases use standard rag_retrieval
+
         Args:
             state: Current conversation state
 
@@ -626,17 +634,63 @@ class ConversationNodes:
                     "Knowledge retrieval started",
                     employee_id=state["employee_id"],
                     kb_count=len(kb_ids),
+                    kb_ids=kb_ids,
                     query_rewritten=state.get("query_rewritten", False)
                 )
 
-                # Perform RAG search with reranking enabled
-                results = await rag_retrieval.search(
-                    query=search_query,
-                    kb_ids=kb_ids if kb_ids else None,
-                    top_k=5,
-                    use_hybrid=True,
-                    enable_rerank=True
-                )
+                all_results = []
+
+                # Case 1: Math textbook knowledge base present
+                if MATH_KB_ID in kb_ids:
+                    logger.info(
+                        "Math textbook knowledge base detected, using specialized retrieval",
+                        kb_id=MATH_KB_ID
+                    )
+
+                    # Math textbook specialized retrieval (returns context_text/answers)
+                    math_results = await math_textbook_retrieval.search(
+                        query=search_query,
+                        kb_ids=[MATH_KB_ID],
+                        top_k=5,
+                        use_hybrid=True,
+                        enable_rerank=True
+                    )
+                    all_results.extend(math_results)
+                    logger.info(
+                        "Math textbook retrieval completed",
+                        math_results_count=len(math_results)
+                    )
+
+                    # Other knowledge bases use standard retrieval (exclude math kb)
+                    other_kb_ids = [kb_id for kb_id in kb_ids if kb_id != MATH_KB_ID]
+                    if other_kb_ids:
+                        standard_results = await rag_retrieval.search(
+                            query=search_query,
+                            kb_ids=other_kb_ids,
+                            top_k=5,
+                            use_hybrid=True,
+                            enable_rerank=True
+                        )
+                        all_results.extend(standard_results)
+                        logger.info(
+                            "Standard retrieval completed for other KBs",
+                            other_kb_count=len(standard_results),
+                            other_kb_ids=other_kb_ids
+                        )
+
+                # Case 2: No math textbook knowledge base
+                else:
+                    # Standard RAG retrieval for all knowledge bases
+                    all_results = await rag_retrieval.search(
+                        query=search_query,
+                        kb_ids=kb_ids if kb_ids else None,
+                        top_k=5,
+                        use_hybrid=True,
+                        enable_rerank=True
+                    )
+
+                # Take top_k results
+                results = all_results[:5]
 
                 state["retrieved_docs"] = results
                 state["kb_used"] = list(set([
@@ -645,7 +699,8 @@ class ConversationNodes:
 
                 logger.info(
                     "Knowledge retrieval completed",
-                    results_count=len(results),
+                    total_results=len(all_results),
+                    returned_results=len(results),
                     kb_used=state["kb_used"]
                 )
 

@@ -164,6 +164,7 @@ class RAGRetrieval:
                         "doc_id": metadata.get("doc_id"),
                         "kb_id": metadata.get("kb_id"),
                         "chunk_index": metadata.get("chunk_index"),
+                        "content_type": metadata.get("content_type", "unknown"),
                         "source": "vector",
                         # MinerU结构化元数据
                         "page_idx": metadata.get("page_idx"),
@@ -248,6 +249,7 @@ class RAGRetrieval:
                         "doc_id": source.get("doc_id"),
                         "kb_id": source.get("kb_id"),
                         "chunk_index": source.get("chunk_index"),
+                        "content_type": source.get("content_type", "unknown"),
                         "source": "keyword",
                         # MinerU结构化字段（从ES获取完整数据）
                         "page_idx": source.get("page_idx"),
@@ -323,6 +325,7 @@ class RAGRetrieval:
             "doc_id": result.get("doc_id"),
             "kb_id": result.get("kb_id"),
             "chunk_index": result.get("chunk_index"),
+            "content_type": result.get("content_type", "unknown"),
             "rrf_score": 0.0,
             "vector_rank": None,
             "keyword_rank": None

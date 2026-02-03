@@ -31,7 +31,7 @@ def setup_logging() -> None:
     logger.add(
         sys.stdout,
         level=log_level,
-        format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}",
+        format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message} | {extra}",
         colorize=False,
         backtrace=False,
         diagnose=False,
@@ -42,7 +42,7 @@ def setup_logging() -> None:
         logger.add(
             settings.log_file,
             level=log_level,
-            format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}",
+            format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message} | {extra}",
             rotation="100 MB",  # Rotate when file reaches 100MB
             retention="30 days",  # Keep logs for 30 days
             compression="zip",  # Compress rotated logs

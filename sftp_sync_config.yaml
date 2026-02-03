@@ -22,9 +22,9 @@ include_patterns:
   #- "*.js"                   # Only JavaScript files
   # - "src/**"                 # Only files in src directory
   - "docker-compose.yml"     # Specific file to include
-  - "ai-service"            # Include app directory
+  - "ai-service/*/*/*"            # Include app directory
   - "requirements.txt"
-  - ".env"
+  # - ".env"
   - ai-service/tests
   - outer_api_docs
 

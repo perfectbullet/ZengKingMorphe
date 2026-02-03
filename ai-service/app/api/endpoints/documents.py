@@ -381,9 +381,7 @@ async def get_document_chunks(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(
-            "Get document chunks error", doc_id=doc_id, error=str(e), exc_info=True
-        )
+        logger.exception(f"Get document chunks error: doc_id={doc_id}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to get document chunks",

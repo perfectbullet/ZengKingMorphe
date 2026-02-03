@@ -381,7 +381,7 @@ class ConversationWorkflow:
                 print("[WARN] Mermaid source unavailable, saved repr to crag_graph_view_repr.txt")
 
         except Exception as exc:
-            logger.error(f"Graph debug dump failed: {exc}", exc_info=True)
+            logger.exception("Graph debug dump failed")
             try:
                 output_dir = Path(os.getenv("CRAG_GRAPH_DIR", "./graph_debug"))
                 output_dir.mkdir(parents=True, exist_ok=True)

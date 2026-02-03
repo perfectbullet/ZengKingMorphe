@@ -349,7 +349,7 @@ class Settings(BaseSettings):
 
     # BGE Reranker API Configuration
     bge_reranker_api_url: str = Field(
-        default="http://192.168.8.233:6006",
+        default="http://192.168.8.233:8091",
         description="BGE Reranker API base URL"
     )
     bge_reranker_api_key: str = Field(

@@ -215,12 +215,13 @@ class BGEAPIReranker(BaseReranker):
         Args:
             base_url: BGE Reranker API base URL (default: from settings.bge_reranker_api_url)
             api_key: BGE Reranker API key (default: from settings.bge_reranker_api_key)
-            model: Model name (default: from settings.bge_reranker_model)
+            model: Model name (default: "/model" for vLLM compatibility)
             timeout: Request timeout in seconds
         """
         self.base_url = (base_url or settings.bge_reranker_api_url).rstrip("/")
         self.api_key = api_key or settings.bge_reranker_api_key
-        self.model = model or settings.bge_reranker_model
+        # vLLM OpenAI兼容API使用 "/model" 作为model名称
+        self.model = model or "/model"
         self.timeout = timeout
         self._headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -251,6 +252,7 @@ class BGEAPIReranker(BaseReranker):
 
         logger.info(
             "BGE API reranking",
+            url=f"{self.base_url}/v1/rerank",
             model=self.model,
             query_length=len(query),
             documents_count=len(documents),
@@ -261,7 +263,8 @@ class BGEAPIReranker(BaseReranker):
         payload = {
             "model": self.model,
             "query": query,
-            "documents": documents
+            "documents": documents,
+            "top_n": top_k,  # vLLM API required parameter
         }
 
         timeout = aiohttp.ClientTimeout(total=self.timeout)
@@ -271,16 +274,23 @@ class BGEAPIReranker(BaseReranker):
                 async with session.post(url, json=payload, headers=self._headers) as response:
                     if response.status != 200:
                         error_body = await response.text()
-                        raise RuntimeError(f"BGE API error: status={response.status}, body={error_body[:200]}")
+                        logger.error(
+                            "BGE API request failed",
+                            status=response.status,
+                            error_body=error_body,
+                            url=url,
+                            payload={"model": self.model, "query": query[:100], "documents_count": len(documents)},
+                        )
+                        raise RuntimeError(f"BGE API error: status={response.status}, body={error_body}")
 
                     data = await response.json()
 
-        except asyncio.TimeoutError:
-            logger.warning("BGE API timeout")
-            return [(i, 0.0) for i in range(top_k)]
+        except asyncio.TimeoutError as e:
+            logger.exception(f"BGE API timeout: url={url[:100]}")
+            raise e
         except Exception as e:
-            logger.error("BGE API error", error=str(e), exc_info=True)
-            return [(i, 0.0) for i in range(top_k)]
+            logger.exception(f"BGE API error: type={type(e).__name__}, url={url[:100]}")
+            raise e
 
         # Parse results
         results = data.get("results", [])

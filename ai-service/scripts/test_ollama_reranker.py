@@ -14,7 +14,7 @@ BGE Reranker API 测试脚本
 
     # 指定 API URL 和密钥
     python scripts/test_ollama_reranker.py \\
-        --base-url http://192.168.8.233:6006 \\
+        --base-url http://192.168.8.233:8091 \\
         --api-key sk-aaabbbcccdddeeefffggghhhiiijjjkkk
 
     # 指定模型
@@ -113,7 +113,7 @@ def main():
     )
     parser.add_argument(
         "--base-url",
-        default="http://192.168.8.233:6006",
+        default="http://192.168.8.233:8091",
         help="BGE Reranker API 地址"
     )
     parser.add_argument(

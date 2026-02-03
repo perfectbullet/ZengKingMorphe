@@ -291,16 +291,61 @@ class CreateEmployeeRequest(BaseModel):
 
 
 class UpdateEmployeeRequest(BaseModel):
-    """Update employee request schema."""
+    """Update employee request schema.
+
+    Supports both nested structure (personality/capabilities) and flat structure
+    for backward compatibility with existing API clients.
+    """
+    # Core fields
     name: Optional[str] = None
     domain: Optional[str] = None
     role: Optional[str] = None
     description: Optional[str] = None
+    position: Optional[str] = None
+    intro: Optional[str] = None
+
+    # Personality/Style fields (flat structure)
+    persona: Optional[str] = None
+    tone: Optional[str] = None
+    style: Optional[str] = None
+    style_desc: Optional[str] = None
+    language: Optional[str] = None
+
+    # Nested structure (for new API)
     personality: Optional[EmployeePersonality] = None
     capabilities: Optional[EmployeeCapabilities] = None
     greeting: Optional[str] = None
-    hot_questions: Optional[List[str]] = None
     personalization: Optional[EmployeePersonalization] = None
+
+    # Configuration fields (flat structure)
+    kb_ids: Optional[List[str]] = None
+    web_search_enabled: Optional[bool] = None
+    is_multimodal: Optional[bool] = None
+
+    # FAQ settings
+    faq_sim_threshold: Optional[float] = None
+    faq_top_k: Optional[int] = None
+
+    # Prologue settings
+    prologue: Optional[str] = None
+    is_opening_questions: Optional[bool] = None
+
+    # Custom prompt
+    is_my_prompt: Optional[bool] = None
+    my_prompt: Optional[str] = None
+
+    # Display settings
+    is_show_sign: Optional[bool] = None
+    portrait: Optional[str] = None
+    model_image: Optional[str] = None
+
+    # Status
+    onduty_status: Optional[str] = None
+    status: Optional[str] = None
+
+    # Metadata
+    metadata: Optional[Dict[str, Any]] = None
+    hot_questions: Optional[List[str]] = None
 
 
 # Knowledge Base API Schemas

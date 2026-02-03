@@ -57,10 +57,10 @@ async def fetch_external_employee_data(employee_id: str) -> Optional[dict]:
             logger.error(f"❌ Test data file not found: {test_data_file}")
             return None
         except json.JSONDecodeError as e:
-            logger.error(f"❌ Test data JSON decode error: {e}", exc_info=True)
+            logger.exception(f"❌ Test data JSON decode error: {test_data_file}")
             return None
         except Exception as e:
-            logger.error(f"❌ Failed to load test data: {e}", exc_info=True)
+            logger.exception(f"❌ Failed to load test data: {test_data_file}")
             return None
     
     # 从环境变量读取外部API地址
@@ -94,28 +94,19 @@ async def fetch_external_employee_data(employee_id: str) -> Optional[dict]:
             
     except httpx.HTTPError as e:
         error_message = str(e).replace('{', '{{').replace('}', '}}')
-        logger.error(
-            f"{'!' * 100}\n"
-            f"外部API HTTP请求失败！强烈谴责！\n"
+        logger.exception(
+            f"{'!' * 50}\n"
+            f"外部API HTTP请求失败！\n"
             f"API URL: {external_api_url}\n"
-            f"Employee ID: {employee_id}\n"
-            f"Error Type: {type(e).__name__}\n"
-            f"Error Details: {error_message}\n"
-            f"{'!' * 100}",
-            exc_info=True
+            f"Employee ID: {employee_id}"
         )
         return None
     except Exception as e:
-        error_message = str(e).replace('{', '{{').replace('}', '}}')
-        logger.error(
-            f"{'!' * 100}\n"
-            f"外部API调用发生未知错误！强烈谴责！\n"
+        logger.exception(
+            f"{'!' * 50}\n"
+            f"外部API调用发生未知错误！\n"
             f"API URL: {external_api_url}\n"
-            f"Employee ID: {employee_id}\n"
-            f"Error Type: {type(e).__name__}\n"
-            f"Error Details: {error_message}\n"
-            f"{'!' * 100}",
-            exc_info=True
+            f"Employee ID: {employee_id}"
         )
         return None
 
@@ -266,10 +257,7 @@ async def sync_digital_employee_config(db, request_employee_id: str, external_da
                     synced_count += 1
                     
                 except Exception as faq_error:
-                    logger.error(
-                        f"Failed to sync FAQ: faq_id={external_faq_id}, error={str(faq_error)}",
-                        exc_info=True
-                    )
+                    logger.exception(f"Failed to sync FAQ: faq_id={external_faq_id}")
                     failed_faqs.append(external_faq_id)
             
             logger.info(
@@ -283,7 +271,7 @@ async def sync_digital_employee_config(db, request_employee_id: str, external_da
         return employee_id
         
     except Exception as e:
-        logger.error(f"Failed to sync digital employee config: {e}", exc_info=True)
+        logger.exception(f"Failed to sync digital employee config: employee_id={employee_id}")
         return None
 
 
@@ -412,9 +400,7 @@ async def create_session(
     except HTTPException:
         raise
     except Exception as e:
-        # Use keyword args to avoid Loguru format issues with curly braces in error messages
-        logger.error("Failed to create session", error=str(e), exc_info=True)
-        logger.exception(e)
+        logger.exception("Failed to create session")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create session"
@@ -468,7 +454,7 @@ async def get_session(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Get session error: session_id={session_id}, error={str(e)}", exc_info=True)
+        logger.exception(f"Get session error: session_id={session_id}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to get session"
@@ -521,7 +507,7 @@ async def end_session(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"End session error: session_id={session_id}, error={str(e)}", exc_info=True)
+        logger.exception(f"End session error: session_id={session_id}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to end session"
@@ -609,7 +595,7 @@ async def get_session_conversations(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Get session conversations error: session_id={session_id}, error={str(e)}", exc_info=True)
+        logger.exception(f"Get session conversations error: session_id={session_id}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to get session conversations"
