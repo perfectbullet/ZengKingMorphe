@@ -81,11 +81,11 @@ async def list_recent_jobs(
                 completed_at=job.get("completed_at")
             ))
 
-        logger.info("Retrieved recent jobs", count=len(jobs), limit=limit)
+        logger.info(f"Retrieved recent jobs: count={len(jobs)}, limit={limit}")
         return jobs
 
     except Exception as e:
-        logger.error("Failed to list jobs", error=str(e), exc_info=True)
+        logger.error(f"Failed to list jobs: error={str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"查询任务列表失败: {str(e)}")
 
 
@@ -119,7 +119,7 @@ async def get_job_detail(job_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Failed to get job detail", job_id=job_id, error=str(e), exc_info=True)
+        logger.error(f"Failed to get job detail: job_id={job_id}, error={str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"查询任务详情失败: {str(e)}")
 
 
@@ -160,7 +160,7 @@ async def get_job_markdown(job_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Failed to get job markdown", job_id=job_id, error=str(e), exc_info=True)
+        logger.error(f"Failed to get job markdown: job_id={job_id}, error={str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"获取 Markdown 内容失败: {str(e)}")
 
 

@@ -33,7 +33,7 @@ async def list_employees(
         \n- Employee list with total count
     """
     try:
-        logger.info("List employees request", limit=limit)
+        logger.info(f"List employees request: limit={limit}")
 
         # 查询员工列表，按创建时间倒序
         cursor = db.digital_employee_configs.find().sort("created_at", -1).limit(limit)
@@ -134,7 +134,7 @@ async def create_employee(
         \n- Created employee configuration
     """
     try:
-        logger.info("Create employee request", employee_id=request.employee_id)
+        logger.info(f"Create employee request: employee_id={request.employee_id}")
 
         # Check if employee already exists
         existing = await db.digital_employee_configs.find_one(
@@ -366,7 +366,7 @@ async def delete_employee(
         \n- Deletion result
     """
     try:
-        logger.info("Delete employee request", employee_id=employee_id)
+        logger.info(f"Delete employee request: employee_id={employee_id}")
 
         # Check if employee exists
         existing = await db.digital_employee_configs.find_one(

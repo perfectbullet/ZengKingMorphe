@@ -31,6 +31,10 @@ logger = get_logger(__name__)
 
 router = APIRouter()
 
+# Temporary upload directory (ai-service/upload_docs from project root)
+UPLOAD_DIR = Path(__file__).parent.parent.parent.parent / "upload_docs"
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+logger.info(f"Upload directory configured: upload_dir={str(UPLOAD_DIR)}")
 
 def _format_datetime(dt: Optional[datetime]) -> Optional[str]:
     """Format datetime to ISO 8601 with UTC timezone suffix."""
@@ -87,7 +91,7 @@ async def _get_chunks_from_chroma(doc_id: str) -> Dict[str, Any]:
         full_content = "".join(chunks)
 
     except Exception as e:
-        logger.warning("Failed to get chunks from Chroma", doc_id=doc_id, error=str(e))
+        logger.warning(f"Failed to get chunks from Chroma: doc_id={doc_id}, error={str(e)}")
 
     return {**chunks_stats, "content": full_content}
 
@@ -117,7 +121,7 @@ async def upload_documents(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Maximum 50 files allowed per upload",
             )
-        logger.info("Upload documents request", kb_id=kb_id, file_count=len(files))
+        logger.info(f"Upload documents request: kb_id={kb_id}, file_count={len(files)}")
 
         # Async mode: submit tasks and return immediately
         task_ids = []
@@ -243,7 +247,7 @@ async def get_document_detail(
             \n- Document details with chunks summary and knowledge base info
     """
     try:
-        logger.info(f"get_document_detail request doc_id={doc_id}")
+        logger.info(f"Get document detail request: doc_id={doc_id}")
 
         # Get document from MongoDB
         doc = await db.documents.find_one({"doc_id": doc_id})
@@ -413,7 +417,7 @@ async def get_task_status(
             return ResponseResult.error(status.HTTP_404_NOT_FOUND, "error",
                                         f"get_task_status {task_id} not found")
 
-        ResponseResult.success(task)
+        return ResponseResult.success(task)
 
     except HTTPException:
         raise
@@ -438,7 +442,11 @@ async def cancel_task(task_id: str, api_key: str = Depends(get_api_key)):
             \n- Cancellation result
     """
     try:
+<<<<<<< HEAD
         logger.info(f"cancel_task request task_id={task_id}")
+=======
+        logger.info(f"Cancel task request: task_id={task_id}")
+>>>>>>> 6c4ac2f (refactor: 统一日志格式为f-string风格)
 
         cancelled = await task_processor.cancel_task(task_id)
 
@@ -514,7 +522,7 @@ async def create_rag_document_with_segment(
                 "identifier_default": segment.identifier_default,
                 "identifier_customize": segment.identifier_customize,
             }
-            logger.info(f"create_rag_document_with_segment chunk_config={chunk_config}")
+            logger.info(f"Using custom segment config: chunk_config={chunk_config}")
 
         # 下载远程服务器上的文档文件
         file_path = await download_file(request.document_name, request.resource_id, request.resource_url)

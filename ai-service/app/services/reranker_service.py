@@ -461,7 +461,7 @@ def get_reranker(
     if _reranker is not None:
         return _reranker
 
-    logger.info("Creating reranker", type=reranker_type)
+    logger.info(f"Creating reranker: type={reranker_type}")
 
     if reranker_type == "bge_api":
         base_url = kwargs.get("base_url", settings.bge_reranker_api_url)

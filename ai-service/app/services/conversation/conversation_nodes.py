@@ -95,11 +95,8 @@ class ConversationNodes:
             state["employee_config"] = employee
             kb_ids = employee.get("kb_ids", [])
             logger.info(
-                "Employee config loaded",
-                employee_id=state["employee_id"],
-                name=employee.get("name"),
-                kb_ids=kb_ids,
-                kb_count=len(kb_ids)
+                f"Employee config loaded: employee_id={state['employee_id']}, "
+                f"name={employee.get('name')}, kb_ids={kb_ids}, kb_count={len(kb_ids)}"
             )
 
         return state
@@ -148,9 +145,8 @@ class ConversationNodes:
                     state["context"] = {"messages": [], "message_count": 0}
 
                 logger.debug(
-                    "Session context loaded",
-                    session_id=state["session_id"],
-                    message_count=state["context"]["message_count"]
+                    f"Session context loaded: session_id={state['session_id']}, "
+                    f"message_count={state['context']['message_count']}"
                 )
 
             except Exception as e:
@@ -211,7 +207,7 @@ class ConversationNodes:
                     state["complexity_reason"] = "interruption"
                     state["is_realtime_query"] = False
                     state["entities"] = {"interruption_type": category}
-                    logger.info("Query classified: interruption", category=category)
+                    logger.info(f"Query classified: interruption: category={category}")
                     return state
 
             # 2. 检测问候语
@@ -221,7 +217,7 @@ class ConversationNodes:
                     state["complexity_score"] = 0.0
                     state["complexity_reason"] = "greeting"
                     state["is_realtime_query"] = False
-                    logger.info("Query classified: greeting", category=category)
+                    logger.info(f"Query classified: greeting: category={category}")
                     return state
 
             # 3. 检测实时查询
@@ -238,7 +234,7 @@ class ConversationNodes:
                         state["realtime_category"] = category
                         state["realtime_detect_reason"] = f"keyword:{keywords[0] if keywords else category}"
                         state["intent"] = "general_query"
-                        logger.info("Query classified: realtime", category=category)
+                        logger.info(f"Query classified: realtime: category={category}")
                         return state
 
             # 4. 默认为一般查询
@@ -1052,7 +1048,7 @@ class ConversationNodes:
 
             # Skip for FAQ, greeting, and interruption (already validated)
             if state.get("faq_matched") or state.get("intent") in ("greeting", "interruption"):
-                logger.debug("Skipping verification for FAQ/greeting/interruption", intent=state.get("intent"))
+                logger.debug(f"Skipping verification for FAQ/greeting/interruption: intent={state.get('intent')}")
                 return state
 
             answer = state.get("final_answer", "")

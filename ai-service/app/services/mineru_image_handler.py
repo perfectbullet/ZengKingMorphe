@@ -119,7 +119,7 @@ class MinerUImageHandler:
                     # 删除过期缓存
                     await collection.delete_one({"image_url": image_url})
         except Exception as e:
-            logger.warning("获取MongoDB图片缓存失败", error=str(e))
+            logger.warning(f"获取MongoDB图片缓存失败: error={str(e)}")
 
         return None
 
@@ -152,7 +152,7 @@ class MinerUImageHandler:
                 upsert=True
             )
         except Exception as e:
-            logger.warning("保存图片缓存到MongoDB失败", error=str(e))
+            logger.warning(f"保存图片缓存到MongoDB失败: error={str(e)}")
 
     async def generate_caption_openai(
         self,
@@ -206,7 +206,7 @@ class MinerUImageHandler:
                 return caption.strip()
 
         except Exception as e:
-            logger.error("OpenAI图片描述生成失败", error=str(e), image_url=image_url[:100])
+            logger.error(f"OpenAI图片描述生成失败: error={str(e)}, image_url={image_url[:100]}")
             return ""
 
     async def generate_caption_qwen_vl(
@@ -261,7 +261,7 @@ class MinerUImageHandler:
                 return caption.strip()
 
         except Exception as e:
-            logger.error("Qwen-VL图片描述生成失败", error=str(e), image_url=image_url[:100])
+            logger.error(f"Qwen-VL图片描述生成失败: error={str(e)}, image_url={image_url[:100]}")
             return ""
 
     async def generate_caption_custom(
@@ -356,7 +356,7 @@ class MinerUImageHandler:
 
         for item in completed:
             if isinstance(item, Exception):
-                logger.error("批量生成图片描述时发生错误", error=str(item))
+                logger.error(f"批量生成图片描述时发生错误: error={str(item)}")
             else:
                 url, caption = item
                 results[url] = caption

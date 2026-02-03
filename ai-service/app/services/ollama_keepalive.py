@@ -42,7 +42,7 @@ class OllamaKeepAlive:
         self._running = True
         self._client = httpx.AsyncClient(timeout=30.0)
         self._task = asyncio.create_task(self._keep_alive_loop())
-        logger.info("Ollama keep-alive service started", interval_seconds=self.interval)
+        logger.info(f"Ollama keep-alive service started: interval_seconds={self.interval}")
 
     async def stop(self):
         """Stop the background keep-alive task."""
@@ -77,7 +77,7 @@ class OllamaKeepAlive:
             logger.info("Keep-alive loop cancelled")
             raise
         except Exception as e:
-            logger.error("Unexpected error in keep-alive loop", error=str(e), exc_info=True)
+            logger.error(f"Unexpected error in keep-alive loop: error={str(e)}", exc_info=True)
 
     async def _send_keep_alive(self):
         """
@@ -95,17 +95,16 @@ class OllamaKeepAlive:
             if response.status_code == 200:
                 models = response.json().get("models", [])
                 model_names = [m.get("name", "unknown") for m in models]
-                logger.debug("Ollama keep-alive ping successful", models=model_names)
+                logger.debug(f"Ollama keep-alive ping successful: models={model_names}")
             else:
                 logger.warning(
-                    "Ollama keep-alive ping failed",
-                    status_code=response.status_code
+                    f"Ollama keep-alive ping failed: status_code={response.status_code}"
                 )
 
         except httpx.TimeoutError:
             logger.error("Ollama keep-alive request timed out")
         except Exception as e:
-            logger.error("Ollama keep-alive request failed", error=str(e))
+            logger.error(f"Ollama keep-alive request failed: error={str(e)}")
 
     async def force_load_model(self):
         """
@@ -117,7 +116,7 @@ class OllamaKeepAlive:
             if not self._client or not settings.use_ollama:
                 return
 
-            logger.info("Force loading Ollama model", model=settings.ollama_model)
+            logger.info(f"Force loading Ollama model: model={settings.ollama_model}")
 
             url = f"{settings.ollama_base_url}/api/generate"
             payload = {
@@ -132,12 +131,11 @@ class OllamaKeepAlive:
                 logger.info("Ollama model force loaded successfully")
             else:
                 logger.warning(
-                    "Failed to force load Ollama model",
-                    status_code=response.status_code
+                    f"Failed to force load Ollama model: status_code={response.status_code}"
                 )
 
         except Exception as e:
-            logger.error("Error force loading Ollama model", error=str(e), exc_info=True)
+            logger.error(f"Error force loading Ollama model: error={str(e)}", exc_info=True)
 
 
 # Global singleton

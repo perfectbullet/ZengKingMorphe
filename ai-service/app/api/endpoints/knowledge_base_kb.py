@@ -198,7 +198,7 @@ async def delete_knowledge_bases(
         - result with chunks_deleted count
     """
     try:
-        logger.info(f"delete_knowledge_bases request kb_id={kb_id}")
+        logger.info(f"delete_knowledge_bases request: kb_id={kb_id}")
 
         # 检查知识库是否存在
         kb = await db.knowledge_bases.find_one({'kb_id': kb_id})
@@ -214,25 +214,19 @@ async def delete_knowledge_bases(
         chunk_ids = [c["chunk_id"] for c in chunks]
 
         logger.info(
-            "Deleting knowledge base data",
-            kb_id=kb_id,
-            chunks_count=len(chunk_ids)
+            f"Deleting knowledge base data: kb_id={kb_id}, chunks_count={len(chunk_ids)}"
         )
 
         # 1. 删除 MongoDB document_chunks
         chunks_result = await db.document_chunks.delete_many({"kb_id": kb_id})
         logger.info(
-            "Deleted document_chunks",
-            kb_id=kb_id,
-            count=chunks_result.deleted_count
+            f"Deleted document_chunks: kb_id={kb_id}, count={chunks_result.deleted_count}"
         )
 
         # 2. 删除 MongoDB documents
         docs_result = await db.documents.delete_many({"kb_id": kb_id})
         logger.info(
-            "Deleted documents",
-            kb_id=kb_id,
-            count=docs_result.deleted_count
+            f"Deleted documents: kb_id={kb_id}, count={docs_result.deleted_count}"
         )
 
         # 3. 删除 ChromaDB 向量数据
@@ -454,7 +448,7 @@ async def download_test_file(
         \n- File download response
     """
     try:
-        logger.info("Download test file request", filename=filename)
+        logger.info(f"Download test file request: filename={filename}")
 
         # Security check: prevent path traversal
         if ".." in filename or "/" in filename or "\\" in filename:
@@ -470,9 +464,7 @@ async def download_test_file(
         # Check if file exists
         if not file_path.exists() or not file_path.is_file():
             logger.warning(
-                "Test file not found",
-                filename=filename,
-                requested_path=str(file_path)
+                f"Test file not found: filename={filename}, requested_path={str(file_path)}"
             )
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -481,9 +473,7 @@ async def download_test_file(
 
         # Return file
         logger.info(
-            "Serving test file",
-            filename=filename,
-            file_path=str(file_path)
+            f"Serving test file: filename={filename}, file_path={str(file_path)}"
         )
         return FileResponse(
             path=str(file_path),
@@ -524,13 +514,13 @@ async def get_knowledge_base_detail(
         \n- Knowledge base detail information with top 10 document chunks
     """
     try:
-        logger.info("Get knowledge base detail request", kb_id=kb_id)
+        logger.info(f"Get knowledge base detail request: kb_id={kb_id}")
 
         # Query knowledge base by kb_id
         kb = await db.knowledge_bases.find_one({"kb_id": kb_id})
 
         if not kb:
-            logger.warning("Knowledge base not found", kb_id=kb_id)
+            logger.warning(f"Knowledge base not found: kb_id={kb_id}")
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Knowledge base {kb_id} not found"

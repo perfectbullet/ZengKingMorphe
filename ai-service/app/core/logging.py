@@ -64,6 +64,6 @@ def get_logger(name: str):
     
     Example:
         logger = get_logger(__name__)
-        logger.info("User login", user_id=user_id, ip=ip)
+        logger.info(f"User login: user_id={user_id}, ip={ip}")
     """
     return logger.bind(module=name)

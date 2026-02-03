@@ -99,10 +99,9 @@ class RAGRetrieval:
                 reranked_docs.append(doc)
 
             logger.info(
-                "Documents reranked",
-                original_count=len(documents),
-                reranked_count=len(reranked_docs),
-                top_scores=[f"{d['rerank_score']:.3f}" for d in reranked_docs[:3]]
+                f"Documents reranked: original_count={len(documents)}, "
+                f"reranked_count={len(reranked_docs)}, "
+                f"top_scores={[f\"{d['rerank_score']:.3f}\" for d in reranked_docs[:3]]}"
             )
 
             return reranked_docs[:top_k]
