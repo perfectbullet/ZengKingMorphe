@@ -352,7 +352,7 @@ async def create_session(
                 
                 if faqs_count > 0:
                     employee_name = external_data["employee"]["name"]
-                    task_id = await task_processor.submit_faq_vectorization_task(
+                    task_id = await task_processor.submit_faq_vectorization_task_by_employee_id(
                         employee_id=synced_employee_id
                     )
                     logger.info(f"FAQ vectorization task submitted: task_id={task_id}, employee_id={synced_employee_id} ({employee_name}), faq_count={faqs_count}")

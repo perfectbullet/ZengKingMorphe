@@ -20,8 +20,8 @@ from app.api.middleware.error_handler import (
     validation_exception_handler,
     general_exception_handler
 )
-from app.api.endpoints import chat, session, employee, conversation, mineru, dataset_video, sensitive_word, \
-    major_word, dataset_faq
+from app.api.endpoints import chat, session, employee, conversation, mineru, dataset_video, thesaurus_sensitive, \
+    thesaurus_major, dataset_faq
 from app.api.endpoints import knowledge_base_kb, documents, metrics, websocket
 
 # Setup logging
@@ -136,8 +136,8 @@ app.include_router(mineru.router, prefix="/api/mineru", tags=["MinerU"])
 app.include_router(metrics.router, prefix="/api/metrics", tags=["Metrics"])
 app.include_router(websocket.router, prefix="/api/chat", tags=["WebSocket"])
 app.include_router(dataset_faq.router, prefix="/api/dataset_faq", tags=["dataset_faq"])
-app.include_router(major_word.router, prefix="/api/major_word", tags=["major_word"])
-app.include_router(sensitive_word.router, prefix="/api/sensitive_word", tags=["sensitive_word"])
+app.include_router(thesaurus_major.router, prefix="/api/thesaurus_major", tags=["thesaurus_major"])
+app.include_router(thesaurus_sensitive.router, prefix="/api/thesaurus_sensitive", tags=["thesaurus_sensitive"])
 
 
 @app.get("/")

@@ -33,10 +33,15 @@ async def create_dataset_video(
     """
     kb_id = request.kb_id
     try:
-        logger.info(f"create_dataset_video request kb_id={kb_id}")
+        logger.info(f"create_dataset_video request kb_id={kb_id}"
+                    f"enhance={request.enhance} "
+                    f"document_name={request.document_name} "
+                    f"resource_id={request.resource_id} "
+                    f"resource_url={request.resource_url} "
+                    )
 
         # 下载远程服务器上的文档文件
-        file_path = download_file(request.document_name, request.resource_id, request.resource_url)
+        file_path = await download_file(request.document_name, request.resource_id, request.resource_url)
 
         # 生成唯一文档id
         doc_id = generate_video_id(request.document_name, kb_id)
@@ -145,7 +150,7 @@ async def restart_task(
             return ResponseResult.error(status.HTTP_404_NOT_FOUND, "error",
                                         f"restart_task task not found task_id={task_id}")
 
-        await task_processor.restart_task(
+        await task_processor.re_submit_task(
             kb_id=task["kb_id"],
             filename=task["filename"],
             file_path=task["file_path"],
@@ -209,7 +214,7 @@ async def set_enhance(
                 return ResponseResult.error(status.HTTP_404_NOT_FOUND, "error",
                                             f"set_enhance task not found doc_id={doc_id}")
 
-            await task_processor.restart_task(
+            await task_processor.re_submit_task(
                 kb_id=task["kb_id"],
                 filename=task["filename"],
                 file_path=task["file_path"],

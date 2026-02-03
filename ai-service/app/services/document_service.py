@@ -39,6 +39,7 @@ UPLOAD_DIR = Path(__file__).parent.parent.parent.parent / "upload_docs"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 logger.info("Upload directory configured", upload_dir=str(UPLOAD_DIR))
 
+
 class DocumentProcessor:
     """Document processing service for RAG."""
 
@@ -1254,6 +1255,8 @@ async def download_file(
         resource_id: int,
         resource_url: str) -> str:
     try:
+        logger.info(f"download_file resource_id={resource_id} resource_url={resource_url}")
+
         # Generate temporary file path (using pathlib)
         file_ext = os.path.splitext(file_name)[1] or ".txt"
         temp_filename = f"java_upload_{resource_id}_{datetime.utcnow().timestamp()}{file_ext}"
@@ -1266,7 +1269,7 @@ async def download_file(
             ) as response:
                 if response.status != 200:
                     return ResponseResult.error(status.HTTP_400_BAD_REQUEST,
-                                                "Failed to download file from URL", None)
+                                                f"download_file from URL={resource_url}", None)
 
                 # Save file to disk
                 with open(file_path, "wb") as f:
@@ -1278,10 +1281,10 @@ async def download_file(
         return str(file_path)
 
     except aiohttp.ClientError as e:
-        logger.error(f"download_file exception resource_id={resource_id}, error=str(e)")
+        logger.error(f"download_file exception resource_id={resource_id}, error={str(e)}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to download file: {str(e)}",
+            detail=f"download_file error",
         )
 
 

@@ -170,6 +170,7 @@ class DocumentTaskModel(BaseModel):
     """Document processing task model."""
     task_id: str
     kb_id: str
+    enhance: int
     filename: str
     file_path: str
     category: Optional[str] = None
@@ -198,6 +199,7 @@ class StreamChunkModel(BaseModel):
     sequence: int = 0  # Chunk sequence number
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
 
 class FAQModel(BaseModel):
     """FAQ model for vector and keyword retrieval."""
@@ -289,3 +291,21 @@ class MinerUStructuredModel(BaseModel):
     images: List[Dict[str, Any]] = Field(default_factory=list)  # All images with URLs
     title_hierarchy: List[Dict[str, Any]] = Field(default_factory=list)  # Title hierarchy
     processed_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class ThesaurusMajorModel(BaseModel):
+    """ MongoDB专业词库 """
+    thesaurus_major_id: str  # 专业词库唯一id: thesaurus_major_{employee_id}_{external_thesaurus_major_id}
+    employee_id: str  # 数字员工id（mysql库）
+    external_thesaurus_major_id: int  # 专业词库id（mysql库）
+    thesaurus_name: str  # 专业词库名称
+    is_enable: int = 1  # 是否启用：0=不启用，1=启用
+    update_time: str  # 更新时间（mysql库）
+    thesaurus_major_words: List[str] = Field(default_factory=list)
+    # Vector and keyword indexing metadata
+    vector_id: Optional[str] = None  # ChromaDB vector ID
+    es_indexed: bool = False  # ElasticSearch indexing status
+    combined_text: str = ""  # thesaurus_name + thesaurus_major_words (for embedding)
+    keywords: List[str] = Field(default_factory=list)  # Extracted keywords
+    created_at: datetime = Field(default_factory=datetime.utcnow)  # 创建时间
+    synced_at: datetime = Field(default_factory=datetime.utcnow)  # 同步时间

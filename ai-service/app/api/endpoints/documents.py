@@ -489,8 +489,10 @@ async def create_rag_document_with_segment(
         logger.info(
             f"create_rag_document_with_segment "
             f"request kb_id={kb_id} "
+            f"enhance={request.enhance} "
             f"document_name={request.document_name} "
             f"resource_id={request.resource_id} "
+            f"resource_url={request.resource_url} "
             f"segment_flag={request.segment_flag}"
         )
 
@@ -517,7 +519,7 @@ async def create_rag_document_with_segment(
             logger.info(f"create_rag_document_with_segment chunk_config={chunk_config}")
 
         # 下载远程服务器上的文档文件
-        file_path = download_file(request.document_name, request.resource_id, request.resource_url)
+        file_path = await download_file(request.document_name, request.resource_id, request.resource_url)
 
         # 生成唯一文档id
         doc_id = generate_doc_id(request.document_name, kb_id)

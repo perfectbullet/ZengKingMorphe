@@ -179,6 +179,7 @@ class OpenAIChatRequest(BaseModel):
         description="Extra body parameters for non-OpenAI standard fields (channel_name, team_id, user_id, employee_id, etc.)"
     )
 
+
 # Session API Schemas
 class CreateSessionRequest(BaseModel):
     """Create session request schema."""
@@ -504,7 +505,7 @@ class CreateRagDocumentRequest(BaseModel):
     segment_flag: int = Field(0, description="分段策略：0=自动分段，1=自定义文档分段")
     segment_vo: Optional[SegmentVo] = Field(None, description="RAG文档分段设置")
     resource_url: str = Field(..., description="系统资源URL")
-    enhance: int = Field(..., description="设置文档或视频资源是否知识增强：0=不增强，1=增强")
+    enhance: int = Field(1, description="设置文档或视频资源是否知识增强：0=不增强，1=增强")
 
 
 class CreateRagDocumentResponse(BaseModel):
@@ -724,7 +725,7 @@ class ExternalEmployeeAPIResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
-class ResponseResult():
+class ResponseResult:
     """
         返回结果对象
     """
@@ -766,3 +767,103 @@ class CreateDatasetVideoRequest(BaseModel):
     end_time: Optional[str] = Field(None, description="生效结束时间")
     resource_url: str = Field(..., description="系统资源URL")
     enhance: int = Field(..., description="设置文档或视频资源是否知识增强：0=不增强，1=增强")
+
+
+class DatasetFaqRequest(BaseModel):
+    """ FAQ请求参数对象 """
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "faq_id": 8,
+                "employee_ids": [
+                    1,
+                    2
+                ],
+                "question_name": "问题101",
+                "end_time": "2025-12-16 18:09:45",
+                "end_time": "2099-12-31 23:23:59",
+                "is_enable": 1,
+                "is_clear": 0,
+                "update_time": "2025-12-17 16:49:29",
+                "similar_questions": [
+                    "相似问题101",
+                    "相似问题102",
+                    "相似问题103"
+                ],
+                "answers": [
+                    "答案101",
+                    "答案102"
+                ]
+            }
+        }
+    )
+
+    faq_id: int = Field(..., description="FAQ问答id")
+    employee_ids: List[int] = Field(default_factory=list, description="数字员工id列表")
+    question_name: str = Field(..., description="标准问题")
+    start_time: Optional[str] = Field(None, description="生效开始时间")
+    end_time: Optional[str] = Field(None, description="生效结束时间")
+    is_enable: int = Field(1, description="是否启用：0=不启用，1=启用")
+    is_clear: int = Field(0, description="是否澄清：0=不澄清，1=澄清")
+    update_time: Optional[str] = Field(None, alias="updateTime", description="更新时间")
+    similar_questions: List[str] = Field(default_factory=list)
+    answers: List[str] = Field(default_factory=list)
+
+
+class ThesaurusMajorWord(BaseModel):
+    word_name: str = Field(..., description="专业词条名称")
+    similar_word_name: List[str] = Field(default_factory=list, description="相似词条名称")
+
+
+class ThesaurusMajorRequest(BaseModel):
+    """ 专业词库请求参数对象 """
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "external_thesaurus_major_id": 8,
+                "thesaurus_name": "",
+                "is_enable": 1,
+                "update_time": "2025-12-17 16:49:29",
+                "thesaurus_major_words": [
+                    {
+                        "word_name": "红楼梦",
+                        "similar_word_name": [
+                            "石头记",
+                            "小红书"
+                        ]
+                    }
+                ]
+            }
+        }
+    )
+
+    thesaurus_major_id: int = Field(..., description="专业词库id")
+    employee_id: List[int] = Field(default_factory=list, description="数字员工id列表")
+    thesaurus_name: str = Field(..., description="专业词库名称")
+    is_enable: int = Field(1, description="是否启用：0=不启用，1=启用")
+    update_time: Optional[str] = Field(None, alias="updateTime", description="更新时间")
+    thesaurus_major_words: List[ThesaurusMajorWord] = Field(default_factory=list, description="专业词条列表列表")
+
+
+class ThesaurusSensitiveRequest(BaseModel):
+    """ 敏感词库请求参数对象 """
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "external_thesaurus_sensitive_id": 8,
+                "thesaurus_name": "敏感词",
+                "is_enable": 1,
+                "update_time": "2025-12-17 16:49:29",
+                "thesaurus_major_words": [
+                    "杀人",
+                    "放火"
+                ]
+            }
+        }
+    )
+
+    external_thesaurus_sensitive_id: int = Field(..., description="敏感词库id")
+    thesaurus_name: str = Field(..., description="敏感词库名称")
+    is_enable: int = Field(1, description="是否启用：0=不启用，1=启用")
+    update_time: Optional[str] = Field(None, alias="updateTime", description="更新时间")
+    thesaurus_sensitive_sensitive: List[str] = Field(default_factory=list, description="敏感词条名称列表")

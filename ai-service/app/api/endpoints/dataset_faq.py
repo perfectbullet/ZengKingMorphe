@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from fastapi import (
     APIRouter, Depends, HTTPException
 )
@@ -6,51 +8,123 @@ from starlette import status
 from app.api.middleware.auth import get_api_key
 from app.core.database import get_database
 from app.core.logging import get_logger
-from app.models.schemas import ResponseResult, SyncNotifyRequest
+from app.models.schemas import ResponseResult, DatasetFaqRequest
+from app.services.task_processor import task_processor
 
 logger = get_logger(__name__)
 
 router = APIRouter()
 
 
-@router.post("/notice")
-async def faq_notice(
-    request: SyncNotifyRequest,
+@router.post("/update")
+async def update_faq(
+    request: DatasetFaqRequest,
     api_key: str = Depends(get_api_key),
     db=Depends(get_database)
 ):
     """
-        接收通知：FAQ创建、更新、删除
+        FAQ创建或更新
 
         nArgs:
-            - event_type: create/update/delete
-            - id: 主键id
+            - request: FAQ请求参数对象
             - api_key: API key from auth
             - db: Database instance
 
         Returns:
             - result
-        """
+    """
+    faq_id = request.faq_id
     try:
-        logger.info(f"faq_notice request event_type={request.event_type}")
+        logger.info(f"update_faq request faq_id={faq_id} employee_ids={request.employee_ids}")
 
-        if request.event_type == "insert":
-            await db.faqs.insert_one({"faq_id": request.id})
-        elif request.event_type == "update":
-            await db.faqs.update_one({"faq_id": request.id})
-        elif request.event_type == "delete":
-            await db.faqs.delete_one({"faq_id": request.id})
-        else:
-            return ResponseResult.error(status.HTTP_400_BAD_REQUEST, "error",
-                                        f"faq_notice failed")
+        # Build combined_text for embedding (question + similar questions)
+        combined_text = request.question_name
+        if request.similar_questions:
+            combined_text += " " + " ".join(request.similar_questions)
+
+        answer_texts = [ans for ans in request.answers]
+
+        for employee_id in request.employee_ids:
+            try:
+                update_faq_id = f"faq_{employee_id}_{faq_id}"
+                update_data = {
+                    "faq_id": update_faq_id,
+                    "employee_id": employee_id,
+                    "external_faq_id": faq_id,
+                    "question_name": request.question_name,
+                    "start_time": request.start_time,
+                    "end_time": request.end_time,
+                    "is_enable": request.is_enable,
+                    "is_clear": request.isclear,
+                    "similar_questions": request.similar_questions,
+                    "answers": answer_texts,
+                    "update_time": request.update_time,
+                    "combined_text": combined_text,
+                    "keywords": [],  # Will be populated by vectorization task
+                    "vector_id": None,  # Will be set after vectorization
+                    "es_indexed": False,  # Will be set after ElasticSearch indexing
+                    "created_at": datetime.utcnow(),
+                    "synced_at": datetime.utcnow(),
+                }
+                await db.faqs.update_one(
+                    {"faq_id": update_faq_id},
+                    {"$set": update_data},
+                    upsert=True
+                )
+
+                await task_processor.submit_faq_vectorization_task(faq_id=update_faq_id)
+            except Exception as e:
+                logger.error(f"update_faq faq_id={faq_id} error={str(e)}", exc_info=True)
 
         return ResponseResult.success(None)
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"faq_notice exception event_type={request.event_type} error={str(e)}", exc_info=True)
+        logger.error(f"update_faq exception faq_id={faq_id} error={str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="faq_notice error"
+            detail="update_faq error"
+        )
+
+
+@router.delete("/delete")
+async def delete_faq(
+    faq_id: int,
+    api_key: str = Depends(get_api_key),
+    db=Depends(get_database)
+):
+    """
+        删除FAQ
+
+        nArgs:
+            - faq_id: FAQ问答id
+            - employee_id: 数字员工id
+            - api_key: API key from auth
+            - db: Database instance
+
+        Returns:
+            - result
+    """
+    try:
+        logger.info(f"delete_faq request faq_id={faq_id}")
+
+        # 删除数据
+        result = await db.faqs.delete_one({'external_faq_id': {faq_id}})
+
+        if result and result.deleted_count == 1:
+            logger.info(f"delete_faq success faq_id={faq_id}")
+
+            return ResponseResult.success(None)
+        else:
+            return ResponseResult.error(status.HTTP_404_NOT_FOUND, "error",
+                                        f"delete_faq not found faq_id={faq_id}")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"delete_faq exception faq_id={faq_id} error={str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="delete_faq error"
         )
