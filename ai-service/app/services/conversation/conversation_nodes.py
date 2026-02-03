@@ -709,58 +709,6 @@ class ConversationNodes:
 
     async def grade_documents(self, state: ConversationState) -> ConversationState:
         """
-        Document Grading - Calculate relevance score for retrieved documents.
-
-        Uses the top document's score as the overall relevance score.
-        Priority: rerank_score (from BGE Reranker) > rrf_score (from hybrid search).
-        This score determines if we should fallback to web search.
-
-        Score Sources:
-        - rerank_score: BGE Reranker cross-encoder score (preferred, range 0-1+)
-        - rrf_score: Reciprocal Rank Fusion score (fallback, normalized to 0-1)
-
-        Args:
-            state: Current conversation state
-
-        Returns:
-            Updated state with relevance_score populated
-        """
-        async with time_node("grade_documents", state):
-            docs = state.get("retrieved_docs", [])
-
-            if not docs:
-                state["relevance_score"] = 0.0
-            else:
-                # Priority: use rerank_score if available (from BGE Reranker)
-                # Fallback to rrf_score if no reranking was performed
-                top_doc = docs[0]
-                rerank_score = top_doc.get("rerank_score")
-
-                if rerank_score is not None:
-                    # Use BGE Reranker score (already normalized 0-1+)
-                    # Clamp to 0-1 range
-                    state["relevance_score"] = max(0.0, min(1.0, float(rerank_score)))
-                    logger.info(
-                        f"Document grading: rerank_score={rerank_score:.4f}, relevance={state['relevance_score']:.4f}"
-                    )
-                else:
-                    # Fallback: Normalize RRF score to 0-1 range
-                    # Max possible RRF score = 1/k + 1/k = 2/k (when doc ranks #1 in both searches)
-                    raw_rrf_score = top_doc.get("rrf_score", 0.0)
-                    rrf_k = 60  # Must match the k value used in _rrf_fusion
-                    max_possible_rrf = 2.0 / rrf_k
-                    normalized_rrf = (raw_rrf_score / max_possible_rrf) if max_possible_rrf > 0 else 0.0
-
-                    # Clamp to 0-1 range
-                    state["relevance_score"] = max(0.0, min(1.0, normalized_rrf))
-                    logger.info(
-                        f"Document grading: raw_rrf={raw_rrf_score:.4f}, normalized_relevance={state['relevance_score']:.4f}"
-                    )
-
-        return state
-
-    async def grade_documents(self, state: ConversationState) -> ConversationState:
-        """
         Document Grading - Calculate relevance score from retrieved documents.
 
         Note: Reranking is now done in RAGRetrieval.search(). This node only
@@ -798,6 +746,24 @@ class ConversationNodes:
                     rerank_score=top_doc.get("rerank_score"),
                     docs_count=len(docs)
                 )
+
+                # QA direct match: 如果 content_type='qa' 且 rerank_score > 0.9，直接使用 QA 内容作为答案
+                content_type = top_doc.get("content_type")
+                if content_type == "qa" and state["relevance_score"] > 0.9:
+                    qa_content = top_doc.get("content", "")
+                    state["final_answer"] = qa_content
+                    state["confidence"] = min(0.95, state["relevance_score"])
+                    state["qa_direct_match"] = {
+                        "doc_id": top_doc.get("doc_id"),
+                        "rerank_score": float(rerank_score) if rerank_score else 0.0,
+                        "content_snippet": qa_content[:100]
+                    }
+                    logger.info(
+                        "QA direct match triggered - skipping LLM generation",
+                        rerank_score=float(rerank_score) if rerank_score else 0.0,
+                        doc_id=top_doc.get("doc_id"),
+                        answer_length=len(qa_content)
+                    )
 
         return state
 
