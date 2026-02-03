@@ -98,10 +98,11 @@ class RAGRetrieval:
                 doc.pop("keyword_rank", None)
                 reranked_docs.append(doc)
 
+            top_scores_str = [f"{d['rerank_score']:.3f}" for d in reranked_docs[:3]]
             logger.info(
                 f"Documents reranked: original_count={len(documents)}, "
                 f"reranked_count={len(reranked_docs)}, "
-                f"top_scores={[f\"{d['rerank_score']:.3f}\" for d in reranked_docs[:3]]}"
+                f"top_scores={top_scores_str}"
             )
 
             return reranked_docs[:top_k]
