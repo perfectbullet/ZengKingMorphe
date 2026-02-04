@@ -312,7 +312,7 @@ OLLAMA_KEEP_ALIVE_INTERVAL=180  # Seconds, 0 to disable
 
 **BGE API Reranker** (default, no text length limits):
 ```bash
-BGE_RERANKER_API_URL=http://192.168.8.233:6006
+BGE_RERANKER_API_URL=http://192.168.8.233:8091
 BGE_RERANKER_API_KEY=sk-aaabbbcccdddeeefffggghhhiiijjjkkk
 BGE_RERANKER_MODEL=bge-reranker-v2-m3
 RERANKER_TYPE=bge_api

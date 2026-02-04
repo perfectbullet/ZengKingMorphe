@@ -320,7 +320,16 @@ class ConversationWorkflow:
 
         # RAG pipeline edges
         graph.add_edge("knowledge_retrieval", "grade_documents")
-        graph.add_edge("grade_documents", "compress_context")
+
+        # Conditional routing after grade_documents: QA 直接匹配时跳过 compress_context
+        graph.add_conditional_edges(
+            "grade_documents",
+            lambda state: "verify_answer" if state.get("final_answer") else "compress_context",
+            {
+                "verify_answer": "verify_answer",
+                "compress_context": "compress_context"
+            }
+        )
 
         # Conditional routing after context compression
         graph.add_conditional_edges(
@@ -381,7 +390,7 @@ class ConversationWorkflow:
                 print("[WARN] Mermaid source unavailable, saved repr to crag_graph_view_repr.txt")
 
         except Exception as exc:
-            logger.error(f"Graph debug dump failed: {exc}", exc_info=True)
+            logger.exception("Graph debug dump failed")
             try:
                 output_dir = Path(os.getenv("CRAG_GRAPH_DIR", "./graph_debug"))
                 output_dir.mkdir(parents=True, exist_ok=True)

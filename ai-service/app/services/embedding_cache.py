@@ -50,7 +50,7 @@ class EmbeddingCache:
             # Update access order
             self._access_order[key] = self._hits + self._misses
             self._hits += 1
-            logger.debug("Embedding cache hit", text_length=len(text), model=model)
+            logger.debug(f"Embedding cache hit: text_length={len(text)}, model={model}")
             return self._cache[key]
 
         self._misses += 1
@@ -73,7 +73,7 @@ class EmbeddingCache:
 
         self._cache[key] = embedding
         self._access_order[key] = self._hits + self._misses
-        logger.debug("Embedding cached", text_length=len(text), model=model, cache_size=len(self._cache))
+        logger.debug(f"Embedding cached: text_length={len(text)}, model={model}, cache_size={len(self._cache)}")
 
     def _evict_lru(self):
         """Evict least recently used items (10% of cache)."""
@@ -86,7 +86,7 @@ class EmbeddingCache:
             del self._cache[key]
             del self._access_order[key]
 
-        logger.info("LRU eviction completed", evicted_count=num_to_remove, remaining_count=len(self._cache))
+        logger.info(f"LRU eviction completed: evicted_count={num_to_remove}, remaining_count={len(self._cache)}")
 
     def get_stats(self) -> dict:
         """Get cache statistics."""

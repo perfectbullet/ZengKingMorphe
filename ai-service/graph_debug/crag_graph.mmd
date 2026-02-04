@@ -14,7 +14,7 @@ graph TD;
 	match_faq(match_faq)
 	intent_recognition(intent_recognition)
 	knowledge_retrieval(knowledge_retrieval)
-	rerank_documents(rerank_documents)
+	grade_documents(grade_documents)
 	compress_context(compress_context)
 	web_search(web_search)
 	generate_answer(generate_answer)
@@ -29,14 +29,14 @@ graph TD;
 	compress_context -.-> web_search;
 	evaluate_complexity --> rewrite_query;
 	generate_answer --> verify_answer;
+	grade_documents --> compress_context;
 	input_validation --> classify_query_type;
 	intent_recognition --> knowledge_retrieval;
-	knowledge_retrieval --> rerank_documents;
+	knowledge_retrieval --> grade_documents;
 	load_employee_config --> load_session_context;
 	load_session_context --> input_validation;
 	match_faq -.-> generate_answer;
 	match_faq -.-> intent_recognition;
-	rerank_documents --> compress_context;
 	rewrite_query --> match_faq;
 	verify_answer --> save_conversation;
 	web_search --> generate_answer;

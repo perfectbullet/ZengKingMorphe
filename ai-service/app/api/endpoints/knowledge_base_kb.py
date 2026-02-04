@@ -187,25 +187,102 @@ async def delete_knowledge_bases(
     """
         删除知识库信息。
 
-        Args:
-            - kb_id: knowledge bases ID
-            - api_key: API key from auth
-            - db: Database instance
+    Args:
+        - kb_id: knowledge base ID
+        - api_key: API key from auth
+        - db: Database instance
 
-        Returns:
-            - result
+    Returns:
+        - result with chunks_deleted count
     """
     try:
-        logger.info(f"delete_knowledge_bases request kb_id={kb_id}")
+        logger.info(f"delete_knowledge_bases request: kb_id={kb_id}")
 
-        # 删除数据
+        # 检查知识库是否存在
+        kb = await db.knowledge_bases.find_one({'kb_id': kb_id})
+        if not kb:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Knowledge base {kb_id} not found"
+            )
+
+        # 获取该知识库的所有 chunk_id（用于删除 ChromaDB 和 ES）
+        chunks_cursor = db.document_chunks.find({"kb_id": kb_id}, {"chunk_id": 1})
+        chunks = await chunks_cursor.to_list(length=None)
+        chunk_ids = [c["chunk_id"] for c in chunks]
+
+        logger.info(
+            f"Deleting knowledge base data: kb_id={kb_id}, chunks_count={len(chunk_ids)}"
+        )
+
+        # 1. 删除 MongoDB document_chunks
+        chunks_result = await db.document_chunks.delete_many({"kb_id": kb_id})
+        logger.info(
+            f"Deleted document_chunks: kb_id={kb_id}, count={chunks_result.deleted_count}"
+        )
+
+        # 2. 删除 MongoDB documents
+        docs_result = await db.documents.delete_many({"kb_id": kb_id})
+        logger.info(
+            f"Deleted documents: kb_id={kb_id}, count={docs_result.deleted_count}"
+        )
+
+        # 3. 删除 ChromaDB 向量数据
+        if chunk_ids:
+            try:
+                await chroma_db.delete_documents(collection_name="doc", ids=chunk_ids)
+                logger.info(
+                    "Deleted ChromaDB documents",
+                    kb_id=kb_id,
+                    count=len(chunk_ids)
+                )
+            except Exception as e:
+                logger.error(
+                    "Failed to delete ChromaDB data",
+                    kb_id=kb_id,
+                    error=str(e),
+                    exc_info=True
+                )
+
+        # 4. 删除 ElasticSearch 索引数据
+        if chunk_ids:
+            deleted_es_count = 0
+            for chunk_id in chunk_ids:
+                try:
+                    await es_db.delete_document(index=es_db.doc_index, doc_id=chunk_id)
+                    deleted_es_count += 1
+                except Exception as e:
+                    logger.warning(
+                        "Failed to delete ES document",
+                        chunk_id=chunk_id,
+                        error=str(e)
+                    )
+            logger.info(
+                "Deleted ES documents",
+                kb_id=kb_id,
+                count=deleted_es_count
+            )
+
+        # 5. 最后删除知识库元数据
         result = await db.knowledge_bases.delete_one({'kb_id': kb_id})
 
-        if result and result.deleted_count == 1:
-            return ResponseResult.success(None)
+        if result.deleted_count == 1:
+            logger.info(
+                "Knowledge base deleted successfully",
+                kb_id=kb_id,
+                chunks_deleted=len(chunk_ids)
+            )
+            return ResponseResult.success({
+                "kb_id": kb_id,
+                "chunks_deleted": len(chunk_ids)
+            })
         else:
-            return ResponseResult.error(status.HTTP_404_NOT_FOUND, "error",
-                                        f"delete_knowledge_bases not found kb_id={kb_id}")
+            logger.error(f"delete_knowledge_bases {kb_id} failed")
+            return ResponseResult.error(
+                status.HTTP_400_BAD_REQUEST,
+                "error",
+                f"delete_knowledge_bases {kb_id} failed"
+            )
 
     except HTTPException:
         raise
@@ -369,7 +446,7 @@ async def download_test_file(
         \n- File download response
     """
     try:
-        logger.info("Download test file request", filename=filename)
+        logger.info(f"Download test file request: filename={filename}")
 
         # Security check: prevent path traversal
         if ".." in filename or "/" in filename or "\\" in filename:
@@ -385,9 +462,7 @@ async def download_test_file(
         # Check if file exists
         if not file_path.exists() or not file_path.is_file():
             logger.warning(
-                "Test file not found",
-                filename=filename,
-                requested_path=str(file_path)
+                f"Test file not found: filename={filename}, requested_path={str(file_path)}"
             )
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -396,9 +471,7 @@ async def download_test_file(
 
         # Return file
         logger.info(
-            "Serving test file",
-            filename=filename,
-            file_path=str(file_path)
+            f"Serving test file: filename={filename}, file_path={str(file_path)}"
         )
         return FileResponse(
             path=str(file_path),
@@ -439,13 +512,13 @@ async def get_knowledge_base_detail(
         \n- Knowledge base detail information with top 10 document chunks
     """
     try:
-        logger.info("Get knowledge base detail request", kb_id=kb_id)
+        logger.info(f"Get knowledge base detail request: kb_id={kb_id}")
 
         # Query knowledge base by kb_id
         kb = await db.knowledge_bases.find_one({"kb_id": kb_id})
 
         if not kb:
-            logger.warning("Knowledge base not found", kb_id=kb_id)
+            logger.warning(f"Knowledge base not found: kb_id={kb_id}")
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Knowledge base {kb_id} not found"

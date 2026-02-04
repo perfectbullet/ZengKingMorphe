@@ -364,9 +364,80 @@ async def generate_openai_stream_response(
                 should_generate = True
                 final_state = current_state  # Use accumulated state
 
-            # When ready to generate, do REAL streaming
+            # When ready to generate, do TRUE streaming
             if should_generate and final_state:
                 should_generate = False  # Only generate once
+
+                # 检查是否已有预生成的答案（QA 直接匹配）
+                existing_answer = final_state.get("final_answer", "")
+                qa_direct_match = final_state.get("qa_direct_match")
+
+                if existing_answer and qa_direct_match and not final_state.get("faq_matched"):
+                    # 直接流式返回预生成的 QA 答案，跳过 LLM 生成
+                    ttfb_ms = int((time.time() - initial_state["workflow_start_time"]) * 1000)
+                    final_state["ttfb_ms"] = ttfb_ms
+
+                    logger.info(
+                        f"Using pre-generated QA answer | source=qa_direct_match | "
+                        f"rerank_score={qa_direct_match.get('rerank_score')} | "
+                        f"length={len(existing_answer)} | ttfb_ms={ttfb_ms}"
+                    )
+
+                    # 按中文标点符号切分流式返回答案，每段最长20字符
+                    import re
+                    # 按中文标点和换行切分，但保留分隔符
+                    segments = re.split(r'([，。！？、；：\n])', existing_answer)
+                    current_chunk = ""
+
+                    for segment in segments:
+                        current_chunk += segment
+
+                        # 遇到标点符号/换行或累计超过20字符时发送
+                        if segment in '，。！？、；：\n' or len(current_chunk) >= 20:
+                            token_chunk_data = {
+                                "id": chat_id,
+                                "object": "chat.completion.chunk",
+                                "created": created,
+                                "model": request.model,
+                                "choices": [{
+                                    "index": 0,
+                                    "delta": {"content": current_chunk},
+                                    "finish_reason": None,
+                                }],
+                            }
+                            chunk_sequence += 1
+                            await save_stream_chunk(
+                                db, chat_id, chunk_sequence, session_id, request.user_id,
+                                request.employee_id, "token", token_chunk_data,
+                                final_state.get("conversation_id")
+                            )
+                            yield json.dumps(token_chunk_data)
+                            current_chunk = ""
+
+                    # 发送剩余内容
+                    if current_chunk:
+                        token_chunk_data = {
+                            "id": chat_id,
+                            "object": "chat.completion.chunk",
+                            "created": created,
+                            "model": request.model,
+                            "choices": [{
+                                "index": 0,
+                                "delta": {"content": current_chunk},
+                                "finish_reason": None,
+                            }],
+                        }
+                        chunk_sequence += 1
+                        await save_stream_chunk(
+                            db, chat_id, chunk_sequence, session_id, request.user_id,
+                            request.employee_id, "token", token_chunk_data,
+                            final_state.get("conversation_id")
+                        )
+                        yield json.dumps(token_chunk_data)
+
+                    # 保存对话并退出
+                    await conversation_workflow.save_conversation(final_state)
+                    break
 
                 # Build messages for LLM
                 messages = conversation_workflow.build_generation_messages(final_state)

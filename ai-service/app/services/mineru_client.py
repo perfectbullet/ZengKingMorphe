@@ -195,7 +195,7 @@ class MineruClient:
             return chunks
 
         except Exception as e:
-            logger.error(f"Failed to split PDF: {file_path}", error=str(e), exc_info=True)
+            logger.error(f"Failed to split PDF: file_path={file_path}, error={str(e)}", exc_info=True)
             raise
 
     async def _call_mineru_api(
@@ -314,7 +314,7 @@ class MineruClient:
             return None
 
         except Exception as e:
-            logger.warning(f"Failed to get cached result: {cache_key}", error=str(e))
+            logger.warning(f"Failed to get cached result: cache_key={cache_key}, error={str(e)}")
             return None
 
     async def _save_cached_result(
@@ -355,7 +355,7 @@ class MineruClient:
             logger.debug(f"Saved result to cache: {cache_key}")
 
         except Exception as e:
-            logger.warning(f"Failed to save cached result: {cache_key}", error=str(e))
+            logger.warning(f"Failed to save cached result: cache_key={cache_key}, error={str(e)}")
 
     async def _create_job_record(self, file_path: str, total_chunks: int) -> str:
         """
@@ -399,7 +399,7 @@ class MineruClient:
             return job_id
 
         except Exception as e:
-            logger.error(f"Failed to create job record: {file_path}", error=str(e), exc_info=True)
+            logger.error(f"Failed to create job record: file_path={file_path}, error={str(e)}", exc_info=True)
             raise
 
     async def _update_job_progress(
@@ -433,7 +433,7 @@ class MineruClient:
             await collection.update_one({"_id": job_id}, update_data)
 
         except Exception as e:
-            logger.warning(f"Failed to update job progress: {job_id}", error=str(e))
+            logger.warning(f"Failed to update job progress: job_id={job_id}, error={str(e)}")
 
     async def _finalize_job(self, job_id: str, final_result: Dict[str, Any]) -> None:
         """
@@ -461,7 +461,7 @@ class MineruClient:
             logger.info(f"Job completed: {job_id}")
 
         except Exception as e:
-            logger.error(f"Failed to finalize job: {job_id}", error=str(e), exc_info=True)
+            logger.error(f"Failed to finalize job: job_id={job_id}, error={str(e)}", exc_info=True)
 
     async def _merge_results(self, results: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
@@ -549,7 +549,7 @@ class MineruClient:
             return merged
 
         except Exception as e:
-            logger.error(f"Failed to merge results", error=str(e), exc_info=True)
+            logger.error(f"Failed to merge results: error={str(e)}", exc_info=True)
             raise
 
     async def process_pdf(
@@ -570,7 +570,7 @@ class MineruClient:
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"PDF file not found: {file_path}")
 
-        logger.info(f"Starting PDF processing", file=file_path, use_cache=use_cache)
+        logger.info(f"Starting PDF processing: file={file_path}, use_cache={use_cache}")
 
         # Split PDF into chunks
         chunks = await self._split_pdf(file_path)
@@ -631,7 +631,7 @@ class MineruClient:
             return final_result
 
         except Exception as e:
-            logger.error(f"Failed to process PDF: {file_path}", error=str(e), exc_info=True)
+            logger.error(f"Failed to process PDF: file_path={file_path}, error={str(e)}", exc_info=True)
 
             # Update job status to failed
             try:
@@ -661,7 +661,7 @@ class MineruClient:
                     temp_dir.rmdir()
                     logger.debug("Cleaned up temp PDF chunks")
             except Exception as e:
-                logger.warning(f"Failed to clean up temp files", error=str(e))
+                logger.warning(f"Failed to clean up temp files: error={str(e)}")
 
     async def get_job_status(self, job_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -683,7 +683,7 @@ class MineruClient:
             return job
 
         except Exception as e:
-            logger.error(f"Failed to get job status: {job_id}", error=str(e), exc_info=True)
+            logger.error(f"Failed to get job status: job_id={job_id}, error={str(e)}", exc_info=True)
             return None
 
     async def clear_cache(self, older_than_days: int = 30) -> int:
@@ -710,7 +710,7 @@ class MineruClient:
             return result.deleted_count
 
         except Exception as e:
-            logger.error(f"Failed to clear cache", error=str(e), exc_info=True)
+            logger.error(f"Failed to clear cache: error={str(e)}", exc_info=True)
             return 0
 
 

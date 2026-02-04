@@ -33,12 +33,11 @@ async def create_dataset_video(
     """
     kb_id = request.kb_id
     try:
-        logger.info(f"create_dataset_video request kb_id={kb_id}"
-                    f"enhance={request.enhance} "
-                    f"document_name={request.document_name} "
-                    f"resource_id={request.resource_id} "
-                    f"resource_url={request.resource_url} "
-                    )
+        logger.info(
+            f"create_dataset_video request: kb_id={request.kb_id}, "
+            f"enhance={request.enhance}, document_name={request.document_name}, "
+            f"resource_id={request.resource_id}, resource_url={request.resource_url}"
+        )
 
         # 下载远程服务器上的文档文件
         file_path = await download_file(request.document_name, request.resource_id, request.resource_url)
@@ -71,7 +70,10 @@ async def create_dataset_video(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"create_dataset_video exception error={str(e)}", exc_info=True)
+        logger.error(
+            f"create_dataset_video exception: error={str(e)}",
+            exc_info=True
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="create_dataset_video error",
@@ -94,9 +96,9 @@ async def delete_documents(
 
         Returns:
             - result
-        """
+    """
     try:
-        logger.info(f"delete_documents request doc_id={doc_id}")
+        logger.info(f"delete_documents request: doc_id={doc_id}")
 
         # 删除数据
         result = await db.documents.delete_one({'doc_id': doc_id})
@@ -117,7 +119,10 @@ async def delete_documents(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"delete_documents exception doc_id={doc_id} error={str(e)}", exc_info=True)
+        logger.error(
+            f"delete_documents exception: doc_id={doc_id}, error={str(e)}",
+            exc_info=True
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="delete_documents error"
@@ -140,9 +145,9 @@ async def restart_task(
 
         Returns:
             - result
-        """
+    """
     try:
-        logger.info(f"restart_task request task_id={task_id}")
+        logger.info(f"restart_task request: task_id={task_id}")
 
         task = await db.document_tasks.find_one({"task_id": task_id})
 
@@ -165,7 +170,10 @@ async def restart_task(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"restart_task exception task_id={task_id} error={str(e)}", exc_info=True)
+        logger.error(
+            f"restart_task exception: task_id={task_id}, error={str(e)}",
+            exc_info=True
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="restart_task error"
@@ -192,7 +200,7 @@ async def set_enhance(
             - result
     """
     try:
-        logger.info(f"set_enhance request doc_id={doc_id}")
+        logger.info(f"set_enhance request: doc_id={doc_id}")
 
         doc = await db.documents.find_one({"doc_id": doc_id})
 
@@ -231,7 +239,10 @@ async def set_enhance(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"set_enhance exception doc_id={doc_id} error={str(e)}", exc_info=True)
+        logger.error(
+            f"set_enhance exception: doc_id={doc_id}, error={str(e)}",
+            exc_info=True
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="set_enhance error"

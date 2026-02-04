@@ -35,6 +35,7 @@ from app.services.conversation.conversation_helpers import (
     heuristic_complexity
 )
 from app.services.rag_service import rag_retrieval
+from app.services.math_textbook_retrieval import math_textbook_retrieval, MATH_KB_ID
 
 logger = get_logger(__name__)
 
@@ -92,10 +93,10 @@ class ConversationNodes:
 
             employee.pop("_id", None)
             state["employee_config"] = employee
+            kb_ids = employee.get("kb_ids", [])
             logger.info(
-                "Employee config loaded",
-                employee_id=state["employee_id"],
-                name=employee.get("name")
+                f"Employee config loaded: employee_id={state['employee_id']}, "
+                f"name={employee.get('name')}, kb_ids={kb_ids}, kb_count={len(kb_ids)}"
             )
 
         return state
@@ -144,9 +145,8 @@ class ConversationNodes:
                     state["context"] = {"messages": [], "message_count": 0}
 
                 logger.debug(
-                    "Session context loaded",
-                    session_id=state["session_id"],
-                    message_count=state["context"]["message_count"]
+                    f"Session context loaded: session_id={state['session_id']}, "
+                    f"message_count={state['context']['message_count']}"
                 )
 
             except Exception as e:
@@ -207,7 +207,7 @@ class ConversationNodes:
                     state["complexity_reason"] = "interruption"
                     state["is_realtime_query"] = False
                     state["entities"] = {"interruption_type": category}
-                    logger.info("Query classified: interruption", category=category)
+                    logger.info(f"Query classified: interruption: category={category}")
                     return state
 
             # 2. 检测问候语
@@ -217,7 +217,7 @@ class ConversationNodes:
                     state["complexity_score"] = 0.0
                     state["complexity_reason"] = "greeting"
                     state["is_realtime_query"] = False
-                    logger.info("Query classified: greeting", category=category)
+                    logger.info(f"Query classified: greeting: category={category}")
                     return state
 
             # 3. 检测实时查询
@@ -234,7 +234,7 @@ class ConversationNodes:
                         state["realtime_category"] = category
                         state["realtime_detect_reason"] = f"keyword:{keywords[0] if keywords else category}"
                         state["intent"] = "general_query"
-                        logger.info("Query classified: realtime", category=category)
+                        logger.info(f"Query classified: realtime: category={category}")
                         return state
 
             # 4. 默认为一般查询
@@ -474,7 +474,7 @@ class ConversationNodes:
                     state["faq_matched"] = None
                     return state
 
-                faq_sim_threshold = digital_config.get("faq_sim_threshold", 0.0)
+                faq_sim_threshold = digital_config.get("faq_sim_threshold", 0.7)
                 faq_top_k = digital_config.get("faq_top_k", 3)
 
                 logger.info(
@@ -611,6 +611,10 @@ class ConversationNodes:
         2. Use rewritten query if available
         3. Perform hybrid search (vector + BM25 + RRF fusion)
 
+        Special handling for math textbook knowledge base (kb_9abcbe4aa557):
+        - Uses math_textbook_retrieval which returns context_text (answers)
+        - Other knowledge bases use standard rag_retrieval
+
         Args:
             state: Current conversation state
 
@@ -626,17 +630,63 @@ class ConversationNodes:
                     "Knowledge retrieval started",
                     employee_id=state["employee_id"],
                     kb_count=len(kb_ids),
+                    kb_ids=kb_ids,
                     query_rewritten=state.get("query_rewritten", False)
                 )
 
-                # Perform RAG search with reranking enabled
-                results = await rag_retrieval.search(
-                    query=search_query,
-                    kb_ids=kb_ids if kb_ids else None,
-                    top_k=5,
-                    use_hybrid=True,
-                    enable_rerank=True
-                )
+                all_results = []
+
+                # Case 1: Math textbook knowledge base present
+                if MATH_KB_ID in kb_ids:
+                    logger.info(
+                        "Math textbook knowledge base detected, using specialized retrieval",
+                        kb_id=MATH_KB_ID
+                    )
+
+                    # Math textbook specialized retrieval (returns context_text/answers)
+                    math_results = await math_textbook_retrieval.search(
+                        query=search_query,
+                        kb_ids=[MATH_KB_ID],
+                        top_k=5,
+                        use_hybrid=True,
+                        enable_rerank=True
+                    )
+                    all_results.extend(math_results)
+                    logger.info(
+                        "Math textbook retrieval completed",
+                        math_results_count=len(math_results)
+                    )
+
+                    # Other knowledge bases use standard retrieval (exclude math kb)
+                    other_kb_ids = [kb_id for kb_id in kb_ids if kb_id != MATH_KB_ID]
+                    if other_kb_ids:
+                        standard_results = await rag_retrieval.search(
+                            query=search_query,
+                            kb_ids=other_kb_ids,
+                            top_k=5,
+                            use_hybrid=True,
+                            enable_rerank=True
+                        )
+                        all_results.extend(standard_results)
+                        logger.info(
+                            "Standard retrieval completed for other KBs",
+                            other_kb_count=len(standard_results),
+                            other_kb_ids=other_kb_ids
+                        )
+
+                # Case 2: No math textbook knowledge base
+                else:
+                    # Standard RAG retrieval for all knowledge bases
+                    all_results = await rag_retrieval.search(
+                        query=search_query,
+                        kb_ids=kb_ids if kb_ids else None,
+                        top_k=5,
+                        use_hybrid=True,
+                        enable_rerank=True
+                    )
+
+                # Take top_k results
+                results = all_results[:5]
 
                 state["retrieved_docs"] = results
                 state["kb_used"] = list(set([
@@ -645,7 +695,8 @@ class ConversationNodes:
 
                 logger.info(
                     "Knowledge retrieval completed",
-                    results_count=len(results),
+                    total_results=len(all_results),
+                    returned_results=len(results),
                     kb_used=state["kb_used"]
                 )
 
@@ -653,58 +704,6 @@ class ConversationNodes:
                 logger.error(f"Knowledge retrieval failed: {str(e)}", exc_info=True)
                 state["retrieved_docs"] = []
                 state["kb_used"] = []
-
-        return state
-
-    async def grade_documents(self, state: ConversationState) -> ConversationState:
-        """
-        Document Grading - Calculate relevance score for retrieved documents.
-
-        Uses the top document's score as the overall relevance score.
-        Priority: rerank_score (from BGE Reranker) > rrf_score (from hybrid search).
-        This score determines if we should fallback to web search.
-
-        Score Sources:
-        - rerank_score: BGE Reranker cross-encoder score (preferred, range 0-1+)
-        - rrf_score: Reciprocal Rank Fusion score (fallback, normalized to 0-1)
-
-        Args:
-            state: Current conversation state
-
-        Returns:
-            Updated state with relevance_score populated
-        """
-        async with time_node("grade_documents", state):
-            docs = state.get("retrieved_docs", [])
-
-            if not docs:
-                state["relevance_score"] = 0.0
-            else:
-                # Priority: use rerank_score if available (from BGE Reranker)
-                # Fallback to rrf_score if no reranking was performed
-                top_doc = docs[0]
-                rerank_score = top_doc.get("rerank_score")
-
-                if rerank_score is not None:
-                    # Use BGE Reranker score (already normalized 0-1+)
-                    # Clamp to 0-1 range
-                    state["relevance_score"] = max(0.0, min(1.0, float(rerank_score)))
-                    logger.info(
-                        f"Document grading: rerank_score={rerank_score:.4f}, relevance={state['relevance_score']:.4f}"
-                    )
-                else:
-                    # Fallback: Normalize RRF score to 0-1 range
-                    # Max possible RRF score = 1/k + 1/k = 2/k (when doc ranks #1 in both searches)
-                    raw_rrf_score = top_doc.get("rrf_score", 0.0)
-                    rrf_k = 60  # Must match the k value used in _rrf_fusion
-                    max_possible_rrf = 2.0 / rrf_k
-                    normalized_rrf = (raw_rrf_score / max_possible_rrf) if max_possible_rrf > 0 else 0.0
-
-                    # Clamp to 0-1 range
-                    state["relevance_score"] = max(0.0, min(1.0, normalized_rrf))
-                    logger.info(
-                        f"Document grading: raw_rrf={raw_rrf_score:.4f}, normalized_relevance={state['relevance_score']:.4f}"
-                    )
 
         return state
 
@@ -747,6 +746,24 @@ class ConversationNodes:
                     rerank_score=top_doc.get("rerank_score"),
                     docs_count=len(docs)
                 )
+
+                # QA direct match: 如果 content_type='qa' 且 rerank_score > 0.9，直接使用 QA 内容作为答案
+                content_type = top_doc.get("content_type")
+                if content_type == "qa" and state["relevance_score"] > 0.9:
+                    qa_content = top_doc.get("content", "")
+                    state["final_answer"] = qa_content
+                    state["confidence"] = min(0.95, state["relevance_score"])
+                    state["qa_direct_match"] = {
+                        "doc_id": top_doc.get("doc_id"),
+                        "rerank_score": float(rerank_score) if rerank_score else 0.0,
+                        "content_snippet": qa_content[:100]
+                    }
+                    logger.info(
+                        "QA direct match triggered - skipping LLM generation",
+                        rerank_score=float(rerank_score) if rerank_score else 0.0,
+                        doc_id=top_doc.get("doc_id"),
+                        answer_length=len(qa_content)
+                    )
 
         return state
 
@@ -997,7 +1014,7 @@ class ConversationNodes:
 
             # Skip for FAQ, greeting, and interruption (already validated)
             if state.get("faq_matched") or state.get("intent") in ("greeting", "interruption"):
-                logger.debug("Skipping verification for FAQ/greeting/interruption", intent=state.get("intent"))
+                logger.debug(f"Skipping verification for FAQ/greeting/interruption: intent={state.get('intent')}")
                 return state
 
             answer = state.get("final_answer", "")
