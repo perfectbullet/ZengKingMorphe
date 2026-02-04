@@ -219,7 +219,7 @@ class ChromaDB:
             )
             raise
 
-    def _get_collection(self, collection_name: str):
+    def get_collection(self, collection_name: str):
         """Get collection by name."""
         if collection_name == "faq":
             return self.faq_collection

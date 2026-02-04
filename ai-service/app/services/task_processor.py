@@ -272,22 +272,6 @@ class DocumentTaskProcessor:
         
         return False
 
-    async def submit_faq_vectorization_task_by_employee_id(self, employee_id: str):
-        """
-            提交FAQ向量化任务（异步后台处理）。
-            从MongoDB的faqs集合中读取该员工的FAQ数据进行向量化。
-        """
-        task_id = f"faq_task_{employee_id}_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
-
-        # Add to queue for background processing
-        await self.task_queue.put({
-            "task_id": task_id,
-            "task_type": "faq_vectorization",
-            "employee_id": employee_id
-        })
-
-        logger.info(f"submit_faq_vectorization_task_by_employee_id task_id={task_id} employee_id={employee_id}")
-
     async def submit_faq_vectorization_task(self, faq_id: str):
         """
             提交FAQ向量化任务（异步后台处理）。
@@ -297,12 +281,12 @@ class DocumentTaskProcessor:
 
         # Add to queue for background processing
         await self.task_queue.put({
-            "task_id": task_id,
             "task_type": "faq_vectorization",
+            "task_id": task_id,
             "faq_id": faq_id
         })
 
-        logger.info(f"submit_faq_vectorization_task task_id={task_id} faq_id={faq_id}")
+        logger.info(f"submit_faq_vectorization_task task_id={task_id}")
 
     async def _execute_document_vectorization(self, task_data: Dict):
         """Execute a single document processing task."""
@@ -398,16 +382,75 @@ class DocumentTaskProcessor:
 
     async def _execute_faq_vectorization(self, task_data: Dict):
         """ 执行FAQ向量化任务 """
-        if task_data["employee_id"]:
-            return await faq_processor.vectorization_faq_by_employee_id(
-                task_id=task_data["task_id"],
-                employee_id=task_data["employee_id"]
+        db = await get_database()
+        task_id = task_data["task_id"]
+
+        try:
+            # Update task status to running
+            await db.document_tasks.update_one(
+                {"task_id": task_id},
+                {
+                    "$set": {
+                        "status": "running",
+                        "started_at": datetime.utcnow()
+                    }
+                }
             )
-        elif task_data["faq_id"]:
-            return await faq_processor.vectorization_faq(
-                task_id=task_data["task_id"],
-                faq_id=task_data["faq_id"]
+
+            logger.info(f"_execute_faq_vectorization task task_id={task_id}, task_data={task_data}")
+
+            faq_id = await faq_processor.vectorization_faq(
+                    task_id=task_id,
+                    faq_id=task_data["faq_id"]
+                )
+
+            # Check if task was cancelled
+            if self.active_tasks.get(task_id, False):
+                await db.document_tasks.update_one(
+                    {"task_id": task_id},
+                    {
+                        "$set": {
+                            "status": "cancelled",
+                            "completed_at": datetime.utcnow()
+                        }
+                    }
+                )
+                logger.info(f"_execute_faq_vectorization task cancelled task_id={task_id}")
+                return
+
+            # Update task status to completed
+            await db.document_tasks.update_one(
+                {"task_id": task_id},
+                {
+                    "$set": {
+                        "status": "completed",
+                        "doc_id": faq_id,
+                        "progress": 100.0,
+                        "completed_at": datetime.utcnow()
+                    }
+                }
             )
+
+            logger.info(f"_execute_faq_vectorization task completed: task_id={task_id}, faq_id={faq_id}")
+
+        except Exception as e:
+            logger.error(f"_execute_faq_vectorization task failed: task_id={task_id}, error={str(e)}", exc_info=True)
+
+            # Update task status to failed
+            await db.document_tasks.update_one(
+                {"task_id": task_id},
+                {
+                    "$set": {
+                        "status": "failed",
+                        "error_message": str(e),
+                        "completed_at": datetime.utcnow()
+                    }
+                }
+            )
+
+        finally:
+            # Remove from active tasks
+            self.active_tasks.pop(task_id, None)
 
     async def _execute_thesaurus_major_vectorization(self, task_data: Dict):
         """ 执行专业词库向量化任务 """

@@ -23,9 +23,9 @@ async def update_faq(
     db=Depends(get_database)
 ):
     """
-        FAQ创建或更新
+        FAQ更新
 
-        nArgs:
+        Args:
             - request: FAQ请求参数对象
             - api_key: API key from auth
             - db: Database instance
@@ -55,7 +55,7 @@ async def update_faq(
                     "start_time": request.start_time,
                     "end_time": request.end_time,
                     "is_enable": request.is_enable,
-                    "is_clear": request.isclear,
+                    "is_clear": request.is_clear,
                     "similar_questions": request.similar_questions,
                     "answers": answer_texts,
                     "update_time": request.update_time,
@@ -63,8 +63,8 @@ async def update_faq(
                     "keywords": [],  # Will be populated by vectorization task
                     "vector_id": None,  # Will be set after vectorization
                     "es_indexed": False,  # Will be set after ElasticSearch indexing
-                    "created_at": datetime.utcnow(),
-                    "synced_at": datetime.utcnow(),
+                    "created_at": datetime.now(),
+                    "synced_at": datetime.now(),
                 }
                 await db.faqs.update_one(
                     {"faq_id": update_faq_id},
@@ -97,7 +97,7 @@ async def delete_faq(
     """
         删除FAQ
 
-        nArgs:
+        Args:
             - faq_id: FAQ问答id
             - employee_id: 数字员工id
             - api_key: API key from auth

@@ -187,7 +187,7 @@ async def delete_knowledge_bases(
     """
         删除知识库信息。
 
-        nArgs:
+        Args:
             - kb_id: knowledge bases ID
             - api_key: API key from auth
             - db: Database instance
@@ -201,11 +201,7 @@ async def delete_knowledge_bases(
         # 删除数据
         result = await db.knowledge_bases.delete_one({'kb_id': kb_id})
 
-        if not result:
-            return ResponseResult.error(status.HTTP_404_NOT_FOUND, "error",
-                                        f"delete_knowledge_bases not found kb_id={kb_id}")
-
-        if result.deleted_count == 1:
+        if result and result.deleted_count == 1:
             return ResponseResult.success(None)
         else:
             return ResponseResult.error(status.HTTP_404_NOT_FOUND, "error",
