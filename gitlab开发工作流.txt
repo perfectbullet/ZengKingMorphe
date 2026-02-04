@@ -1,0 +1,38 @@
+推荐的工作流程：
+
+
+主分支 (master)     开发分支 (feature-xxx)
+     │                    │
+     │  ← git checkout -b feature-xxx
+     │                    │
+     │  ← 开发/测试/提交
+     │                    │
+     │  ← git push zenking feature-xxx
+     │                    │
+     │  ← 代码审查
+     │                    │
+     │  ← 合并到 master
+好处：
+
+不影响 master - master 始终保持可运行状态
+安全开发 - 出问题不影响主分支
+并行开发 - 可以同时处理多个需求
+易于回滚 - 有问题直接删除分支
+常用命令：
+
+
+# 创建新分支
+git checkout -b feature-new-function
+
+# 开发完成后推送
+git push zenking feature-new-function
+
+# 合并到 master
+git checkout master
+git merge feature-new-function
+git push zenking master
+
+# 删除已合并分支
+git branch -d feature-new-function
+
+
