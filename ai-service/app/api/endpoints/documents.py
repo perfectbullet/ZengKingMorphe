@@ -4,6 +4,7 @@ Document management API endpoints.
 
 import shutil
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 from fastapi import (
@@ -442,11 +443,7 @@ async def cancel_task(task_id: str, api_key: str = Depends(get_api_key)):
             \n- Cancellation result
     """
     try:
-<<<<<<< HEAD
-        logger.info(f"cancel_task request task_id={task_id}")
-=======
         logger.info(f"Cancel task request: task_id={task_id}")
->>>>>>> 6c4ac2f (refactor: 统一日志格式为f-string风格)
 
         cancelled = await task_processor.cancel_task(task_id)
 

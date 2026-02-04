@@ -378,11 +378,9 @@ class DocumentTaskProcessor:
             chunk_config=task_data.get("chunk_config"),  # Pass chunk_config
             doc_id=task_data.get("doc_id"),  # Pass pre-generated doc_id
             resource_id=task_data.get("resource_id")  # Pass resource_id
-=======
-        logger.info(
-            f"Document task submitted: doc_id={doc_id}, task_id={task_id}"
->>>>>>> 6c4ac2f (refactor: 统一日志格式为f-string风格)
         )
+
+        logger.info(f"Document task submitted: doc_id={doc_id}, task_id={task_id}")
 
         return doc_id
 

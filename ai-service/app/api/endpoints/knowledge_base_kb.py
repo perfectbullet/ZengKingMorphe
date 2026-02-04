@@ -10,6 +10,8 @@ from datetime import datetime
 from pathlib import Path
 
 from app.api.middleware.auth import get_api_key
+from app.core.chroma import chroma_db
+from app.core.elasticsearch import es_db
 from app.core.logging import get_logger
 from app.core.database import get_database
 from app.core.config import settings
