@@ -879,12 +879,14 @@ class ConversationNodes:
                     logger.info("Web search disabled in settings")
                     state["web_search_results"] = []
                     state["web_search_used"] = False
+                    state["web_search_error"] = None
                     return state
 
                 if not settings.tavily_api_key:
                     logger.warning("Tavily API key not configured")
                     state["web_search_results"] = []
                     state["web_search_used"] = False
+                    state["web_search_error"] = "Tavily API key not configured"
                     return state
 
                 # Check employee config for web search permission
@@ -894,6 +896,7 @@ class ConversationNodes:
                     logger.info(f"Web search disabled for employee: {state.get('employee_id')}")
                     state["web_search_results"] = []
                     state["web_search_used"] = False
+                    state["web_search_error"] = None
                     return state
 
                 query = state["user_query"]
@@ -909,28 +912,52 @@ class ConversationNodes:
 
                 # Format results
                 formatted_results = []
+                api_error_message = None
+
                 if search_results:
-                    for i, result in enumerate(search_results[:settings.web_search_max_results], 1):
-                        formatted_results.append({
-                            "rank": i,
-                            "title": result.get("title", ""),
-                            "url": result.get("url", ""),
-                            "content": result.get("content", "")[:500],
-                            "score": result.get("score", 0.0)
-                        })
+                    # Check for API authentication errors
+                    for result in search_results:
+                        if not isinstance(result, dict):
+                            result_str = str(result)
+                            if "401" in result_str or "Unauthorized" in result_str or "authentication" in result_str.lower():
+                                api_error_message = "当前无法进行网络检索（API Key 可能过期或无效）"
+                                logger.warning(f"Web search API error: {result_str}")
+                                break
+
+                    # Only format valid results if no API error
+                    if not api_error_message:
+                        for i, result in enumerate(search_results[:settings.web_search_max_results], 1):
+                            if not isinstance(result, dict):
+                                logger.warning(
+                                    "Invalid search result type",
+                                    result_type=type(result).__name__,
+                                    result=str(result)[:200]
+                                )
+                                continue
+
+                            formatted_results.append({
+                                "rank": i,
+                                "title": result.get("title", ""),
+                                "url": result.get("url", ""),
+                                "content": result.get("content", "")[:500],
+                                "score": result.get("score", 0.0)
+                            })
 
                 state["web_search_results"] = formatted_results
                 state["web_search_used"] = len(formatted_results) > 0
+                state["web_search_error"] = api_error_message
 
                 logger.info(
                     "Web search completed",
-                    results_count=len(formatted_results)
+                    results_count=len(formatted_results),
+                    has_error=api_error_message is not None
                 )
 
             except Exception as e:
                 logger.error(f"Web search failed: {str(e)}", exc_info=True)
                 state["web_search_results"] = []
                 state["web_search_used"] = False
+                state["web_search_error"] = f"Web search failed: {str(e)}"
 
         return state
 
