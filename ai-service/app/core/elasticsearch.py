@@ -16,6 +16,8 @@ class ElasticSearchDB:
         self.client: Optional[AsyncElasticsearch] = None
         self.faq_index = f"{settings.es_index_prefix}_faq"
         self.doc_index = f"{settings.es_index_prefix}_doc"
+        self.major_index = f"{settings.es_index_prefix}_major"
+        self.sensitive_index = f"{settings.es_index_prefix}_sensitive"
     
     async def connect(self) -> None:
         """Connect to ElasticSearch."""
@@ -134,7 +136,89 @@ class ElasticSearchDB:
                     body=doc_mapping
                 )
                 logger.info(f"Created document index: index={self.doc_index}")
-            
+
+            # Major index mapping
+            major_mapping = {
+                "settings": {
+                    "analysis": {
+                        "analyzer": {
+                            "ik_max_word_analyzer": {"type": "standard"},
+                            "ik_smart_analyzer": {"type": "standard"}
+                        }
+                    },
+                    "number_of_shards": 3,
+                    "number_of_replicas": 1
+                },
+                "mappings": {
+                    "properties": {
+                        "thesaurus_id": {"type": "keyword"},
+                        "thesaurus_name": {
+                            "type": "text",
+                            "analyzer": "ik_max_word_analyzer"
+                        },
+                        "word_name": {
+                            "type": "text",
+                            "analyzer": "ik_max_word_analyzer",
+                            "search_analyzer": "ik_smart_analyzer",
+                            "fields": {
+                                "keyword": {"type": "keyword"}
+                            }
+                        },
+                        "keywords": {"type": "keyword"},
+                        "created_at": {"type": "date"}
+                    }
+                }
+            }
+
+            # Create major index if not exists
+            if not await self.client.indices.exists(index=self.major_index):
+                await self.client.indices.create(
+                    index=self.major_index,
+                    body=major_mapping
+                )
+                logger.info(f"Created major index: index={self.major_index}")
+
+            # sensitive index mapping
+            sensitive_mapping = {
+                "settings": {
+                    "analysis": {
+                        "analyzer": {
+                            "ik_max_word_analyzer": {"type": "standard"},
+                            "ik_smart_analyzer": {"type": "standard"}
+                        }
+                    },
+                    "number_of_shards": 3,
+                    "number_of_replicas": 1
+                },
+                "mappings": {
+                    "properties": {
+                        "thesaurus_id": {"type": "keyword"},
+                        "thesaurus_name": {
+                            "type": "text",
+                            "analyzer": "ik_max_word_analyzer"
+                        },
+                        "word_name": {
+                            "type": "text",
+                            "analyzer": "ik_max_word_analyzer",
+                            "search_analyzer": "ik_smart_analyzer",
+                            "fields": {
+                                "keyword": {"type": "keyword"}
+                            }
+                        },
+                        "keywords": {"type": "keyword"},
+                        "created_at": {"type": "date"}
+                    }
+                }
+            }
+
+            # Create sensitive index if not exists
+            if not await self.client.indices.exists(index=self.sensitive_index):
+                await self.client.indices.create(
+                    index=self.sensitive_index,
+                    body=sensitive_mapping
+                )
+                logger.info(f"Created sensitive index: index={self.sensitive_index}")
+
         except Exception as e:
             logger.error(f"Failed to create indexes: error={str(e)}")
             raise
@@ -154,7 +238,7 @@ class ElasticSearchDB:
             document: Document data
         """
         try:
-            index_name = self.faq_index if index == "faq" else self.doc_index
+            index_name = self._get_collection(index)
             await self.client.index(
                 index=index_name,
                 id=doc_id,
@@ -184,7 +268,7 @@ class ElasticSearchDB:
             Search results
         """
         try:
-            index_name = self.faq_index if index == "faq" else self.doc_index
+            index_name = self._get_collection(index)
             results = await self.client.search(
                 index=index_name,
                 body=query,
@@ -209,7 +293,7 @@ class ElasticSearchDB:
             doc_id: Document ID
         """
         try:
-            index_name = self.faq_index if index == "faq" else self.doc_index
+            index_name = self._get_collection(index)
             await self.client.delete(
                 index=index_name,
                 id=doc_id
@@ -229,14 +313,14 @@ class ElasticSearchDB:
         Delete documents by query.
 
         Args:
-            index: Index name (faq/doc)
+            index: Index name (faq/doc/major/sensitive)
             body: Delete query body
 
         Returns:
             Delete result
         """
         try:
-            index_name = self.faq_index if index == "faq" else self.doc_index
+            index_name = self._get_collection(index)
             result = await self.client.delete_by_query(
                 index=index_name,
                 body=body
@@ -246,6 +330,19 @@ class ElasticSearchDB:
         except Exception as e:
             logger.error(f"Failed to delete by query: index={index}, error={str(e)}")
             raise
+
+    def _get_collection(self, index: str):
+        """Get collection by name."""
+        if index == "faq":
+            index_name = self.faq_index
+        elif index == "doc":
+            index_name = self.doc_index
+        elif index == "major":
+            index_name = self.major_index
+        elif index == "sensitive":
+            index_name = self.sensitive_index
+        else:
+            raise ValueError(f"Unknown index: {index}")
 
 
 # Global ElasticSearch instance

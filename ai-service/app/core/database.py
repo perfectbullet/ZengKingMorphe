@@ -148,7 +148,6 @@ class MongoDB:
                 IndexModel([("employee_id", ASCENDING), ("is_enable", ASCENDING)]),
                 IndexModel([("employee_id", ASCENDING), ("update_time", DESCENDING)]),
                 IndexModel([("external_faq_id", ASCENDING)]),
-                IndexModel([("team_id", ASCENDING)]),
                 IndexModel([("vector_id", ASCENDING)]),
                 IndexModel([("synced_at", DESCENDING)]),
             ])
@@ -167,13 +166,33 @@ class MongoDB:
                 IndexModel([("kb_id", ASCENDING), ("status", ASCENDING)]),
                 IndexModel([("status", ASCENDING), ("created_at", DESCENDING)]),
             ])
-            
+
+            # Major collection indexes
+            await self.db.thesaurus_major.create_indexes([
+                IndexModel([("thesaurus_id", ASCENDING)], unique=True),
+                IndexModel([("employee_id", ASCENDING), ("is_enable", ASCENDING)]),
+                IndexModel([("employee_id", ASCENDING), ("update_time", DESCENDING)]),
+                IndexModel([("external_thesaurus_id", ASCENDING)]),
+                IndexModel([("vector_id", ASCENDING)]),
+                IndexModel([("synced_at", DESCENDING)]),
+            ])
+
+            # Sensitive collection indexes
+            await self.db.thesaurus_sensitive.create_indexes([
+                IndexModel([("thesaurus_id", ASCENDING)], unique=True),
+                IndexModel([("employee_id", ASCENDING), ("is_enable", ASCENDING)]),
+                IndexModel([("employee_id", ASCENDING), ("update_time", DESCENDING)]),
+                IndexModel([("external_thesaurus_id", ASCENDING)]),
+                IndexModel([("vector_id", ASCENDING)]),
+                IndexModel([("synced_at", DESCENDING)]),
+            ])
+
             logger.info("Created MongoDB indexes")
-            
+
         except Exception as e:
             logger.error(f"Failed to create indexes: error={str(e)}")
             raise
-    
+
     def get_collection(self, name: str):
         """Get a collection by name."""
         if self.db is None:

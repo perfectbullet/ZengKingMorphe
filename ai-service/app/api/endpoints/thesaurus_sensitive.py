@@ -19,20 +19,20 @@ router = APIRouter()
 @router.post("/update")
 async def update_thesaurus_sensitive(
     request: ThesaurusRequest,
-    api_key: str = Depends(verify_api_key),
+    api_key: str = Depends(get_api_key),
     db=Depends(get_database)
 ):
     """
         敏感词库更新
         一个词条保存一条记录
 
-        Args:
-            - request: 词库请求参数对象
-            - api_key: API key from auth
-            - db: Database instance
+        \nArgs:
+            \n- request: 词库请求参数对象
+            \n- api_key: API key from auth
+            \n- db: Database instance
 
-        Returns:
-            - result
+        \nReturns:
+            \n- ResponseResult
     """
     thesaurus_id = request.thesaurus_id
     try:
@@ -65,7 +65,7 @@ async def update_thesaurus_sensitive(
                         upsert=True
                     )
 
-                    await task_processor.submit_thesaurus_sensitive_vectorization_task(thesaurus_id=thesaurus_id, kb_id=f"sensitive_{thesaurus_id}")
+                    await task_processor.submit_thesaurus_sensitive_vectorization_task(thesaurus_id=update_thesaurus_id, kb_id=f"sensitive_{thesaurus_id}")
                 except Exception as e:
                     logger.error(f"update_thesaurus_sensitive failed: thesaurus_id={thesaurus_id} error={str(e)}", exc_info=True)
 
@@ -90,13 +90,13 @@ async def delete_thesaurus_sensitive(
     """
         删除敏感词库
 
-        Args:
-            - thesaurus_id: 敏感词库id
-            - api_key: API key from auth
-            - db: Database instance
+        \nArgs:
+            \n- thesaurus_id: 敏感词库id
+            \n- api_key: API key from auth
+            \n- db: Database instance
 
-        Returns:
-            - result
+        \nReturns:
+            - ResponseResult
     """
     try:
         logger.info(f"delete_thesaurus_sensitive request: thesaurus_id={thesaurus_id}")

@@ -23,13 +23,13 @@ async def create_dataset_video(
     """
         创建知识库视频资源
 
-        Args:
-            - request: create_dataset_video request
-            - api_key: API key from auth
-            - db: Database instance
+        \nArgs:
+            \n- request: create_dataset_video request
+            \n- api_key: API key from auth
+            \n- db: Database instance
 
-        Returns:
-            - Created dataset video data
+        \nReturns:
+            \n- ResponseResult
     """
     kb_id = request.kb_id
     try:
@@ -89,13 +89,13 @@ async def delete_documents(
     """
         删除文档或视频资源
 
-        nArgs:
-            - doc_id: document ID
-            - api_key: API key from auth
-            - db: Database instance
+        \nArgs:
+            \n- doc_id: document ID
+            \n- api_key: API key from auth
+            \n- db: Database instance
 
-        Returns:
-            - result
+        \nReturns:
+            - ResponseResult
     """
     try:
         logger.info(f"delete_documents request: doc_id={doc_id}")
@@ -138,13 +138,13 @@ async def restart_task(
     """
         重新启动任务：文档或视频资源
 
-        nArgs:
-            - task_id: task ID
-            - api_key: API key from auth
-            - db: Database instance
+        \nArgs:
+            \n- task_id: task ID
+            \n- api_key: API key from auth
+            \n- db: Database instance
 
-        Returns:
-            - result
+        \nReturns:
+            \n- ResponseResult
     """
     try:
         logger.info(f"restart_task request: task_id={task_id}")
@@ -190,14 +190,14 @@ async def set_enhance(
     """
         设置文档或视频资源是否知识增强
 
-        nArgs:
-            - doc_id: 文档或视频资源 ID
-            - enhance: 0=不增强，1=增强
-            - api_key: API key from auth
-            - db: Database instance
+        \nArgs:
+            \n- doc_id: 文档或视频资源 ID
+            \n- enhance: 0=不增强，1=增强
+            \n- api_key: API key from auth
+            \n- db: Database instance
 
-        Returns:
-            - result
+        \nReturns:
+            \n- ResponseResult
     """
     try:
         logger.info(f"set_enhance request: doc_id={doc_id}")

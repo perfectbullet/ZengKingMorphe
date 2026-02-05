@@ -205,7 +205,7 @@ class FAQModel(BaseModel):
     """FAQ model for vector and keyword retrieval."""
     faq_id: str  # FAQ问答唯一id: faq_{employee_id}_{external_faq_id}
     employee_id: int  # 数字员工id（mysql库）
-    external_faq_id: str  # FAQ问答id（mysql库）
+    external_faq_id: int  # FAQ问答id（mysql库）
     question_name: str  # 问题名称
     start_time: Optional[str] = None
     end_time: Optional[str] = None
@@ -296,10 +296,10 @@ class ThesaurusMajorModel(BaseModel):
     thesaurus_id: str  # 专业词库唯一id: major_{employee_id}_{external_thesaurus_id}_{external_word_id}
     employee_id: int  # 数字员工id（mysql库）
     external_thesaurus_id: int  # 专业词库id（mysql库）
-    external_word_id: int  # 专业词条id（mysql库）
     thesaurus_name: str  # 专业词库名称
     is_enable: int = 1  # 是否启用：0=不启用，1=启用
     update_time: str  # 更新时间（mysql库）
+    external_word_id: int  # 专业词条id（mysql库）
     word_name: str  # 词条名称
     similar_words: List[str] = Field(default_factory=list)  # 相似词条名称列表
     # Vector and keyword indexing metadata

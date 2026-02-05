@@ -23,7 +23,8 @@ class ChromaDB:
         self.client: Optional[chromadb.Client] = None
         self.faq_collection = None
         self.doc_collection = None
-        self.dict_collection = None
+        self.major_collection = None
+        self.sensitive_collection = None
 
     def connect(self) -> None:
         """Connect to Chroma."""
@@ -101,10 +102,20 @@ class ChromaDB:
                 embedding_function=embedding_function,
             )
 
-            self.dict_collection = self.client.get_or_create_collection(
-                name="custom_dictionary",
+            self.major_collection = self.client.get_or_create_collection(
+                name="thesaurus_major",
                 metadata={
                     "description": "专业词库",
+                    "embedding_model": settings.embedding_model,
+                    "hnsw:space": "cosine",  # ✅ 使用余弦距离
+                },
+                embedding_function=embedding_function,
+            )
+
+            self.sensitive_collection = self.client.get_or_create_collection(
+                name="thesaurus_sensitive",
+                metadata={
+                    "description": "敏感词库",
                     "embedding_model": settings.embedding_model,
                     "hnsw:space": "cosine",  # ✅ 使用余弦距离
                 },
@@ -139,7 +150,7 @@ class ChromaDB:
         Add documents to a collection.
 
         Args:
-            collection_name: Collection name (faq/doc/dict)
+            collection_name: Collection name (faq/doc/major/sensitive)
             documents: List of document texts
             metadatas: List of metadata dicts
             ids: List of document IDs
@@ -167,7 +178,7 @@ class ChromaDB:
         Query documents from a collection.
 
         Args:
-            collection_name: Collection name (faq/doc/dict)
+            collection_name: Collection name (faq/doc/major/sensitive)
             query_texts: List of query texts
             n_results: Number of results to return
             where: Filter conditions
@@ -204,7 +215,7 @@ class ChromaDB:
         Delete documents from a collection.
 
         Args:
-            collection_name: Collection name (faq/doc/dict)
+            collection_name: Collection name (faq/doc/major/sensitive)
             ids: List of document IDs to delete
         """
         try:
@@ -225,8 +236,10 @@ class ChromaDB:
             return self.faq_collection
         elif collection_name == "doc":
             return self.doc_collection
-        elif collection_name == "dict":
-            return self.dict_collection
+        elif collection_name == "major":
+            return self.major_collection
+        elif collection_name == "sensitive":
+            return self.sensitive_collection
         else:
             raise ValueError(f"Unknown collection: {collection_name}")
 

@@ -28,17 +28,17 @@ async def update_faq(
     """
         FAQ更新
 
-        Args:
-            - request: FAQ请求参数对象
-            - api_key: API key from auth
-            - db: Database instance
+        \nArgs:
+            \n- request: FAQ请求参数对象
+            \n- api_key: API key from auth
+            \n- db: Database instance
 
         Returns:
-            - result
+            \n- ResponseResult
     """
     faq_id = request.faq_id
     try:
-        logger.info(f"update_faq request: faq_id={faq_id} employee_ids={request.employee_ids}")
+        logger.info(f"update_faq request: faq_id={faq_id} employee_ids={request.employee_ids} request={request}")
 
         # Build combined_text for embedding (question + similar questions)
         combined_text = request.question_name
@@ -96,13 +96,13 @@ async def delete_faq(
     """
         删除FAQ
 
-        Args:
-            - faq_id: FAQ问答id
-            - api_key: API key from auth
-            - db: Database instance
+        \nArgs:
+            \n- faq_id: FAQ问答id
+            \n- api_key: API key from auth
+            \n- db: Database instance
 
-        Returns:
-            - result
+        \nReturns:
+            - ResponseResult
     """
     try:
         logger.info(f"delete_faq request: faq_id={faq_id}")

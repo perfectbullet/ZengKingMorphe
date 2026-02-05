@@ -19,20 +19,20 @@ router = APIRouter()
 @router.post("/update")
 async def update_thesaurus_major(
     request: ThesaurusRequest,
-    api_key: str = Depends(verify_api_key),
+    api_key: str = Depends(get_api_key),
     db=Depends(get_database)
 ):
     """
         专业词库更新
         一个词条保存一条记录
 
-        Args:
-            - request: 词库请求参数对象
-            - api_key: API key from auth
-            - db: Database instance
+        \nArgs:
+            \n- request: 词库请求参数对象
+            \n- api_key: API key from auth
+            \n- db: Database instance
 
-        Returns:
-            - result
+        \nReturns:
+            \n- ResponseResult
     """
     thesaurus_id = request.thesaurus_id
     try:
@@ -51,10 +51,10 @@ async def update_thesaurus_major(
                         thesaurus_id=update_thesaurus_id,
                         employee_id=employee_id,
                         external_thesaurus_id=thesaurus_id,
-                        external_word_id=thesaurus_word.word_id,
                         thesaurus_name=request.thesaurus_name,
                         is_enable=request.is_enable,
                         update_time=request.update_time,
+                        external_word_id=thesaurus_word.word_id,
                         word_name=thesaurus_word.word_name,
                         similar_words=thesaurus_word.similar_words,
                         combined_text=combined_text,
@@ -68,9 +68,11 @@ async def update_thesaurus_major(
                         upsert=True
                     )
 
-                    await task_processor.submit_thesaurus_major_vectorization_task(thesaurus_id=thesaurus_id, kb_id=f"major_{thesaurus_id}")
+                    await task_processor.submit_thesaurus_major_vectorization_task(thesaurus_id=update_thesaurus_id, kb_id=f"major_{thesaurus_id}")
                 except Exception as e:
                     logger.error(f"update_thesaurus_major failed: thesaurus_id={thesaurus_id} error={str(e)}", exc_info=True)
+                    return ResponseResult.error(status.HTTP_400_BAD_REQUEST, "error",
+                                                f"update_thesaurus_major failed: thesaurus_id={thesaurus_id}")
 
         return ResponseResult.success(None)
 
@@ -93,13 +95,13 @@ async def delete_thesaurus_major(
     """
         删除专业词库
 
-        Args:
-            - thesaurus_id: 专业词库id
-            - api_key: API key from auth
-            - db: Database instance
+        \nArgs:
+            \n- thesaurus_id: 专业词库id
+            \n- api_key: API key from auth
+            \n- db: Database instance
 
-        Returns:
-            - result
+        \nReturns:
+            \n- ResponseResult
     """
     try:
         logger.info(f"delete_thesaurus_major request: thesaurus_id={thesaurus_id}")

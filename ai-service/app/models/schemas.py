@@ -850,12 +850,13 @@ class DatasetFaqRequest(BaseModel):
     end_time: Optional[str] = Field(None, description="生效结束时间")
     is_enable: int = Field(1, description="是否启用：0=不启用，1=启用")
     is_clear: int = Field(0, description="是否澄清：0=不澄清，1=澄清")
-    update_time: Optional[str] = Field(None, alias="updateTime", description="更新时间")
+    update_time: Optional[str] = Field(None, description="更新时间")
     similar_questions: List[str] = Field(default_factory=list)
     answers: List[str] = Field(default_factory=list)
 
 
 class ThesaurusWord(BaseModel):
+    word_id: int = Field(..., description="词条id")
     word_name: str = Field(..., description="词条名称")
     similar_words: List[str] = Field(default_factory=list, description="相似词条名称列表")
 
@@ -891,5 +892,5 @@ class ThesaurusRequest(BaseModel):
     employee_ids: List[int] = Field(default_factory=list, description="数字员工id列表")
     thesaurus_name: str = Field(..., description="词库名称")
     is_enable: int = Field(1, description="是否启用：0=不启用，1=启用")
-    update_time: Optional[str] = Field(None, alias="updateTime", description="更新时间")
+    update_time: Optional[str] = Field(None, description="更新时间")
     thesaurus_words: List[ThesaurusWord] = Field(default_factory=list, description="词条名称列表")
