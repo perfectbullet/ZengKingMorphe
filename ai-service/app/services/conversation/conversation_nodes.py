@@ -695,8 +695,8 @@ class ConversationNodes:
 
                 logger.info(
                     "Knowledge retrieval completed",
-                    total_results=len(all_results),
-                    returned_results=len(results),
+                    total_results=all_results,
+                    returned_results=results,
                     kb_used=state["kb_used"]
                 )
 
@@ -747,23 +747,41 @@ class ConversationNodes:
                     docs_count=len(docs)
                 )
 
-                # QA direct match: 如果 content_type='qa' 且 rerank_score > 0.9，直接使用 QA 内容作为答案
+                # Direct match: 仅对数学教材知识库，如果 content_type 是 'qa' 或 'teaching_script'
+                # 且 relevance_score > 0.9，直接使用 context_text 内容作为答案，跳过 LLM 生成
                 content_type = top_doc.get("content_type")
-                if content_type == "qa" and state["relevance_score"] > 0.9:
-                    qa_content = top_doc.get("content", "")
-                    state["final_answer"] = qa_content
-                    state["confidence"] = min(0.95, state["relevance_score"])
-                    state["qa_direct_match"] = {
-                        "doc_id": top_doc.get("doc_id"),
-                        "rerank_score": float(rerank_score) if rerank_score else 0.0,
-                        "content_snippet": qa_content[:100]
-                    }
-                    logger.info(
-                        "QA direct match triggered - skipping LLM generation",
-                        rerank_score=float(rerank_score) if rerank_score else 0.0,
-                        doc_id=top_doc.get("doc_id"),
-                        answer_length=len(qa_content)
-                    )
+                kb_used = state.get("kb_used", [])
+                is_math_kb = MATH_KB_ID in kb_used
+
+                logger.info(
+                    "Direct match check",
+                    content_type=content_type,
+                    relevance_score=state["relevance_score"],
+                    is_math_kb=is_math_kb,
+                    kb_used=kb_used,
+                    has_context_text="context_text" in top_doc,
+                    context_text_len=len(top_doc.get("context_text", "")),
+                )
+                # 只对数学教材知识库触发 direct match
+                if state["relevance_score"] > 0.9 and content_type in ("qa", "teaching_script") and is_math_kb:
+                    direct_content = top_doc.get("context_text", "")
+
+                    if direct_content:
+                        state["final_answer"] = direct_content
+                        state["confidence"] = min(0.95, state["relevance_score"])
+                        state["direct_match"] = {
+                            "content_type": content_type,
+                            "doc_id": top_doc.get("doc_id"),
+                            "rerank_score": float(rerank_score) if rerank_score else 0.0,
+                            "content_snippet": direct_content[:100]
+                        }
+                        logger.info(
+                            f"{content_type.upper()} direct match triggered - skipping LLM generation",
+                            content_type=content_type,
+                            rerank_score=float(rerank_score) if rerank_score else 0.0,
+                            doc_id=top_doc.get("doc_id"),
+                            answer_length=len(direct_content)
+                        )
 
         return state
 
@@ -915,33 +933,48 @@ class ConversationNodes:
                 api_error_message = None
 
                 if search_results:
-                    # Check for API authentication errors
-                    for result in search_results:
-                        if not isinstance(result, dict):
-                            result_str = str(result)
-                            if "401" in result_str or "Unauthorized" in result_str or "authentication" in result_str.lower():
-                                api_error_message = "当前无法进行网络检索（API Key 可能过期或无效）"
-                                logger.warning(f"Web search API error: {result_str}")
-                                break
-
-                    # Only format valid results if no API error
-                    if not api_error_message:
-                        for i, result in enumerate(search_results[:settings.web_search_max_results], 1):
+                    # 先判断 search_results 类型
+                    if not isinstance(search_results, list):
+                        # 处理非列表返回值（可能是错误字符串）
+                        results_str = str(search_results)
+                        if "401" in results_str or "Unauthorized" in results_str or "authentication" in results_str.lower():
+                            api_error_message = "当前无法进行网络检索（API Key 可能过期或无效）"
+                            logger.warning(
+                                "Web search API error",
+                                error_type=type(search_results).__name__,
+                                error=results_str[:200]
+                            )
+                    else:
+                        # 是列表，检查每个元素
+                        for result in search_results:
                             if not isinstance(result, dict):
-                                logger.warning(
-                                    "Invalid search result type",
-                                    result_type=type(result).__name__,
-                                    result=str(result)[:200]
-                                )
-                                continue
+                                result_str = str(result)
+                                if "401" in result_str or "Unauthorized" in result_str or "authentication" in result_str.lower():
+                                    api_error_message = "当前无法进行网络检索（API Key 可能过期或无效）"
+                                    logger.warning(
+                                        "Web search API error in result",
+                                        error=result_str[:200]
+                                    )
+                                    break
 
-                            formatted_results.append({
-                                "rank": i,
-                                "title": result.get("title", ""),
-                                "url": result.get("url", ""),
-                                "content": result.get("content", "")[:500],
-                                "score": result.get("score", 0.0)
-                            })
+                        # 只有没有 API 错误时才格式化结果
+                        if not api_error_message:
+                            for i, result in enumerate(search_results[:settings.web_search_max_results], 1):
+                                if not isinstance(result, dict):
+                                    logger.warning(
+                                        "Invalid search result type",
+                                        result_type=type(result).__name__,
+                                        result=str(result)[:200]
+                                    )
+                                    continue
+
+                                formatted_results.append({
+                                    "rank": i,
+                                    "title": result.get("title", ""),
+                                    "url": result.get("url", ""),
+                                    "content": result.get("content", "")[:500],
+                                    "score": result.get("score", 0.0)
+                                })
 
                 state["web_search_results"] = formatted_results
                 state["web_search_used"] = len(formatted_results) > 0
@@ -981,6 +1014,15 @@ class ConversationNodes:
             Updated state with confidence calculated
         """
         async with time_node("generate_answer", state):
+            # If final_answer is already set (direct match), skip placeholder
+            if state.get("final_answer"):
+                logger.info(
+                    "Direct match answer already set, skipping LLM generation",
+                    answer_length=len(state["final_answer"])
+                )
+                return state
+
+
             # Calculate confidence based on data sources
             confidence = 0.5  # Base confidence
 

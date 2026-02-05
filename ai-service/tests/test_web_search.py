@@ -47,14 +47,31 @@ try:
             try:
                 # Perform search
                 results = await search_tool.ainvoke({"query": query})
-                
+
                 if not results:
                     print("⚠️  No results returned")
                     continue
-                
+
+                # 先判断 results 类型
+                if not isinstance(results, list):
+                    results_str = str(results)
+                    print(f"\n⚠️  Unexpected results type: {type(results).__name__}")
+                    print(f"   Results: {results_str[:200]}...")
+
+                    # 检查认证错误
+                    if "401" in results_str or "Unauthorized" in results_str:
+                        print("\n❌ API Authentication Error Detected!")
+                        print("   ⚠️  Error: 401 Unauthorized")
+                        print("   ⚠️  Possible causes:")
+                        print("      - API key is expired or invalid")
+                        print("      - API key has been revoked")
+                        print("      - Incorrect API key format")
+                        print(f"\n   📋 Current key prefix: {settings.tavily_api_key[:12]}...")
+                    continue
+
                 print(f"✅ Found {len(results)} results:")
 
-                # Check for authentication errors (401 Unauthorized)
+                # 检查列表中的认证错误
                 has_auth_error = False
                 for result in results:
                     if not isinstance(result, dict):
