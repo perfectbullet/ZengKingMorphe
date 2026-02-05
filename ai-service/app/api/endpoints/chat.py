@@ -215,6 +215,7 @@ async def generate_openai_stream_response(
             "faq_matched": None,
             "kb_used": [],
             "web_search_used": False,
+            "web_search_error": None,
             "conversation_id": "",
             "response_time_ms": 0,
             # Performance monitoring

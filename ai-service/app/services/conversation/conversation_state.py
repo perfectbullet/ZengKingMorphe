@@ -86,6 +86,7 @@ class ConversationState(TypedDict):
     qa_direct_match: Optional[Dict[str, Any]]  # QA 直接匹配信息
     kb_used: List[str]
     web_search_used: bool
+    web_search_error: Optional[str]  # Web search error message (e.g., API key expired)
     conversation_id: str
     response_time_ms: int
     workflow_start_time: float

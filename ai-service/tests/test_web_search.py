@@ -53,14 +53,50 @@ try:
                     continue
                 
                 print(f"✅ Found {len(results)} results:")
-                
+
+                # Check for authentication errors (401 Unauthorized)
+                has_auth_error = False
+                for result in results:
+                    if not isinstance(result, dict):
+                        result_str = str(result)
+                        if "401" in result_str or "Unauthorized" in result_str:
+                            print("\n❌ API Authentication Error Detected!")
+                            print("   ⚠️  Error: 401 Unauthorized")
+                            print("   ⚠️  Possible causes:")
+                            print("      - API key is expired or invalid")
+                            print("      - API key has been revoked")
+                            print("      - Incorrect API key format")
+                            print(f"\n   📋 Current key prefix: {settings.tavily_api_key[:12]}...")
+                            has_auth_error = True
+                            break
+
+                if has_auth_error:
+                    continue
+
                 # Display results
-                for i, result in enumerate(results, 1):
+                valid_count = 0
+                for i, result in enumerate(results[:settings.web_search_max_results], 1):
+                    # Skip non-dict results (e.g., exceptions or error strings)
+                    if not isinstance(result, dict):
+                        print(f"\n📄 Result {i}: ⚠️  Invalid result type: {type(result).__name__}")
+                        if hasattr(result, '__str__'):
+                            result_str = str(result)
+                            # Truncate very long error strings
+                            if len(result_str) > 100:
+                                result_str = result_str[:100] + "..."
+                            print(f"   Value: {result_str}")
+                        continue
+
+                    valid_count += 1
                     print(f"\n📄 Result {i}:")
                     print(f"   Title: {result.get('title', 'N/A')}")
                     print(f"   URL: {result.get('url', 'N/A')}")
                     print(f"   Score: {result.get('score', 'N/A')}")
-                    print(f"   Content: {result.get('content', 'N/A')[:200]}...")
+                    content = result.get('content', 'N/A')
+                    print(f"   Content: {content[:200]}..." if len(content) > 200 else f"   Content: {content}")
+
+                if valid_count == 0:
+                    print("\n⚠️  No valid results found (all results were invalid format)")
                     
             except Exception as e:
                 print(f"❌ Search failed: {e}")
