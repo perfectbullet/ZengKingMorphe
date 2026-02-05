@@ -96,6 +96,13 @@ class RAGRetrieval:
                 doc.pop("vector_rank", None)
                 doc.pop("keyword_score", None)
                 doc.pop("keyword_rank", None)
+                # Debug: log context_text preservation
+                if idx == 0:
+                    logger.info(
+                        f"Rerank first doc: content_type={doc.get('content_type')}, "
+                        f"context_text_len={len(doc.get('context_text', ''))}, "
+                        f"keys={list(doc.keys())[:10]}"
+                    )
                 reranked_docs.append(doc)
 
             top_scores_str = [f"{d['rerank_score']:.3f}" for d in reranked_docs[:3]]
@@ -158,6 +165,16 @@ class RAGRetrieval:
 
                     metadata = results["metadatas"][0][i] if results.get("metadatas") else {}
 
+                    # Debug: log first result metadata
+                    if i == 0:
+                        context_text_val = metadata.get("context_text", "")
+                        logger.info(
+                            f"Vector search result[0]: metadata_keys={list(metadata.keys())}, "
+                            f"content_type={metadata.get('content_type')}, "
+                            f"context_text_len={len(context_text_val)}, "
+                            f"context_text_preview={context_text_val[:50] if context_text_val else '(empty)'}..."
+                        )
+
                     documents.append({
                         "content": doc_text,
                         "score": similarity,
@@ -165,6 +182,7 @@ class RAGRetrieval:
                         "kb_id": metadata.get("kb_id"),
                         "chunk_index": metadata.get("chunk_index"),
                         "content_type": metadata.get("content_type", "unknown"),
+                        "context_text": metadata.get("context_text", ""),  # For direct match logic
                         "source": "vector",
                         # MinerU结构化元数据
                         "page_idx": metadata.get("page_idx"),
@@ -250,6 +268,7 @@ class RAGRetrieval:
                         "kb_id": source.get("kb_id"),
                         "chunk_index": source.get("chunk_index"),
                         "content_type": source.get("content_type", "unknown"),
+                        "context_text": source.get("context_text", ""),  # For direct match logic
                         "source": "keyword",
                         # MinerU结构化字段（从ES获取完整数据）
                         "page_idx": source.get("page_idx"),
@@ -320,12 +339,21 @@ class RAGRetrieval:
         source_type: str
     ) -> Dict[str, Any]:
         """Create a new entry for document RRF fusion."""
+        # Debug: log first entry from each source
+        if rank == 1:
+            logger.info(
+                f"_create_doc_fusion_entry: source={source_type}, "
+                f"content_type={result.get('content_type')}, "
+                f"context_text_len={len(result.get('context_text', ''))}, "
+                f"result_keys={list(result.keys())[:10]}"
+            )
         entry = {
             "content": result.get("content", ""),
             "doc_id": result.get("doc_id"),
             "kb_id": result.get("kb_id"),
             "chunk_index": result.get("chunk_index"),
             "content_type": result.get("content_type", "unknown"),
+            "context_text": result.get("context_text", ""),  # For direct match logic
             "rrf_score": 0.0,
             "vector_rank": None,
             "keyword_rank": None

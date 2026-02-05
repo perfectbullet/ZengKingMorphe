@@ -83,7 +83,7 @@ class ConversationState(TypedDict):
     has_sensitive: bool
     error: Optional[Dict[str, Any]]
     faq_matched: Optional[Dict[str, Any]]
-    qa_direct_match: Optional[Dict[str, Any]]  # QA 直接匹配信息
+    direct_match: Optional[Dict[str, Any]]  # 直接匹配信息（仅数学教材知识库）
     kb_used: List[str]
     web_search_used: bool
     web_search_error: Optional[str]  # Web search error message (e.g., API key expired)

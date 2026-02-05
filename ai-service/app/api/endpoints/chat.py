@@ -30,29 +30,11 @@ router = APIRouter()
 
 # Status message variations for better UX
 STATUS_TOKENS: List[str] = [
-    "正在查询资料。",
-    "正在检索知识库...",
-    "正在查找相关信息...",
-    "正在搜索知识库...",
-    "正在阅读文档...",
-    "正在分析问题...",
-    "正在查询相关资料...",
-    "正在检索数据库...",
-    "正在查找答案...",
-    "正在阅读相关内容...",
+    "让我来思考一下这个问题，等等..",
 ]
 
 SEARCH_TOKENS: List[str] = [
-    "正在进行网络搜索...",
-    "正在联网查找...",
-    "正在搜索网络资料...",
-    "正在获取最新信息...",
-    "正在查询网络数据...",
-    "正在在线搜索...",
-    "正在检索互联网信息...",
-    "正在查找网络资源...",
-    "正在获取实时信息...",
-    "正在搜索网络...",
+    "让我来思考一下这个问题，等等..",
 ]
 
 
@@ -365,22 +347,25 @@ async def generate_openai_stream_response(
                 should_generate = True
                 final_state = current_state  # Use accumulated state
 
+            logger.info(f'final_state： {final_state}')
+            
             # When ready to generate, do TRUE streaming
             if should_generate and final_state:
                 should_generate = False  # Only generate once
 
-                # 检查是否已有预生成的答案（QA 直接匹配）
+                # 检查是否已有预生成的答案（仅数学教材知识库的 direct match）
                 existing_answer = final_state.get("final_answer", "")
-                qa_direct_match = final_state.get("qa_direct_match")
+                direct_match = final_state.get("direct_match")
 
-                if existing_answer and qa_direct_match and not final_state.get("faq_matched"):
-                    # 直接流式返回预生成的 QA 答案，跳过 LLM 生成
+                if existing_answer and direct_match and not final_state.get("faq_matched"):
+                    # 直接流式返回预生成的答案，跳过 LLM 生成
                     ttfb_ms = int((time.time() - initial_state["workflow_start_time"]) * 1000)
                     final_state["ttfb_ms"] = ttfb_ms
 
                     logger.info(
-                        f"Using pre-generated QA answer | source=qa_direct_match | "
-                        f"rerank_score={qa_direct_match.get('rerank_score')} | "
+                        "Using pre-generated answer (math textbook direct match) | "
+                        f"content_type={direct_match.get('content_type')} | "
+                        f"rerank_score={direct_match.get('rerank_score')} | "
                         f"length={len(existing_answer)} | ttfb_ms={ttfb_ms}"
                     )
 

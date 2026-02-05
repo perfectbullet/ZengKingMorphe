@@ -100,6 +100,11 @@ class MathChunk:
     student_question: Optional[str] = None
     teaching_script: Optional[str] = None
 
+    # New fields for updated teaching_script_generate.json schema
+    natural_questions: Optional[List[str]] = None
+    keywords: Optional[List[str]] = None
+    teaching_script_tts: Optional[str] = None
+
 
 # ============================================================================
 # Database Utility Functions
@@ -107,18 +112,15 @@ class MathChunk:
 
 async def _connect_databases():
     """Connect to all databases and print connection status."""
-    connections = [
-        ("MongoDB", lambda: mongodb.connect()),
-        ("ChromaDB", lambda: chroma_db.connect()),
-        ("ElasticSearch", lambda: es_db.connect()),
-    ]
+    # MongoDB and ElasticSearch are async, ChromaDB is sync
+    await mongodb.connect()
+    print(f"  MongoDB connected")
 
-    for name, connect_func in connections:
-        try:
-            await connect_func()
-            print(f"  {name} connected")
-        except Exception as e:
-            print(f"  {name} connection failed: {e}")
+    chroma_db.connect()
+    print(f"  ChromaDB connected")
+
+    await es_db.connect()
+    print(f"  ElasticSearch connected")
 
 
 async def _disconnect_databases():
@@ -404,7 +406,17 @@ class MathTextbookProcessor:
         return chunks
 
     def _extract_chunks_from_teaching_script(self, script_data: Dict) -> List[MathChunk]:
-        """Extract chunks from teaching script data."""
+        """Extract chunks from teaching script data.
+
+        New schema: each section has:
+        - teaching_script: complete teacher explanation
+        - teaching_script_tts: TTS-optimized version
+        - knowledge_summary.natural_questions: list of 2-4 natural questions
+        - knowledge_summary.keywords: list of 3-6 keywords
+
+        Each natural_question creates a separate chunk for better retrieval precision.
+        All chunks from the same section share the same teaching_script content.
+        """
         chunks = []
         book_title = script_data.get("book_title", "")
         chunk_idx = 0
@@ -414,27 +426,53 @@ class MathTextbookProcessor:
 
             for section in chapter.get("sections", []):
                 section_title = section.get("section_title", "")
-                student_question = section.get("student_question", "")
                 teaching_script = section.get("teaching_script", "")
+                teaching_script_tts = section.get("teaching_script_tts", "")
+                knowledge_summary = section.get("knowledge_summary", {})
 
                 if not teaching_script or not teaching_script.strip():
                     continue
 
-                content = f"Q: {student_question}\n\nA: {teaching_script}"
-                chunks.append(self._create_chunk(
-                    chunk_id=f"{self.doc_id}_script_{chunk_idx}",
-                    content=content,
-                    chunk_idx=chunk_idx,
-                    content_type="teaching_script",
-                    book_title=book_title,
-                    chapter_title=chapter_title,
-                    section_title=section_title,
-                    embedding_text=student_question,
-                    context_text=teaching_script,
-                    student_question=student_question,
-                    teaching_script=teaching_script,
-                ))
-                chunk_idx += 1
+                natural_questions = knowledge_summary.get("natural_questions", [])
+                keywords = knowledge_summary.get("keywords", [])
+
+                # If no natural_questions, create one chunk with section title
+                if not natural_questions:
+                    chunks.append(self._create_chunk(
+                        chunk_id=f"{self.doc_id}_script_{chunk_idx}",
+                        content=teaching_script,
+                        chunk_idx=chunk_idx,
+                        content_type="teaching_script",
+                        book_title=book_title,
+                        chapter_title=chapter_title,
+                        section_title=section_title,
+                        embedding_text=section_title,
+                        context_text=teaching_script,
+                        teaching_script=teaching_script,
+                        teaching_script_tts=teaching_script_tts,
+                        natural_questions=natural_questions,
+                        keywords=keywords,
+                    ))
+                    chunk_idx += 1
+                else:
+                    # Create one chunk per natural_question for better retrieval
+                    for natural_question in natural_questions:
+                        chunks.append(self._create_chunk(
+                            chunk_id=f"{self.doc_id}_script_{chunk_idx}",
+                            content=teaching_script,
+                            chunk_idx=chunk_idx,
+                            content_type="teaching_script",
+                            book_title=book_title,
+                            chapter_title=chapter_title,
+                            section_title=section_title,
+                            embedding_text=natural_question,  # Single question for indexing
+                            context_text=teaching_script,  # Full script for LLM context
+                            teaching_script=teaching_script,
+                            teaching_script_tts=teaching_script_tts,
+                            natural_questions=natural_questions,  # All questions stored
+                            keywords=keywords,
+                        ))
+                        chunk_idx += 1
 
         return chunks
 
@@ -602,6 +640,10 @@ class MathTextbookProcessor:
                     "answer": c.answer,
                     "student_question": c.student_question,
                     "teaching_script": c.teaching_script,
+                    # New fields for updated schema
+                    "natural_questions": c.natural_questions,
+                    "keywords": c.keywords,
+                    "teaching_script_tts": c.teaching_script_tts,
                 }
                 for c in self.chunks
             ]

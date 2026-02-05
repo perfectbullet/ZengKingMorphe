@@ -85,6 +85,7 @@ class MathTextbookRetrieval(RAGRetrieval):
                         "kb_id": metadata.get("kb_id"),
                         "chunk_index": metadata.get("chunk_index"),
                         "content_type": metadata.get("content_type", "unknown"),
+                        "context_text": metadata['context_text'],  # For direct match logic
                         "source": "vector",
                         # Math textbook specific metadata
                         "book_title": metadata.get("book_title", ""),
@@ -182,6 +183,7 @@ class MathTextbookRetrieval(RAGRetrieval):
                         "kb_id": source.get("kb_id"),
                         "chunk_index": source.get("chunk_index"),
                         "content_type": source.get("content_type", "unknown"),
+                        "context_text": source.get("context_text", ""),  # For direct match logic
                         "source": "keyword",
                         # Math textbook specific metadata
                         "book_title": source.get("book_title", ""),
