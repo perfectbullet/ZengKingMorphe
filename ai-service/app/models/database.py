@@ -203,26 +203,24 @@ class StreamChunkModel(BaseModel):
 
 class FAQModel(BaseModel):
     """FAQ model for vector and keyword retrieval."""
-    faq_id: str  # Format: faq_{employee_id}_{external_faq_id}
-    employee_id: str
-    external_faq_id: str  # Original FAQ ID from Java platform
-    team_id: int
-    question_name: str  # Main question
-    similar_questions: List[str] = Field(default_factory=list)
-    answers: List[str] = Field(default_factory=list)
-    is_enable: int = 0  # 0=disabled, 1=enabled
-    is_clear: int = 0  # 0=not cleared, 1=cleared
+    faq_id: str  # FAQ问答唯一id: faq_{employee_id}_{external_faq_id}
+    employee_id: int  # 数字员工id（mysql库）
+    external_faq_id: str  # FAQ问答id（mysql库）
+    question_name: str  # 问题名称
     start_time: Optional[str] = None
     end_time: Optional[str] = None
-    update_time: str  # Used for incremental update detection
-    create_time: str
+    is_enable: int = 0  # 是否启用：0=不启用，1=启用
+    is_clear: int = 0  # 0=not cleared, 1=cleared
+    similar_questions: List[str] = Field(default_factory=list)
+    answers: List[str] = Field(default_factory=list)
+    update_time: str  # 更新时间（mysql库）
     # Vector and keyword indexing metadata
-    vector_id: Optional[str] = None  # ChromaDB vector ID
-    es_indexed: bool = False  # ElasticSearch indexing status
     combined_text: str = ""  # questionName + similarQuestions (for embedding)
     keywords: List[str] = Field(default_factory=list)  # Extracted keywords
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    synced_at: datetime = Field(default_factory=datetime.utcnow)
+    vector_id: Optional[str] = None  # ChromaDB vector ID
+    es_indexed: bool = False  # ElasticSearch indexing status
+    created_at: datetime = Field(default_factory=datetime.now)
+    synced_at: datetime = Field(default_factory=datetime.now)
 
 
 class DigitalEmployeeConfigModel(BaseModel):
@@ -295,17 +293,38 @@ class MinerUStructuredModel(BaseModel):
 
 class ThesaurusMajorModel(BaseModel):
     """ MongoDB专业词库 """
-    thesaurus_major_id: str  # 专业词库唯一id: thesaurus_major_{employee_id}_{external_thesaurus_major_id}
-    employee_id: str  # 数字员工id（mysql库）
-    external_thesaurus_major_id: int  # 专业词库id（mysql库）
+    thesaurus_id: str  # 专业词库唯一id: major_{employee_id}_{external_thesaurus_id}_{external_word_id}
+    employee_id: int  # 数字员工id（mysql库）
+    external_thesaurus_id: int  # 专业词库id（mysql库）
+    external_word_id: int  # 专业词条id（mysql库）
     thesaurus_name: str  # 专业词库名称
     is_enable: int = 1  # 是否启用：0=不启用，1=启用
     update_time: str  # 更新时间（mysql库）
-    thesaurus_major_words: List[str] = Field(default_factory=list)
+    word_name: str  # 词条名称
+    similar_words: List[str] = Field(default_factory=list)  # 相似词条名称列表
     # Vector and keyword indexing metadata
+    combined_text: str = ""  # thesaurus_name + word_name + similar_words (for embedding)
+    keywords: List[str] = Field(default_factory=list)  # Extracted keywords
     vector_id: Optional[str] = None  # ChromaDB vector ID
     es_indexed: bool = False  # ElasticSearch indexing status
-    combined_text: str = ""  # thesaurus_name + thesaurus_major_words (for embedding)
+    created_at: datetime = Field(default_factory=datetime.now)  # 创建时间
+    synced_at: datetime = Field(default_factory=datetime.now)  # 同步时间
+
+
+class ThesaurusSensitiveModel(BaseModel):
+    """ MongoDB敏感词库 """
+    thesaurus_id: str  # 敏感词库唯一id: major_{employee_id}_{external_thesaurus_id}_{external_word_id}
+    employee_id: int  # 数字员工id（mysql库）
+    external_thesaurus_id: int  # 敏感词库id（mysql库）
+    external_word_id: int  # 敏感词条id（mysql库）
+    thesaurus_name: str  # 敏感词库名称
+    is_enable: int = 1  # 是否启用：0=不启用，1=启用
+    update_time: str  # 更新时间（mysql库）
+    word_name: str  # 词条名称
+    # Vector and keyword indexing metadata
+    combined_text: str = ""  # thesaurus_name + word_name (for embedding)
     keywords: List[str] = Field(default_factory=list)  # Extracted keywords
-    created_at: datetime = Field(default_factory=datetime.utcnow)  # 创建时间
-    synced_at: datetime = Field(default_factory=datetime.utcnow)  # 同步时间
+    vector_id: Optional[str] = None  # ChromaDB vector ID
+    es_indexed: bool = False  # ElasticSearch indexing status
+    created_at: datetime = Field(default_factory=datetime.now)  # 创建时间
+    synced_at: datetime = Field(default_factory=datetime.now)  # 同步时间

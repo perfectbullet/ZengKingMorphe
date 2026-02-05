@@ -1,5 +1,6 @@
-from datetime import datetime
-
+"""
+    FAQ问答接口服务
+"""
 from fastapi import (
     APIRouter, Depends, HTTPException
 )
@@ -8,6 +9,7 @@ from starlette import status
 from app.api.middleware.auth import get_api_key
 from app.core.database import get_database
 from app.core.logging import get_logger
+from app.models.database import FAQModel
 from app.models.schemas import ResponseResult, DatasetFaqRequest
 from app.services.dataset_faq_service import faq_processor
 from app.services.task_processor import task_processor
@@ -43,33 +45,29 @@ async def update_faq(
         if request.similar_questions:
             combined_text += " " + " ".join(request.similar_questions)
 
-        answer_texts = [ans for ans in request.answers]
-
         for employee_id in request.employee_ids:
             try:
                 update_faq_id = f"faq_{employee_id}_{faq_id}"
-                update_data = {
-                    "faq_id": update_faq_id,
-                    "employee_id": employee_id,
-                    "external_faq_id": faq_id,
-                    "question_name": request.question_name,
-                    "start_time": request.start_time,
-                    "end_time": request.end_time,
-                    "is_enable": request.is_enable,
-                    "is_clear": request.is_clear,
-                    "similar_questions": request.similar_questions,
-                    "answers": answer_texts,
-                    "update_time": request.update_time,
-                    "combined_text": combined_text,
-                    "keywords": [],  # Will be populated by vectorization task
-                    "vector_id": None,  # Will be set after vectorization
-                    "es_indexed": False,  # Will be set after ElasticSearch indexing
-                    "created_at": datetime.now(),
-                    "synced_at": datetime.now()
-                }
+                update_data = FAQModel(
+                    faq_id=update_faq_id,
+                    employee_id=employee_id,
+                    external_faq_id=faq_id,
+                    question_name=request.question_name,
+                    start_time=request.start_time,
+                    end_time=request.end_time,
+                    is_enable=request.is_enable,
+                    is_clear=request.is_clear,
+                    similar_questions=request.similar_questions,
+                    answers=request.answers,
+                    update_time=request.update_time,
+                    combined_text=combined_text,
+                    keywords=request.similar_questions,  # Use similar questions as keywords
+                    vector_id=update_faq_id,  # Use faq_id as vector_id
+                    es_indexed=False,  # Will be set to True after ES indexing
+                )
                 await db.faqs.update_one(
                     {"faq_id": update_faq_id},
-                    {"$set": update_data},
+                    {"$set": update_data.model_dump()},
                     upsert=True
                 )
 

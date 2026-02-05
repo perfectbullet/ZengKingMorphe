@@ -1,8 +1,10 @@
-from datetime import datetime
-
+"""
+    敏感词库接口服务
+"""
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.core.database import get_database
+from app.models.database import ThesaurusSensitiveModel
 from app.models.schemas import ResponseResult, ThesaurusRequest
 from app.api.middleware.auth import verify_api_key, get_api_key
 from app.core.logging import get_logger
@@ -39,29 +41,27 @@ async def update_thesaurus_sensitive(
         for employee_id in request.employee_ids:
             for thesaurus_word in request.thesaurus_words:
                 try:
-                    # Build combined_text for embedding (thesaurus_name + word_name + similar_word_name)
+                    # Build combined_text for embedding (thesaurus_name + word_name)
                     combined_text = request.thesaurus_name + " " + thesaurus_word.word_name
 
                     update_thesaurus_id = f"sensitive_{employee_id}_{thesaurus_id}_{thesaurus_word.word_id}"
-                    update_data = {
-                        "thesaurus_id": update_thesaurus_id,
-                        "employee_id": employee_id,
-                        "external_thesaurus_id": thesaurus_id,
-                        "external_word_id": thesaurus_word.word_id,
-                        "thesaurus_name": request.thesaurus_name,
-                        "is_enable": request.is_enable,
-                        "update_time": request.update_time,
-                        "word_name": thesaurus_word.word_name,
-                        "combined_text": combined_text,
-                        "keywords": [],  # Will be populated by vectorization task
-                        "vector_id": None,  # Will be set after vectorization
-                        "es_indexed": False,  # Will be set after ElasticSearch indexing
-                        "created_at": datetime.now(),
-                        "synced_at": datetime.now()
-                    }
+                    update_data = ThesaurusSensitiveModel(
+                        thesaurus_id=update_thesaurus_id,
+                        employee_id=employee_id,
+                        external_thesaurus_id=thesaurus_id,
+                        external_word_id=thesaurus_word.word_id,
+                        thesaurus_name=request.thesaurus_name,
+                        is_enable=request.is_enable,
+                        update_time=request.update_time,
+                        word_name=thesaurus_word.word_name,
+                        combined_text=combined_text,
+                        keywords=thesaurus_word.similar_words,
+                        vector_id=update_thesaurus_id,  # Will be set after vectorization
+                        es_indexed=False,  # Will be set after ElasticSearch indexing
+                    )
                     await db.thesaurus_sensitive.update_one(
                         {"thesaurus_id": update_thesaurus_id},
-                        {"$set": update_data},
+                        {"$set": update_data.model_dump()},
                         upsert=True
                     )
 

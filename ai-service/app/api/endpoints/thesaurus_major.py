@@ -1,8 +1,10 @@
-from datetime import datetime
-
+"""
+    专业词库接口服务
+"""
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.core.database import get_database
+from app.models.database import ThesaurusMajorModel
 from app.models.schemas import ThesaurusRequest, ResponseResult
 from app.api.middleware.auth import verify_api_key, get_api_key
 from app.core.logging import get_logger
@@ -45,26 +47,24 @@ async def update_thesaurus_major(
                         combined_text += " " + " ".join(thesaurus_word.similar_words)
 
                     update_thesaurus_id = f"major_{employee_id}_{thesaurus_id}_{thesaurus_word.word_id}"
-                    update_data = {
-                        "thesaurus_id": update_thesaurus_id,
-                        "employee_id": employee_id,
-                        "external_thesaurus_id": thesaurus_id,
-                        "external_word_id": thesaurus_word.word_id,
-                        "thesaurus_name": request.thesaurus_name,
-                        "is_enable": request.is_enable,
-                        "update_time": request.update_time,
-                        "word_name": thesaurus_word.word_name,
-                        "similar_words": thesaurus_word.similar_words,
-                        "combined_text": combined_text,
-                        "keywords": [],  # Will be populated by vectorization task
-                        "vector_id": None,  # Will be set after vectorization
-                        "es_indexed": False,  # Will be set after ElasticSearch indexing
-                        "created_at": datetime.now(),
-                        "synced_at": datetime.now()
-                    }
+                    update_data = ThesaurusMajorModel(
+                        thesaurus_id=update_thesaurus_id,
+                        employee_id=employee_id,
+                        external_thesaurus_id=thesaurus_id,
+                        external_word_id=thesaurus_word.word_id,
+                        thesaurus_name=request.thesaurus_name,
+                        is_enable=request.is_enable,
+                        update_time=request.update_time,
+                        word_name=thesaurus_word.word_name,
+                        similar_words=thesaurus_word.similar_words,
+                        combined_text=combined_text,
+                        keywords=thesaurus_word.similar_words,
+                        vector_id=update_thesaurus_id,  # Will be set after vectorization
+                        es_indexed=False,  # Will be set after ElasticSearch indexing
+                    )
                     await db.thesaurus_major.update_one(
                         {"thesaurus_id": update_thesaurus_id},
-                        {"$set": update_data},
+                        {"$set": update_data.model_dump()},
                         upsert=True
                     )
 

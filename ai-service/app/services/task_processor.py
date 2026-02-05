@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Dict, Optional, List
 from app.core.logging import get_logger
 from app.core.database import get_database
-from app.models.database import DocumentTaskModel, FAQModel
+from app.models.database import DocumentTaskModel
 from app.services.document_service import document_processor as doc_processor
 from app.services.dataset_faq_service import faq_processor
 from app.services.thesaurus_major_service import thesaurus_major_processor
