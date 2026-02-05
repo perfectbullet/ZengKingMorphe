@@ -11,6 +11,8 @@ from app.core.database import get_database
 from app.models.database import DocumentTaskModel, FAQModel
 from app.services.document_service import document_processor as doc_processor
 from app.services.dataset_faq_service import faq_processor
+from app.services.thesaurus_major_service import thesaurus_major_processor
+from app.services.thesaurus_sensitive_service import thesaurus_sensitive_processor
 
 logger = get_logger(__name__)
 
@@ -274,12 +276,30 @@ class DocumentTaskProcessor:
         
         return False
 
-    async def submit_faq_vectorization_task(self, faq_id: str):
+    async def submit_faq_vectorization_task(self, faq_id: str, kb_id: str) -> str:
         """
             提交FAQ向量化任务（异步后台处理）。
-            从MongoDB的faqs集合中读取该员工的FAQ数据进行向量化。
+            从MongoDB的faqs集合中读取该FAQ进行向量化。
         """
-        task_id = f"faq_task_{faq_id}_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+        task_id = f"faq_task_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{faq_id}"
+
+        # Create task record in database
+        db = await get_database()
+        task_model = DocumentTaskModel(
+            task_id=task_id,
+            kb_id=kb_id,
+            enhance=1,
+            filename="",
+            file_path="",
+            doc_id=faq_id,
+            category=None,
+            status="pending",
+            metadata={}
+        )
+
+        insert_data = task_model.model_dump()
+
+        await db.document_tasks.insert_one(insert_data)
 
         # Add to queue for background processing
         await self.task_queue.put({
@@ -288,7 +308,81 @@ class DocumentTaskProcessor:
             "faq_id": faq_id
         })
 
-        logger.info(f"submit_faq_vectorization_task task_id={task_id}")
+        logger.info(f"submit_faq_vectorization_task: task_id={task_id}")
+
+        return task_id
+
+    async def submit_thesaurus_major_vectorization_task(self, thesaurus_id: str, kb_id: str) -> str:
+        """
+            提交专业词库向量化任务（异步后台处理）。
+            从MongoDB的专业词库集合中读取该专业词库的词条进行向量化。
+        """
+        task_id = f"major_task_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{thesaurus_id}"
+
+        # Create task record in database
+        db = await get_database()
+        task_model = DocumentTaskModel(
+            task_id=task_id,
+            kb_id=kb_id,
+            enhance=1,
+            filename="",
+            file_path="",
+            doc_id=thesaurus_id,
+            category=None,
+            status="pending",
+            metadata={}
+        )
+
+        insert_data = task_model.model_dump()
+
+        await db.document_tasks.insert_one(insert_data)
+
+        # Add to queue for background processing
+        await self.task_queue.put({
+            "task_type": "thesaurus_major_vectorization",
+            "task_id": task_id,
+            "thesaurus_id": thesaurus_id
+        })
+
+        logger.info(f"submit_thesaurus_major_vectorization_task: task_id={task_id}")
+
+        return task_id
+
+    async def submit_thesaurus_sensitive_vectorization_task(self, thesaurus_id: str, kb_id: str) -> str:
+        """
+            提交敏感词库向量化任务（异步后台处理）。
+            从MongoDB的敏感词库集合中读取该敏感词库的词条进行向量化。
+        """
+        task_id = f"sensitive_task_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{thesaurus_id}"
+
+        # Create task record in database
+        db = await get_database()
+        task_model = DocumentTaskModel(
+            task_id=task_id,
+            kb_id=kb_id,
+            enhance=1,
+            filename="",
+            file_path="",
+            doc_id=thesaurus_id,
+            category=None,
+            status="pending",
+            metadata={}
+        )
+
+        insert_data = task_model.model_dump()
+
+        await db.document_tasks.insert_one(insert_data)
+
+        # Add to queue for background processing
+        await self.task_queue.put({
+            "task_type": "thesaurus_sensitive_vectorization",
+            "task_id": task_id,
+            "thesaurus_id": thesaurus_id
+        })
+
+        logger.info(f"submit_thesaurus_sensitive_vectorization_task: task_id={task_id}")
+
+        return task_id
 
     async def _execute_document_vectorization(self, task_data: Dict):
         """Execute a single document processing task."""
@@ -302,7 +396,7 @@ class DocumentTaskProcessor:
                 {
                     "$set": {
                         "status": "running",
-                        "started_at": datetime.utcnow()
+                        "started_at": datetime.now()
                     }
                 }
             )
@@ -319,7 +413,7 @@ class DocumentTaskProcessor:
                     {
                         "$set": {
                             "status": "cancelled",
-                            "completed_at": datetime.utcnow()
+                            "completed_at": datetime.now()
                         }
                     }
                 )
@@ -334,7 +428,7 @@ class DocumentTaskProcessor:
                         "status": "completed",
                         "doc_id": doc_id,
                         "progress": 100.0,
-                        "completed_at": datetime.utcnow()
+                        "completed_at": datetime.now()
                     }
                 }
             )
@@ -351,7 +445,7 @@ class DocumentTaskProcessor:
                     "$set": {
                         "status": "failed",
                         "error_message": str(e),
-                        "completed_at": datetime.utcnow()
+                        "completed_at": datetime.now()
                     }
                 }
             )
@@ -396,14 +490,14 @@ class DocumentTaskProcessor:
                 {
                     "$set": {
                         "status": "running",
-                        "started_at": datetime.utcnow()
+                        "started_at": datetime.now()
                     }
                 }
             )
 
             logger.info(f"_execute_faq_vectorization task task_id={task_id}, task_data={task_data}")
 
-            faq_id = await faq_processor.vectorization_faq(
+            faq_id = await faq_processor.faq_vectorization(
                     task_id=task_id,
                     faq_id=task_data["faq_id"]
                 )
@@ -415,7 +509,7 @@ class DocumentTaskProcessor:
                     {
                         "$set": {
                             "status": "cancelled",
-                            "completed_at": datetime.utcnow()
+                            "completed_at": datetime.now()
                         }
                     }
                 )
@@ -430,7 +524,7 @@ class DocumentTaskProcessor:
                         "status": "completed",
                         "doc_id": faq_id,
                         "progress": 100.0,
-                        "completed_at": datetime.utcnow()
+                        "completed_at": datetime.now()
                     }
                 }
             )
@@ -447,7 +541,7 @@ class DocumentTaskProcessor:
                     "$set": {
                         "status": "failed",
                         "error_message": str(e),
-                        "completed_at": datetime.utcnow()
+                        "completed_at": datetime.now()
                     }
                 }
             )
@@ -458,12 +552,147 @@ class DocumentTaskProcessor:
 
     async def _execute_thesaurus_major_vectorization(self, task_data: Dict):
         """ 执行专业词库向量化任务 """
-        task_id = task_data["task_id"]
         db = await get_database()
+        task_id = task_data["task_id"]
+
+        try:
+            # Update task status to running
+            await db.document_tasks.update_one(
+                {"task_id": task_id},
+                {
+                    "$set": {
+                        "status": "running",
+                        "started_at": datetime.now()
+                    }
+                }
+            )
+
+            logger.info(f"_execute_thesaurus_major_vectorization task task_id={task_id}, task_data={task_data}")
+
+            thesaurus_id = await thesaurus_major_processor.thesaurus_major_vectorization(
+                    task_id=task_id,
+                    thesaurus_id=task_data["thesaurus_id"]
+                )
+
+            # Check if task was cancelled
+            if self.active_tasks.get(task_id, False):
+                await db.document_tasks.update_one(
+                    {"task_id": task_id},
+                    {
+                        "$set": {
+                            "status": "cancelled",
+                            "completed_at": datetime.now()
+                        }
+                    }
+                )
+                logger.info(f"_execute_thesaurus_major_vectorization task cancelled task_id={task_id}")
+                return
+
+            # Update task status to completed
+            await db.document_tasks.update_one(
+                {"task_id": task_id},
+                {
+                    "$set": {
+                        "status": "completed",
+                        "doc_id": thesaurus_id,
+                        "progress": 100.0,
+                        "completed_at": datetime.now()
+                    }
+                }
+            )
+
+            logger.info(f"_execute_thesaurus_major_vectorization task completed: task_id={task_id}, thesaurus_id={thesaurus_id}")
+
+        except Exception as e:
+            logger.error(f"_execute_thesaurus_major_vectorization task failed: task_id={task_id}, error={str(e)}", exc_info=True)
+
+            # Update task status to failed
+            await db.document_tasks.update_one(
+                {"task_id": task_id},
+                {
+                    "$set": {
+                        "status": "failed",
+                        "error_message": str(e),
+                        "completed_at": datetime.now()
+                    }
+                }
+            )
+
+        finally:
+            # Remove from active tasks
+            self.active_tasks.pop(task_id, None)
 
     async def _execute_thesaurus_sensitive_vectorization(self, task_data: Dict):
         """ 执行敏感词库向量化任务 """
         db = await get_database()
+        task_id = task_data["task_id"]
+
+        try:
+            # Update task status to running
+            await db.document_tasks.update_one(
+                {"task_id": task_id},
+                {
+                    "$set": {
+                        "status": "running",
+                        "started_at": datetime.now()
+                    }
+                }
+            )
+
+            logger.info(f"_execute_thesaurus_sensitive_vectorization task task_id={task_id}, task_data={task_data}")
+
+            thesaurus_id = await thesaurus_sensitive_processor.thesaurus_sensitive_vectorization(
+                    task_id=task_id,
+                    thesaurus_id=task_data["thesaurus_id"]
+                )
+
+            # Check if task was cancelled
+            if self.active_tasks.get(task_id, False):
+                await db.document_tasks.update_one(
+                    {"task_id": task_id},
+                    {
+                        "$set": {
+                            "status": "cancelled",
+                            "completed_at": datetime.now()
+                        }
+                    }
+                )
+                logger.info(f"_execute_thesaurus_sensitive_vectorization task cancelled task_id={task_id}")
+                return
+
+            # Update task status to completed
+            await db.document_tasks.update_one(
+                {"task_id": task_id},
+                {
+                    "$set": {
+                        "status": "completed",
+                        "doc_id": thesaurus_id,
+                        "progress": 100.0,
+                        "completed_at": datetime.now()
+                    }
+                }
+            )
+
+            logger.info(f"_execute_thesaurus_sensitive_vectorization task completed: task_id={task_id}, thesaurus_id={thesaurus_id}")
+
+        except Exception as e:
+            logger.error(f"_execute_thesaurus_sensitive_vectorization task failed: task_id={task_id}, error={str(e)}", exc_info=True)
+
+            # Update task status to failed
+            await db.document_tasks.update_one(
+                {"task_id": task_id},
+                {
+                    "$set": {
+                        "status": "failed",
+                        "error_message": str(e),
+                        "completed_at": datetime.now()
+                    }
+                }
+            )
+
+        finally:
+            # Remove from active tasks
+            self.active_tasks.pop(task_id, None)
 
 
 # Global task processor instance

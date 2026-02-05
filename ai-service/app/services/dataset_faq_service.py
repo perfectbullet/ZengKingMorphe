@@ -3,9 +3,7 @@ FAQ processing service.
 """
 
 from datetime import datetime
-from typing import Any
-
-from fastapi import Depends
+from typing import Any, List
 
 from app.core.logging import get_logger
 from app.core.database import get_database
@@ -18,10 +16,7 @@ logger = get_logger(__name__)
 
 class FaqProcessor:
 
-    def __init__(self, db=Depends(get_database)):
-        self.db = db
-
-    async def vectorization_faq(self, task_id: str, faq_id: str):
+    async def faq_vectorization(self, task_id: str, faq_id: str):
         """
             处理流程：
             1. 从MongoDB的faqs集合按employee_id查询FAQ数据
@@ -32,26 +27,38 @@ class FaqProcessor:
             6. 写入ElasticSearch（关键词索引）
             7. 更新MongoDB的synced_at时间戳
         """
+        db = await get_database()
         try:
-            faq = await self.db.faqs.find_one({"faq_id": faq_id})
+            faq = await db.faqs.find_one({"faq_id": faq_id})
             if not faq:
-                logger.warning(f"vectorization_faq not found task_id={task_id} faq_id={faq_id}")
+                logger.warning(f"vectorization_faq not found: task_id={task_id}")
                 return
 
-            await self.vectorization_faq_one(faq)
+            await self._faq_vectorization(faq)
 
             return faq_id
         except Exception as e:
-            logger.error(f"vectorization_faq exception task_id={task_id} faq_id={faq_id} error={str(e)}", exc_info=True)
+            logger.error(f"vectorization_faq exception: task_id={task_id} error={str(e)}", exc_info=True)
             raise
 
-    async def vectorization_faq_one(self, faq: Any):
+    async def _faq_vectorization(self, faq: Any):
+        db = await get_database()
         faq_id = faq["faq_id"]
-        logger.info(f"vectorization_faq_one request faq_id={faq_id}")
+        logger.info(f"_faq_vectorization request: faq_id={faq_id}")
         try:
             # 1、faq不启用则删除向量数据库记录和ES记录
             if faq.get("is_enable", 0) == 0:
-                await self.delete_vectorization_data(faq_id)
+                await self.delete_faq_vectorization_data(faq_id)
+
+                # 更新MongoDB数据的记录状态和更新时间
+                await db.faqs.update_one(
+                    {"faq_id": faq_id},
+                    {"$set": {
+                        "vector_id": None,
+                        "es_indexed": False,
+                        "synced_at": datetime.now()
+                    }}
+                )
 
             # 2、比较update_time和synced_at的大小，判断是否需要向量化数据
             update_time = faq.get("update_time", "")
@@ -81,32 +88,43 @@ class FaqProcessor:
                 needs_update = True
             elif not needs_update and synced_at_str and update_time <= synced_at_str:
                 # Skip if already synced and not updated
-                logger.info(f"vectorization_faq_one faq_id={faq_id} already synced (update_time: {update_time}, "
+                logger.info(f"_faq_vectorization faq_id={faq_id} already synced (update_time: {update_time}, "
                             f"synced_at: {synced_at_str}), synced_at: {synced_at}")
             else:
                 needs_update = True
 
             # Mark as update if synced_at exists
             if synced_at and needs_update:
-                logger.info(f"vectorization_faq_one faq_id={faq_id} needs update (update_time: {update_time}, "
+                logger.info(f"_faq_vectorization faq_id={faq_id} needs update (update_time: {update_time}, "
                             f"synced_at: {synced_at_str})")
 
             # 数据向量化并保存
-            await self.create_vectorization_data(faq, update_time)
+            await self.create_faq_vectorization_data(faq, update_time)
+
+            # 7、更新MongoDB数据的记录状态并更新synced_at和update_time的时间值
+            await db.faqs.update_one(
+                {"faq_id": faq_id},
+                {"$set": {
+                    "vector_id": faq_id,
+                    "es_indexed": True,
+                    "update_time": update_time,
+                    "synced_at": datetime.now()
+                }}
+            )
         except Exception as e:
-            logger.error(f"vectorization_faq_one exception faq_id={faq_id} error={str(e)}", exc_info=True)
+            logger.error(f"_faq_vectorization exception: faq_id={faq_id} error={str(e)}", exc_info=True)
             raise
 
-    async def delete_vectorization_data(self, faq_id: str):
-        logger.info(f"delete_vectorization_data is disabled and delete chroma_db faq_id={faq_id}", exc_info=True)
+    async def delete_faq_vectorization_data(self, faq_id: str):
+        logger.info(f"delete_faq_vectorization_data is disabled and delete chroma_db: faq_id={faq_id}", exc_info=True)
 
         # 删除ChromaDB记录
         try:
-            chroma_collection = chroma_db.get_collection("faq")
+            chroma_collection = chroma_db._get_collection("faq")
             chroma_collection.delete(ids=[faq_id])
-            logger.debug(f"delete_vectorization_data Deleted FAQ faq_id={faq_id} from ChromaDB")
+            logger.debug(f"delete_faq_vectorization_data Deleted FAQ faq_id={faq_id} from ChromaDB")
         except Exception as e:
-            logger.warning(f"delete_vectorization_data ChromaDB delete failed faq_id={faq_id} "
+            logger.warning(f"delete_faq_vectorization_data ChromaDB delete failed: faq_id={faq_id} "
                            f"error={str(e)}", exc_info=True)
             raise
 
@@ -116,31 +134,21 @@ class FaqProcessor:
                 index="faq",
                 doc_id=faq_id
             )
-            logger.debug(f"delete_vectorization_data Deleted FAQ faq_id={faq_id} from ElasticSearch")
+            logger.debug(f"delete_faq_vectorization_data Deleted FAQ faq_id={faq_id} from ElasticSearch")
         except Exception as e:
-            logger.warning(f"delete_vectorization_data ElasticSearch delete failed faq_id={faq_id} "
+            logger.warning(f"delete_faq_vectorization_data ElasticSearch delete failed: faq_id={faq_id} "
                            f"error={str(e)}", exc_info=True)
             raise
 
-        # 更新MongoDB数据的记录状态和更新时间
-        await self.db.faqs.update_one(
-            {"faq_id": faq_id},
-            {"$set": {
-                "vector_id": None,
-                "es_indexed": False,
-                "synced_at": datetime.now()
-            }}
-        )
-
-    async def create_vectorization_data(self, faq: Any, update_time: str):
+    async def create_faq_vectorization_data(self, faq: Any, update_time: str):
         faq_id = faq["faq_id"]
-        logger.info(f"create_vectorization_data is disabled and delete chroma_db faq_id={faq_id}", exc_info=True)
+        logger.info(f"create_faq_vectorization_data is disabled and delete chroma_db: faq_id={faq_id}", exc_info=True)
 
         # 3、提取要进行向量化的文本数据单元
         combined_text = faq.get("combined_text", "").strip()
 
         if not combined_text:
-            logger.info(f"create_vectorization_data faq_id={faq_id} has empty combined_text, skipping", exc_info=True)
+            logger.info(f"create_faq_vectorization_data faq_id={faq_id} has empty combined_text, skipping", exc_info=True)
             return
 
         # 4、根据配置创建 Embedding model 实例的工厂函数
@@ -148,14 +156,14 @@ class FaqProcessor:
 
         # 5、生成向量并保存到ChromaDB向量库中
         try:
-            chroma_collection = chroma_db.get_collection("faq")
+            chroma_collection = chroma_db._get_collection("faq")
 
             # 先删除已存在的向量数据
             if faq.get("vector_id"):
                 try:
                     chroma_collection.delete(ids=[faq_id])
                 except Exception as e:
-                    logger.warning(f"create_vectorization_data Failed to delete existing FAQ vector faq_id= {faq_id} "
+                    logger.warning(f"create_faq_vectorization_data Failed to delete existing FAQ vector: faq_id= {faq_id} "
                                    f"error={str(e)}", exc_info=True)
 
             # 再添加向量数据
@@ -170,9 +178,9 @@ class FaqProcessor:
                 }],
                 documents=[combined_text]
             )
-            logger.info(f"create_vectorization_data vectorized in ChromaDB faq_id={faq_id}")
+            logger.info(f"create_faq_vectorization_data vectorized in ChromaDB: faq_id={faq_id}")
         except Exception as e:
-            logger.error(f"create_vectorization_data Failed to write FAQ to ChromaDB faq_id={faq_id} "
+            logger.error(f"create_faq_vectorization_data Failed to write FAQ to ChromaDB: faq_id={faq_id} "
                          f"error={str(e)}", exc_info=True)
             raise
 
@@ -195,22 +203,11 @@ class FaqProcessor:
                 document=es_doc
             )
 
-            logger.info(f"create_vectorization_data indexed in ElasticSearch faq_id={faq_id}")
+            logger.info(f"create_faq_vectorization_data indexed in ElasticSearch: faq_id={faq_id}")
         except Exception as e:
-            logger.error(f"create_vectorization_data Failed to write FAQ to ElasticSearch faq_id={faq_id} "
+            logger.error(f"create_faq_vectorization_data Failed to write FAQ to ElasticSearch: faq_id={faq_id} "
                          f"error={str(e)}", exc_info=True)
             raise
-
-        # 7、更新MongoDB数据的记录状态并更新synced_at和update_time的时间值
-        await self.db.faqs.update_one(
-            {"faq_id": faq_id},
-            {"$set": {
-                "vector_id": faq_id,
-                "es_indexed": True,
-                "update_time": update_time,
-                "synced_at": datetime.now()
-            }}
-        )
 
 
 # Global faq processor instance

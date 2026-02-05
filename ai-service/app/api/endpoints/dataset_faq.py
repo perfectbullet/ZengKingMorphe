@@ -9,6 +9,7 @@ from app.api.middleware.auth import get_api_key
 from app.core.database import get_database
 from app.core.logging import get_logger
 from app.models.schemas import ResponseResult, DatasetFaqRequest
+from app.services.dataset_faq_service import faq_processor
 from app.services.task_processor import task_processor
 
 logger = get_logger(__name__)
@@ -35,7 +36,7 @@ async def update_faq(
     """
     faq_id = request.faq_id
     try:
-        logger.info(f"update_faq request faq_id={faq_id} employee_ids={request.employee_ids}")
+        logger.info(f"update_faq request: faq_id={faq_id} employee_ids={request.employee_ids}")
 
         # Build combined_text for embedding (question + similar questions)
         combined_text = request.question_name
@@ -64,7 +65,7 @@ async def update_faq(
                     "vector_id": None,  # Will be set after vectorization
                     "es_indexed": False,  # Will be set after ElasticSearch indexing
                     "created_at": datetime.now(),
-                    "synced_at": datetime.now(),
+                    "synced_at": datetime.now()
                 }
                 await db.faqs.update_one(
                     {"faq_id": update_faq_id},
@@ -72,23 +73,23 @@ async def update_faq(
                     upsert=True
                 )
 
-                await task_processor.submit_faq_vectorization_task(faq_id=update_faq_id)
+                await task_processor.submit_faq_vectorization_task(faq_id=update_faq_id, kb_id=f"faq_{faq_id}")
             except Exception as e:
-                logger.error(f"update_faq faq_id={faq_id} error={str(e)}", exc_info=True)
+                logger.error(f"update_faq failed: faq_id={faq_id} error={str(e)}", exc_info=True)
 
         return ResponseResult.success(None)
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"update_faq exception faq_id={faq_id} error={str(e)}", exc_info=True)
+        logger.error(f"update_faq exception: faq_id={faq_id} error={str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="update_faq error"
         )
 
 
-@router.delete("/delete")
+@router.delete("/delete/{faq_id}")
 async def delete_faq(
     faq_id: int,
     api_key: str = Depends(get_api_key),
@@ -99,7 +100,6 @@ async def delete_faq(
 
         Args:
             - faq_id: FAQ问答id
-            - employee_id: 数字员工id
             - api_key: API key from auth
             - db: Database instance
 
@@ -107,23 +107,34 @@ async def delete_faq(
             - result
     """
     try:
-        logger.info(f"delete_faq request faq_id={faq_id}")
+        logger.info(f"delete_faq request: faq_id={faq_id}")
 
-        # 删除数据
-        result = await db.faqs.delete_one({'external_faq_id': {faq_id}})
+        faq_cursor = db.faqs.find({"external_faq_id": faq_id}, {"faq_id": 1})
+        faqs = await faq_cursor.to_list(length=None)
+        faq_ids = [c["faq_id"] for c in faqs]
 
-        if result and result.deleted_count == 1:
-            logger.info(f"delete_faq success faq_id={faq_id}")
+        # 刪除ChromaDB记录和ElasticSearch记录
+        for faq_id in faq_ids:
+            await faq_processor.delete_faq_vectorization_data(faq_id)
+
+        # 刪除faq任务记录
+        await db.document_tasks.delete_many({"kb_id": f"faq_{faq_id}"})
+
+        # 删除faq记录
+        result = await db.faqs.delete_many({"external_faq_id": faq_id})
+
+        if result:
+            logger.info(f"delete_faq success: faq_id={faq_id}")
 
             return ResponseResult.success(None)
         else:
             return ResponseResult.error(status.HTTP_404_NOT_FOUND, "error",
-                                        f"delete_faq not found faq_id={faq_id}")
+                                        f"delete_faq not found: faq_id={faq_id}")
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"delete_faq exception faq_id={faq_id} error={str(e)}", exc_info=True)
+        logger.error(f"delete_faq exception: faq_id={faq_id} error={str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="delete_faq error"

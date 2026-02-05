@@ -855,24 +855,29 @@ class DatasetFaqRequest(BaseModel):
     answers: List[str] = Field(default_factory=list)
 
 
-class ThesaurusMajorWord(BaseModel):
-    word_name: str = Field(..., description="专业词条名称")
-    similar_word_name: List[str] = Field(default_factory=list, description="相似词条名称")
+class ThesaurusWord(BaseModel):
+    word_name: str = Field(..., description="词条名称")
+    similar_words: List[str] = Field(default_factory=list, description="相似词条名称列表")
 
 
-class ThesaurusMajorRequest(BaseModel):
-    """ 专业词库请求参数对象 """
+class ThesaurusRequest(BaseModel):
+    """ 词库请求参数对象 """
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "external_thesaurus_major_id": 8,
-                "thesaurus_name": "",
+                "thesaurus_id": 8,
+                "employee_ids": [
+                    1,
+                    2
+                ],
+                "thesaurus_name": "古典名著",
                 "is_enable": 1,
                 "update_time": "2025-12-17 16:49:29",
-                "thesaurus_major_words": [
+                "thesaurus_words": [
                     {
+                        "word_id": 1,
                         "word_name": "红楼梦",
-                        "similar_word_name": [
+                        "similar_words": [
                             "石头记",
                             "小红书"
                         ]
@@ -882,33 +887,9 @@ class ThesaurusMajorRequest(BaseModel):
         }
     )
 
-    thesaurus_major_id: int = Field(..., description="专业词库id")
-    employee_id: List[int] = Field(default_factory=list, description="数字员工id列表")
-    thesaurus_name: str = Field(..., description="专业词库名称")
+    thesaurus_id: int = Field(..., description="词库id")
+    employee_ids: List[int] = Field(default_factory=list, description="数字员工id列表")
+    thesaurus_name: str = Field(..., description="词库名称")
     is_enable: int = Field(1, description="是否启用：0=不启用，1=启用")
     update_time: Optional[str] = Field(None, alias="updateTime", description="更新时间")
-    thesaurus_major_words: List[ThesaurusMajorWord] = Field(default_factory=list, description="专业词条列表列表")
-
-
-class ThesaurusSensitiveRequest(BaseModel):
-    """ 敏感词库请求参数对象 """
-    model_config = ConfigDict(
-        json_schema_extra={
-            "example": {
-                "external_thesaurus_sensitive_id": 8,
-                "thesaurus_name": "敏感词",
-                "is_enable": 1,
-                "update_time": "2025-12-17 16:49:29",
-                "thesaurus_major_words": [
-                    "杀人",
-                    "放火"
-                ]
-            }
-        }
-    )
-
-    external_thesaurus_sensitive_id: int = Field(..., description="敏感词库id")
-    thesaurus_name: str = Field(..., description="敏感词库名称")
-    is_enable: int = Field(1, description="是否启用：0=不启用，1=启用")
-    update_time: Optional[str] = Field(None, alias="updateTime", description="更新时间")
-    thesaurus_sensitive_sensitive: List[str] = Field(default_factory=list, description="敏感词条名称列表")
+    thesaurus_words: List[ThesaurusWord] = Field(default_factory=list, description="词条名称列表")
