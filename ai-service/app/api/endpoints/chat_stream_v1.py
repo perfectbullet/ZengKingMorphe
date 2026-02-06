@@ -3,13 +3,17 @@ Chat stream response generator for /v1/chat/completions endpoint.
 
 This version can be modified for custom behavior specific to v1 API.
 """
+import os
 import re
 import random
 import time
 import json
 import hashlib
 from datetime import datetime
+from pathlib import Path
 from typing import AsyncGenerator, Optional
+
+from langchain_community.chat_models import ChatOllama
 
 from app.models.schemas import OpenAIChatRequest
 from app.models.database import StreamChunkModel
@@ -18,6 +22,31 @@ from app.core.database import get_database
 from app.services.conversation_service import conversation_workflow
 
 logger = get_logger(__name__)
+
+
+def _load_revise_prompt() -> str:
+    """Load the system prompt for math formula voice explanation."""
+    # chat_stream_v1.py is at: app/api/endpoints/chat_stream_v1.py
+    # prompts dir is at: prompts/ (from ai-service root)
+    # So we need: app/api/endpoints/ -> app/api/ -> app/ -> ai-service/ -> prompts/
+    prompt_path = Path(__file__).parent.parent.parent.parent / "prompts" / "数学公式口语化讲解.txt"
+    try:
+        with open(prompt_path, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        logger.warning(f"Prompt file not found: {prompt_path}, using default prompt")
+        return "你是一个数学公式口语化讲解专家。请将用户输入的数学公式和概念，用纯粹、流畅、易于理解的自然语言解释，完全不含任何数学符号或特殊格式，专为语音播报场景设计。"
+
+
+def _get_revise_llm() -> ChatOllama:
+    """Get Ollama LLM instance for text revision (voice-friendly output)."""
+    return ChatOllama(
+        base_url=os.getenv("OLLAMA_BASE_URL"),
+        model=os.getenv("OLLAMA_REVISE_MODEL"),
+        temperature=0.7,  # Slightly higher for more natural language
+        streaming=True,
+        keep_alive=-1
+    )
 
 
 # Status message variations for better UX
@@ -346,17 +375,23 @@ async def generate_openai_stream_v1(
                 direct_match = final_state.get("direct_match")
 
                 if existing_answer and direct_match and not final_state.get("faq_matched"):
-                    # 直接流式返回预生成的答案，跳过 LLM 生成
                     ttfb_ms = int((time.time() - initial_state["workflow_start_time"]) * 1000)
                     final_state["ttfb_ms"] = ttfb_ms
 
                     logger.info(
-                        "Using pre-generated answer (math textbook direct match) | "
+                        "Revising pre-generated answer for voice output | "
                         f"content_type={direct_match.get('content_type')} | "
                         f"rerank_score={direct_match.get('rerank_score')} | "
-                        f"length={len(existing_answer)} | ttfb_ms={ttfb_ms}"
+                        f"original_length={len(existing_answer)} | ttfb_ms={ttfb_ms}"
                     )
 
+                    
+                    
+                    
+                    
+                    
+                    
+                    
                     # 按中文标点符号切分流式返回答案
                     segments = re.split(r'([，。！？、；：\n])', existing_answer)
                     current_chunk = ""
@@ -377,37 +412,67 @@ async def generate_openai_stream_v1(
                                 }],
                             }
                             chunk_sequence += 1
+                            
+                            await save_stream_chunk(
+                                db, chat_id, chunk_sequence, session_id, request.user_id,
+                                request.employee_id, "token", token_chunk_data,
+                                final_state.get("conversation_id")
+                            )
+                            
+                            yield json.dumps(token_chunk_data)
+                            current_chunk = ""
+                            
+                            
+                            
+                            
+                            
+                    # Revise the answer for voice-friendly output
+                    system_prompt = _load_revise_prompt()
+                    revise_llm = _get_revise_llm()
+
+                    revise_messages = [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": f"请将以下内容改写为适合语音播报的口语化表达：\n\n{existing_answer}"}
+                    ]
+
+                    revised_answer = ""
+                    async for chunk in revise_llm.astream(revise_messages):
+                        token = chunk.content
+                        if token:
+                            revised_answer += token
+
+                            token_chunk_data = {
+                                "id": chat_id,
+                                "object": "chat.completion.chunk",
+                                "created": created,
+                                "model": request.model,
+                                "choices": [{
+                                    "index": 0,
+                                    "delta": {"content": token},
+                                    "finish_reason": None,
+                                }],
+                            }
+                            chunk_sequence += 1
                             await save_stream_chunk(
                                 db, chat_id, chunk_sequence, session_id, request.user_id,
                                 request.employee_id, "token", token_chunk_data,
                                 final_state.get("conversation_id")
                             )
                             yield json.dumps(token_chunk_data)
-                            current_chunk = ""
 
-                    # 发送剩余内容
-                    if current_chunk:
-                        token_chunk_data = {
-                            "id": chat_id,
-                            "object": "chat.completion.chunk",
-                            "created": created,
-                            "model": request.model,
-                            "choices": [{
-                                "index": 0,
-                                "delta": {"content": current_chunk},
-                                "finish_reason": None,
-                            }],
-                        }
-                        chunk_sequence += 1
-                        await save_stream_chunk(
-                            db, chat_id, chunk_sequence, session_id, request.user_id,
-                            request.employee_id, "token", token_chunk_data,
-                            final_state.get("conversation_id")
-                        )
-                        yield json.dumps(token_chunk_data)
+                    logger.info(
+                        f"Answer revised for voice output | "
+                        f"original={existing_answer[:50]} | "
+                        f"revisedh={revised_answer[:50]}"
+                    )
 
-                    # 保存对话并退出
-                    await conversation_workflow.save_conversation(final_state)
+
+                    # Update final_answer with revised version
+                    final_state["final_answer"] = revised_answer
+
+                    # Save conversation and exit
+                    await conversation_workflow.save_conversation(                        {"role": "user", "content": f"请将以下内容改写为适合语音播报的口语化表达：\n\n{existing_answer}"}
+)
                     break
 
                 # Build messages for LLM

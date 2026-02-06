@@ -692,14 +692,18 @@ class ConversationNodes:
                 state["kb_used"] = list(set([
                     doc.get("kb_id") for doc in results if doc.get("kb_id")
                 ]))
-
-                logger.info(
-                    "Knowledge retrieval completed",
-                    total_results=all_results,
-                    returned_results=results,
-                    kb_used=state["kb_used"]
-                )
-
+                if all_results:
+                    logger.info(
+                        "Knowledge retrieval completed",
+                        total_results_1=all_results[:1],
+                        kb_used=state["kb_used"]
+                    )
+                else:
+                    logger.info(
+                        "Knowledge retrieval completed, all result is empty, ",
+                        total_results=all_results,
+                        kb_used=state["kb_used"]
+                    )
             except Exception as e:
                 logger.error(f"Knowledge retrieval failed: {str(e)}", exc_info=True)
                 state["retrieved_docs"] = []
