@@ -208,9 +208,8 @@ async def poll_new_chunks(
             else:
                 # First poll: set current time as starting point (no history sent)
                 state["last_timestamp"] = datetime.utcnow()
-                logger.debug("First poll: starting real-time monitoring from now")
+                logger.info("First poll: starting real-time monitoring from now")
                 continue
-
             # Query new chunks (ascending by created_at)
             cursor = db.stream_chunks.find(new_query).sort("created_at", 1)
             new_chunks = await cursor.to_list(length=MAX_CHUNKS_PER_POLL)
@@ -221,7 +220,6 @@ async def poll_new_chunks(
                     count=len(new_chunks),
                     last_timestamp=current_last.isoformat() if current_last else None
                 )
-
             # Send each new chunk
             for chunk in new_chunks:
                 chunk_id = chunk.get("chunk_id")
@@ -238,5 +236,5 @@ async def poll_new_chunks(
                     )
 
     except (WebSocketDisconnect, asyncio.CancelledError, ClientDisconnected):
-        logger.debug("Poll task stopped")
+        logger.info("Poll task stopped")
         raise
