@@ -204,7 +204,7 @@ def handle_stream_payloads(payload_iter: Iterator[str], start_time: float) -> in
 
 
 def run_stream(host: str, body: dict, api_key: Optional[str], timeout: int = 60) -> int:
-    url = host.rstrip("/") + "/api/chat/v1/chat/completions"
+    url = host.rstrip("/") + "/api/chat/v2/chat/completions"
     headers = {
         "Content-Type": "application/json",
         "Accept": "text/event-stream",
@@ -248,9 +248,9 @@ def main():
         """
     )
     parser.add_argument("--host", default="http://192.168.8.233:8100", help="Base host (including port), 默认: http://192.168.8.233:8100")
-    parser.add_argument("--employee_id", default="29", help="Employee ID, 默认: 29")
+    parser.add_argument("--employee_id", default="33", help="Employee ID, 默认: 29")
     parser.add_argument("--user_id", default="3", help="User ID, 默认: 3")
-    parser.add_argument("--session_id", default="sess_4_3_29", help="Session ID, 默认: sess_4_3_29")
+    parser.add_argument("--session_id", default="sess_4_3_33", help="Session ID, 默认: sess_4_3_29")
     parser.add_argument("--model", default="qwen2.5:7b", help="Model name, 默认: qwen2.5:7b")
 
     # 新增参数
