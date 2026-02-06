@@ -205,12 +205,6 @@ async def poll_new_chunks(
                 new_query["created_at"] = {"$gte": current_last}
                 if current_sent:
                     new_query["chunk_id"] = {"$nin": list(current_sent)}
-
-                logger.debug(
-                    "Polling for new chunks",
-                    last_timestamp=current_last.isoformat() if current_last else None,
-                    sent_count=len(current_sent)
-                )
             else:
                 # First poll: set current time as starting point (no history sent)
                 state["last_timestamp"] = datetime.utcnow()
