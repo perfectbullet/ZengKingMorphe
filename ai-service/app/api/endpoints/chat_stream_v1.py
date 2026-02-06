@@ -3,6 +3,7 @@ Chat stream response generator for /v1/chat/completions endpoint.
 
 This version can be modified for custom behavior specific to v1 API.
 """
+import asyncio
 import os
 import re
 import random
@@ -385,20 +386,11 @@ async def generate_openai_stream_v1(
                         f"original_length={len(existing_answer)} | ttfb_ms={ttfb_ms}"
                     )
 
-                    
-                    
-                    
-                    
-                    
-                    
-                    
-                    # 按中文标点符号切分流式返回答案
+                    # 按中文标点符号切分然后保存，但是不 yield， 这里的输出会在`ai-service/app/api/endpoints/websocket.py`被返回给前端
                     segments = re.split(r'([，。！？、；：\n])', existing_answer)
                     current_chunk = ""
-
                     for segment in segments:
                         current_chunk += segment
-
                         if segment in '，。！？、；：\n' or len(current_chunk) >= 20:
                             token_chunk_data = {
                                 "id": chat_id,
@@ -412,29 +404,27 @@ async def generate_openai_stream_v1(
                                 }],
                             }
                             chunk_sequence += 1
-                            
+                            await asyncio.sleep(0.01)  # 等待10ms
                             await save_stream_chunk(
                                 db, chat_id, chunk_sequence, session_id, request.user_id,
                                 request.employee_id, "token", token_chunk_data,
                                 final_state.get("conversation_id")
                             )
-                            
-                            yield json.dumps(token_chunk_data)
                             current_chunk = ""
-                            
-                            
-                            
-                            
-                            
-                    # Revise the answer for voice-friendly output
+                    # Update final_answer with revised version
+                    final_state["final_answer"] = existing_answer
+                    # Save conversation and exit
+                    await conversation_workflow.save_conversation(final_state)
+                    
+
+                    # Revise the answer for voice-friendly output，只流式输出，但是不保存
+                    # 这里的输出会发生给语音合成服务
                     system_prompt = _load_revise_prompt()
                     revise_llm = _get_revise_llm()
-
                     revise_messages = [
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": f"请将以下内容改写为适合语音播报的口语化表达：\n\n{existing_answer}"}
                     ]
-
                     revised_answer = ""
                     async for chunk in revise_llm.astream(revise_messages):
                         token = chunk.content
@@ -453,31 +443,18 @@ async def generate_openai_stream_v1(
                                 }],
                             }
                             chunk_sequence += 1
-                            await save_stream_chunk(
-                                db, chat_id, chunk_sequence, session_id, request.user_id,
-                                request.employee_id, "token", token_chunk_data,
-                                final_state.get("conversation_id")
-                            )
                             yield json.dumps(token_chunk_data)
 
                     logger.info(
                         f"Answer revised for voice output | "
-                        f"original={existing_answer[:50]} | "
-                        f"revisedh={revised_answer[:50]}"
+                        f"original={existing_answer} | "
+                        f"revisedh={revised_answer}"
                     )
-
-
-                    # Update final_answer with revised version
-                    final_state["final_answer"] = revised_answer
-
-                    # Save conversation and exit
-                    await conversation_workflow.save_conversation(                        {"role": "user", "content": f"请将以下内容改写为适合语音播报的口语化表达：\n\n{existing_answer}"}
-)
+                    # Break out of workflow loop
                     break
 
                 # Build messages for LLM
                 messages = conversation_workflow.build_generation_messages(final_state)
-
                 # Get appropriate LLM for streaming
                 streaming_llm, model_name = conversation_workflow.get_streaming_llm(final_state)
                 logger.info(
@@ -520,20 +497,16 @@ async def generate_openai_stream_v1(
                             request.employee_id, "token", token_chunk_data,
                             final_state.get("conversation_id")
                         )
-
                         yield json.dumps(token_chunk_data)
 
                 # Log workflow completion time
                 workflow_end_time = time.time()
                 total_time_ms = int((workflow_end_time - initial_state["workflow_start_time"]) * 1000)
                 logger.info(f"Workflow completed | total_time_ms={total_time_ms} | ttfb_ms={final_state.get('ttfb_ms')}")
-
                 # Update state with generated answer
                 final_state["final_answer"] = full_answer
-
                 # Save conversation
                 await conversation_workflow.save_conversation(final_state)
-
                 # Break out of workflow loop
                 break
 
