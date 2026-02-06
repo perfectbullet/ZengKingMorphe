@@ -199,9 +199,12 @@ class ChromaDB:
                     for doc_list in truncated_results["documents"]
                 ]
                 truncated_results["documents"] = truncated_docs
-            logger.info(
-                f"Queried documents from Chroma: collection={collection_name}, results={truncated_results}"
-            )
+            if truncated_results:
+                logger.info(
+                    f"Queried documents from Chroma: collection={collection_name}, results[:1]={truncated_results}"
+                )
+            else:
+                logger.info("Queried documents from Chroma, but the truncated_results is empty")
             return results
         except Exception as e:
             logger.error(

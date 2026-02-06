@@ -4,6 +4,7 @@ WebSocket API endpoints for real-time stream chunks updates.
 
 from typing import Optional, Set
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
+from uvicorn.protocols.utils import ClientDisconnected
 import asyncio
 from datetime import datetime
 
@@ -161,7 +162,7 @@ async def send_heartbeat(websocket: WebSocket) -> None:
                 "timestamp": datetime.utcnow().isoformat() + "Z"
             })
             logger.debug("Heartbeat sent")
-    except (WebSocketDisconnect, asyncio.CancelledError):
+    except (WebSocketDisconnect, asyncio.CancelledError, ClientDisconnected):
         logger.debug("Heartbeat task stopped")
         raise
 
@@ -242,6 +243,6 @@ async def poll_new_chunks(
                         created_at=chunk.get("created_at").isoformat() if chunk.get("created_at") else None
                     )
 
-    except (WebSocketDisconnect, asyncio.CancelledError):
+    except (WebSocketDisconnect, asyncio.CancelledError, ClientDisconnected):
         logger.debug("Poll task stopped")
         raise

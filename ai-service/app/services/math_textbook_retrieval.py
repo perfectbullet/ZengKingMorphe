@@ -50,6 +50,15 @@ class MathTextbookRetrieval(RAGRetrieval):
         Returns:
             Search results with context_text as content
         """
+
+        # Early return for empty query to avoid BGE API errors
+        if not query or not query.strip():
+            logger.warning(
+                "Math textbook vector search skipped: empty query",
+                query_len=len(query) if query else 0
+            )
+            return []
+
         try:
             # Build filter
             where_filter = None
@@ -131,6 +140,15 @@ class MathTextbookRetrieval(RAGRetrieval):
         Returns:
             Search results with context_text as content
         """
+
+        # Early return for empty query
+        if not query or not query.strip():
+            logger.warning(
+                "Math textbook keyword search skipped: empty query",
+                query_len=len(query) if query else 0
+            )
+            return []
+
         try:
             # Build ElasticSearch query
             es_query = {
