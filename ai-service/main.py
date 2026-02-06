@@ -22,7 +22,7 @@ from app.api.middleware.error_handler import (
 )
 from app.api.endpoints import chat, session, employee, conversation, mineru, dataset_video, thesaurus_sensitive, \
     thesaurus_major, dataset_faq
-from app.api.endpoints import knowledge_base_kb, documents, metrics, websocket
+from app.api.endpoints import knowledge_base_kb, documents, metrics, websocket, websocket_view
 
 # Setup logging
 setup_logging()
@@ -135,6 +135,7 @@ app.include_router(conversation.router, prefix="/api/conversation", tags=["Conve
 app.include_router(mineru.router, prefix="/api/mineru", tags=["MinerU"])
 app.include_router(metrics.router, prefix="/api/metrics", tags=["Metrics"])
 app.include_router(websocket.router, prefix="/api/chat", tags=["WebSocket"])
+app.include_router(websocket_view.router, prefix="/api/chat", tags=["WebSocket View"])
 app.include_router(dataset_faq.router, prefix="/api/dataset_faq", tags=["dataset_faq"])
 app.include_router(thesaurus_major.router, prefix="/api/thesaurus_major", tags=["thesaurus_major"])
 app.include_router(thesaurus_sensitive.router, prefix="/api/thesaurus_sensitive", tags=["thesaurus_sensitive"])

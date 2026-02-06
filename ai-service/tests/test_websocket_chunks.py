@@ -39,7 +39,7 @@ async def test_websocket_chunks(
         host: WebSocket server host
         port: WebSocket server port
     """
-    uri = f"ws://{host}:{port}/api/chat/ws/chunks?user_id={user_id}&employee_id={employee_id}&session_id={session_id}"
+    uri = f"ws://{host}:{port}/api/chat/ws/view/chunks?user_id={user_id}&employee_id={employee_id}&session_id={session_id}"
 
     print(f"Connecting to: {uri}")
     print("-" * 60)
