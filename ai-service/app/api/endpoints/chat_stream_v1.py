@@ -41,9 +41,13 @@ def _load_revise_prompt() -> str:
 
 def _get_revise_llm() -> ChatOllama:
     """Get Ollama LLM instance for text revision (voice-friendly output)."""
+    OLLAMA_REVISE_MODEL = os.getenv("OLLAMA_REVISE_MODEL")
+    OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL")
+    logger.info(f"OLLAMA_REVISE_MODEL is {OLLAMA_REVISE_MODEL}")
+    logger.info(f"OLLAMA_BASE_URL is {OLLAMA_BASE_URL}")
     return ChatOllama(
-        base_url=os.getenv("OLLAMA_BASE_URL"),
-        model=os.getenv("OLLAMA_REVISE_MODEL"),
+        base_url=OLLAMA_BASE_URL,
+        model=OLLAMA_REVISE_MODEL,
         temperature=0.7,  # Slightly higher for more natural language
         streaming=True,
         keep_alive=-1
@@ -380,10 +384,10 @@ async def generate_openai_stream_v1(
                     final_state["ttfb_ms"] = ttfb_ms
 
                     logger.info(
-                        "Revising pre-generated answer for voice output | "
-                        f"content_type={direct_match.get('content_type')} | "
-                        f"rerank_score={direct_match.get('rerank_score')} | "
-                        f"original_length={len(existing_answer)} | ttfb_ms={ttfb_ms}"
+                        "Revising pre-generated answer for voice output \n "
+                        f"content_type={direct_match.get('content_type')} \n "
+                        f"rerank_score={direct_match.get('rerank_score')} \n "
+                        f"original_length={len(existing_answer)} \n ttfb_ms={ttfb_ms}"
                     )
 
                     # 按中文标点符号切分然后保存，但是不 yield， 这里的输出会在`ai-service/app/api/endpoints/websocket.py`被返回给前端
@@ -404,7 +408,7 @@ async def generate_openai_stream_v1(
                                 }],
                             }
                             chunk_sequence += 1
-                            await asyncio.sleep(0.01)  # 等待10ms
+                            await asyncio.sleep(0.01)  # 等待10ms, 不然websocket有乱序的问题
                             await save_stream_chunk(
                                 db, chat_id, chunk_sequence, session_id, request.user_id,
                                 request.employee_id, "token", token_chunk_data,
@@ -423,7 +427,7 @@ async def generate_openai_stream_v1(
                     revise_llm = _get_revise_llm()
                     revise_messages = [
                         {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": f"请将以下内容改写为适合语音播报的口语化表达：\n\n{existing_answer}"}
+                        {"role": "user", "content": f"{existing_answer}"}
                     ]
                     revised_answer = ""
                     async for chunk in revise_llm.astream(revise_messages):
@@ -445,11 +449,10 @@ async def generate_openai_stream_v1(
                             chunk_sequence += 1
                             yield json.dumps(token_chunk_data)
 
-                    logger.info(
-                        f"Answer revised for voice output | "
-                        f"original={existing_answer} | "
-                        f"revisedh={revised_answer}"
-                    )
+                    logger.info("Answer revised for voice output: ")
+                    logger.info(f"original={existing_answer}")
+                    logger.info(f"revised_answer={revised_answer}")
+                    
                     # Break out of workflow loop
                     break
 
@@ -464,6 +467,7 @@ async def generate_openai_stream_v1(
                     f"web_search_used={final_state.get('web_search_used', False)}"
                 )
 
+                # 进入模型的流式推理
                 # TRUE token-level streaming from LLM
                 first_token_received = False
                 async for chunk in streaming_llm.astream(messages):
