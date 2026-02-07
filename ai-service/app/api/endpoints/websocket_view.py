@@ -228,14 +228,6 @@ async def poll_new_chunks(
             # Query new chunks (ascending by created_at)
             cursor = db.stream_chunks.find(new_query).sort("created_at", 1)
             new_chunks = await cursor.to_list(length=MAX_CHUNKS_PER_POLL)
-
-            if new_chunks:
-                logger.info(
-                    "WebSocket View: Found new chunks",
-                    count=len(new_chunks),
-                    last_timestamp=current_last.isoformat() if current_last else None
-                )
-
             # Send each new chunk
             for chunk in new_chunks:
                 chunk_id = chunk.get("chunk_id")
@@ -243,13 +235,6 @@ async def poll_new_chunks(
                     await send_chunk(websocket, chunk)
                     current_sent.add(chunk_id)
                     state["last_timestamp"] = chunk.get("created_at")
-                    logger.info(
-                        "WebSocket View: Sent new chunk",
-                        chunk_id=chunk_id,
-                        chunk_type=chunk.get("chunk_type"),
-                        sequence=chunk.get("sequence"),
-                        created_at=chunk.get("created_at").isoformat() if chunk.get("created_at") else None
-                    )
 
     except (WebSocketDisconnect, asyncio.CancelledError, ClientDisconnected) as e:
         # Handle different disconnect scenarios with appropriate logging

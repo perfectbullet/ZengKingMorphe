@@ -20,6 +20,27 @@ from app.services.conversation_service import conversation_workflow
 logger = get_logger(__name__)
 
 
+def _clean_user_query(text: str) -> str:
+    """
+    清理用户查询，删除前导标点符号。
+
+    常见问题：用户输入如 "，请帮我解释二项式定理"，前面的逗号会影响检索效果。
+
+    Args:
+        text: 用户输入的查询文本
+
+    Returns:
+        清理后的文本
+    """
+    # 删除前导标点符号（中文和英文）
+    text = re.sub(r'^[，。！？、；：,.?!;:\s]+', '', text)
+
+    # 删除前导空白字符
+    text = text.lstrip()
+
+    return text
+
+
 # Status message variations for better UX
 STATUS_TOKENS: list = [
     "让我来思考一下这个问题，等等..",
@@ -164,6 +185,9 @@ async def generate_openai_stream_v2(
 
         if not user_query:
             user_query = request.messages[-1].content if request.messages else ""
+
+        # 清理用户查询：删除前导标点符号
+        user_query = _clean_user_query(user_query)
 
         # Build initial state with all parameters from request
         initial_state = {

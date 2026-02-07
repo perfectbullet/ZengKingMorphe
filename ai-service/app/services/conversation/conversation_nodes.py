@@ -767,7 +767,7 @@ class ConversationNodes:
                     context_text_len=len(top_doc.get("context_text", "")),
                 )
                 # 只对数学教材知识库触发 direct match
-                if state["relevance_score"] > 0.9 and content_type in ("qa", "teaching_script") and is_math_kb:
+                if state["relevance_score"] > 0.8 and content_type in ("qa", "teaching_script") and is_math_kb:
                     direct_content = top_doc.get("context_text", "")
 
                     if direct_content:
