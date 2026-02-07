@@ -39,6 +39,60 @@ def _load_revise_prompt() -> str:
         return "你是一个数学公式口语化讲解专家。请将用户输入的数学公式和概念，用纯粹、流畅、易于理解的自然语言解释，完全不含任何数学符号或特殊格式，专为语音播报场景设计。"
 
 
+def _normalize_latex_delimiters(text: str) -> str:
+    """
+    规范化 LaTeX 定界符，将各种转义形式替换为标准格式。
+
+    替换规则：
+    - \( 或 \\( 或 \\\( → $
+    - \) 或 \\) 或 \\\) → $
+    - \[ 或 \\[ 或 \\\[ → $$
+    - \] 或 \\] 或 \\\] → $$
+
+    Args:
+        text: 包含可能转义的 LaTeX 定界符的文本
+
+    Returns:
+        规范化后的文本
+    """
+    # 按顺序处理，从多反斜杠到少反斜杠
+    # \\( 和 \\) → $ (两个反斜杠 + 括号)
+    text = re.sub(r'\\\\\(', '$', text)
+    text = re.sub(r'\\\\\)', '$', text)
+    text = re.sub(r'\\\\\[', '$$', text)
+    text = re.sub(r'\\\\\]', '$$', text)
+
+    # \( 和 \) → $ (一个反斜杠 + 括号)
+    # 注意：在原始字符串中，\\ 表示一个反斜杠，\( 表示字面上的括号
+    text = re.sub(r'\\\(', '$', text)
+    text = re.sub(r'\\\)', '$', text)
+    text = re.sub(r'\\\[', '$$', text)
+    text = re.sub(r'\\\]', '$$', text)
+
+    return text
+
+
+def _clean_user_query(text: str) -> str:
+    """
+    清理用户查询，删除前导标点符号。
+
+    常见问题：用户输入如 "，请帮我解释二项式定理"，前面的逗号会影响检索效果。
+
+    Args:
+        text: 用户输入的查询文本
+
+    Returns:
+        清理后的文本
+    """
+    # 删除前导标点符号（中文和英文）
+    text = re.sub(r'^[，。！？、；：,.?!;:\s]+', '', text)
+
+    # 删除前导空白字符
+    text = text.lstrip()
+
+    return text
+
+
 def _get_revise_llm() -> ChatOllama:
     """Get Ollama LLM instance for text revision (voice-friendly output)."""
     OLLAMA_REVISE_MODEL = os.getenv("OLLAMA_REVISE_MODEL")
@@ -198,6 +252,9 @@ async def generate_openai_stream_v1(
 
         if not user_query:
             user_query = request.messages[-1].content if request.messages else ""
+
+        # 清理用户查询：删除前导标点符号
+        user_query = _clean_user_query(user_query)
 
         # Build initial state with all parameters from request
         initial_state = {
@@ -380,6 +437,9 @@ async def generate_openai_stream_v1(
                 direct_match = final_state.get("direct_match")
 
                 if existing_answer and direct_match and not final_state.get("faq_matched"):
+                    # 规范化 LaTeX 定界符（\( \) \[ \] → $ $$）
+                    existing_answer = _normalize_latex_delimiters(existing_answer)
+
                     ttfb_ms = int((time.time() - initial_state["workflow_start_time"]) * 1000)
                     final_state["ttfb_ms"] = ttfb_ms
 
@@ -427,14 +487,13 @@ async def generate_openai_stream_v1(
                     revise_llm = _get_revise_llm()
                     revise_messages = [
                         {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": f"{existing_answer}"}
+                        {"role": "user", "content": existing_answer}
                     ]
                     revised_answer = ""
                     async for chunk in revise_llm.astream(revise_messages):
                         token = chunk.content
                         if token:
                             revised_answer += token
-
                             token_chunk_data = {
                                 "id": chat_id,
                                 "object": "chat.completion.chunk",

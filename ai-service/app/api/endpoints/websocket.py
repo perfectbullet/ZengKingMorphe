@@ -213,13 +213,6 @@ async def poll_new_chunks(
             # Query new chunks (ascending by created_at)
             cursor = db.stream_chunks.find(new_query).sort("created_at", 1)
             new_chunks = await cursor.to_list(length=MAX_CHUNKS_PER_POLL)
-
-            if new_chunks:
-                logger.info(
-                    "Found new chunks",
-                    count=len(new_chunks),
-                    last_timestamp=current_last.isoformat() if current_last else None
-                )
             # Send each new chunk
             for chunk in new_chunks:
                 chunk_id = chunk.get("chunk_id")
