@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import AsyncGenerator, Optional
 
 from langchain_community.chat_models import ChatOllama
+from langchain_openai import ChatOpenAI
 
 from app.models.schemas import OpenAIChatRequest
 from app.models.database import StreamChunkModel
@@ -93,19 +94,58 @@ def _clean_user_query(text: str) -> str:
     return text
 
 
-def _get_revise_llm() -> ChatOllama:
-    """Get Ollama LLM instance for text revision (voice-friendly output)."""
-    OLLAMA_REVISE_MODEL = os.getenv("OLLAMA_REVISE_MODEL")
-    OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL")
-    logger.info(f"OLLAMA_REVISE_MODEL is {OLLAMA_REVISE_MODEL}")
-    logger.info(f"OLLAMA_BASE_URL is {OLLAMA_BASE_URL}")
-    return ChatOllama(
-        base_url=OLLAMA_BASE_URL,
-        model=OLLAMA_REVISE_MODEL,
-        temperature=0.7,  # Slightly higher for more natural language
-        streaming=True,
-        keep_alive=-1
-    )
+def _get_revise_llm():
+    """
+    Get LLM instance for text revision (voice-friendly output).
+
+    Supports:
+    - siliconflow: SiliconFlow API (recommended)
+    - ollama: Local Ollama
+
+    Environment Variables:
+    - REVISE_PROVIDER: Provider type (siliconflow or ollama), default siliconflow
+    - OPENAI_API_KEY: SiliconFlow API key
+    - OPENAI_API_BASE: SiliconFlow API base URL
+    - OPENAI_REVISE_MODEL: SiliconFlow model name (default: deepseek-ai/DeepSeek-V3)
+    - OLLAMA_BASE_URL: Ollama base URL (default: http://localhost:11434)
+    - OLLAMA_REVISE_MODEL: Ollama model name (default: qwen2.5:7b)
+    """
+    # Get provider from env, default siliconflow
+    provider = os.getenv("REVISE_PROVIDER", "siliconflow").lower()
+
+    if provider == "siliconflow":
+        api_key = os.getenv("OPENAI_API_KEY")
+        api_base = os.getenv("OPENAI_API_BASE", "https://api.siliconflow.cn/v1")
+        model = os.getenv("OPENAI_REVISE_MODEL",
+                         os.getenv("OPENAI_MODEL", "deepseek-ai/DeepSeek-V3"))
+
+        if not api_key:
+            logger.warning("OPENAI_API_KEY not set for SiliconFlow")
+
+        logger.info(f"[Revise LLM] SiliconFlow | API_BASE={api_base} | MODEL={model}")
+
+        return ChatOpenAI(
+            base_url=api_base,
+            api_key=api_key or "",  # Allow empty, let API handle error
+            model=model,
+            temperature=0.7,
+            streaming=True,
+        )
+    else:
+        # Use Ollama
+        ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+        ollama_model = os.getenv("OLLAMA_REVISE_MODEL",
+                                 os.getenv("OLLAMA_MODEL", "qwen2.5:7b"))
+
+        logger.info(f"[Revise LLM] Ollama | BASE_URL={ollama_base_url} | MODEL={ollama_model}")
+
+        return ChatOllama(
+            base_url=ollama_base_url,
+            model=ollama_model,
+            temperature=0.7,
+            streaming=True,
+            keep_alive=-1
+        )
 
 
 # Status message variations for better UX
