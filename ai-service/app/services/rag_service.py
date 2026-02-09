@@ -350,6 +350,7 @@ class RAGRetrieval:
         entry = {
             "content": result.get("content", ""),
             "doc_id": result.get("doc_id"),
+            "chunk_id": result.get("chunk_id"),  # 添加 chunk_id
             "kb_id": result.get("kb_id"),
             "chunk_index": result.get("chunk_index"),
             "content_type": result.get("content_type", "unknown"),

@@ -76,12 +76,14 @@ class MathTextbookRetrieval(RAGRetrieval):
             # Format results - use context_text from metadata
             documents = []
             if results and results.get("documents") and len(results["documents"]) > 0:
+                result_ids = results.get("ids", [[]])[0]  # Get chunk_ids from ChromaDB
                 for i, doc_text in enumerate(results["documents"][0]):
                     distance = results["distances"][0][i] if results.get("distances") else 1.0
                     # Convert distance to similarity score (0-1)
                     similarity = max(0.0, 1.0 - distance)
 
                     metadata = results["metadatas"][0][i] if results.get("metadatas") else {}
+                    chunk_id = result_ids[i] if i < len(result_ids) else None
 
                     # For math textbook, use context_text (answer) as content
                     # Fall back to document text if context_text not available
@@ -91,6 +93,7 @@ class MathTextbookRetrieval(RAGRetrieval):
                         "content": content,
                         "score": similarity,
                         "doc_id": metadata.get("doc_id"),
+                        "chunk_id": chunk_id,  # 添加 chunk_id 用于后续查询 teaching_script_tts
                         "kb_id": metadata.get("kb_id"),
                         "chunk_index": metadata.get("chunk_index"),
                         "content_type": metadata.get("content_type", "unknown"),
@@ -198,6 +201,7 @@ class MathTextbookRetrieval(RAGRetrieval):
                         "content": content,
                         "score": normalized_score,
                         "doc_id": source.get("doc_id"),
+                        "chunk_id": source.get("chunk_id"),  # 添加 chunk_id
                         "kb_id": source.get("kb_id"),
                         "chunk_index": source.get("chunk_index"),
                         "content_type": source.get("content_type", "unknown"),
