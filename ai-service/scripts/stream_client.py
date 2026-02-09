@@ -10,17 +10,17 @@ OpenAI-style streaming client for /api/chat/v1/chat/completions.
 =======
 
 【快速开始】（使用默认参数）
-  python ai-service/scripts/stream_client.py --query "你好"
+  PYTHONPATH=. python scripts/stream_client.py --query "你好"
 
 【指定服务器】
   # 本地开发服务器
-  python ai-service/scripts/stream_client.py --host http://192.168.8.233:8100 --query "你好"
+  python scripts/stream_client.py --host http://192.168.8.233:8100 --query "你好"
 
   # 生产服务器
-  python ai-service/scripts/stream_client.py --host http://192.168.8.233:8100 --query "你好"
+  python scripts/stream_client.py --host http://192.168.8.233:8100 --query "你好"
 
 【指定员工/用户/会话】
-  python ai-service/scripts/stream_client.py \\
+  python scripts/stream_client.py \\
     --host http://192.168.8.233:8100 \\
     --employee_id 29 \\
     --user_id 3 \\
@@ -29,13 +29,13 @@ OpenAI-style streaming client for /api/chat/v1/chat/completions.
 
 【完整示例】
   # 知识库问答
-  python ai-service/scripts/stream_client.py --query "介绍集合的概念"
+  python scripts/stream_client.py --query "介绍集合的概念"
 
   # 实时信息查询（自动触发联网搜索）
-  python ai-service/scripts/stream_client.py --query "北京天气咋样"
+  python scripts/stream_client.py --query "北京天气咋样"
 
   # 学术研究问答
-  python ai-service/scripts/stream_client.py --query "数据资产通过哪两条重要途径推动企业新质生产力发展？"
+  python scripts/stream_client.py --query "数据资产通过哪两条重要途径推动企业新质生产力发展？"
 
 =======
 默认参数
@@ -248,9 +248,9 @@ def main():
         """
     )
     parser.add_argument("--host", default="http://192.168.8.233:8100", help="Base host (including port), 默认: http://192.168.8.233:8100")
-    parser.add_argument("--employee_id", default="33", help="Employee ID, 默认: 29")
+    parser.add_argument("--employee_id", default="29", help="Employee ID, 默认: 29")
     parser.add_argument("--user_id", default="3", help="User ID, 默认: 3")
-    parser.add_argument("--session_id", default="sess_4_3_33", help="Session ID, 默认: sess_4_3_29")
+    parser.add_argument("--session_id", default="sess_4_3_29", help="Session ID, 默认: sess_4_3_29")
     parser.add_argument("--model", default="qwen2.5:7b", help="Model name, 默认: qwen2.5:7b")
 
     # 新增参数

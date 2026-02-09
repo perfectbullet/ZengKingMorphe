@@ -3,12 +3,14 @@ Chat stream response generator for /v2/chat/completions endpoint.
 
 This version preserves the original behavior without modifications.
 """
+import os
 import re
 import random
 import time
 import json
 import hashlib
 from datetime import datetime
+from pathlib import Path
 from typing import AsyncGenerator, Optional
 
 from app.models.schemas import OpenAIChatRequest
@@ -16,6 +18,8 @@ from app.models.database import StreamChunkModel
 from app.core.logging import get_logger
 from app.core.database import get_database
 from app.services.conversation_service import conversation_workflow
+from langchain_openai import ChatOpenAI
+from langchain_community.chat_models import ChatOllama
 
 logger = get_logger(__name__)
 
@@ -39,6 +43,74 @@ def _clean_user_query(text: str) -> str:
     text = text.lstrip()
 
     return text
+
+
+def _load_revise_prompt() -> str:
+    """Load the system prompt for math formula voice explanation."""
+    # chat_stream_v2.py is at: app/api/endpoints/chat_stream_v2.py
+    # prompts dir is at: prompts/ (from ai-service root)
+    # So we need: app/api/endpoints/ -> app/api/ -> app/ -> ai-service/ -> prompts/
+    prompt_path = Path(__file__).parent.parent.parent.parent / "prompts" / "数学公式口语化讲解.txt"
+    try:
+        with open(prompt_path, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        logger.warning(f"Prompt file not found: {prompt_path}, using default prompt")
+        return "你是一个数学公式口语化讲解专家。请将用户输入的数学公式和概念，用纯粹、流畅、易于理解的自然语言解释，完全不含任何数学符号或特殊格式，专为语音播报场景设计。"
+
+
+def _get_revise_llm():
+    """
+    Get LLM instance for text revision (voice-friendly output).
+
+    Supports:
+    - siliconflow: SiliconFlow API (recommended)
+    - ollama: Local Ollama
+
+    Environment Variables:
+    - REVISE_PROVIDER: Provider type (siliconflow or ollama), default siliconflow
+    - OPENAI_API_KEY: SiliconFlow API key
+    - OPENAI_API_BASE: SiliconFlow API base URL
+    - OPENAI_REVISE_MODEL: SiliconFlow model name (default: deepseek-ai/DeepSeek-V3)
+    - OLLAMA_BASE_URL: Ollama base URL (default: http://localhost:11434)
+    - OLLAMA_REVISE_MODEL: Ollama model name (default: qwen2.5:7b)
+    """
+    # Get provider from env, default siliconflow
+    provider = os.getenv("REVISE_PROVIDER", "siliconflow").lower()
+
+    if provider == "siliconflow":
+        api_key = os.getenv("OPENAI_API_KEY")
+        api_base = os.getenv("OPENAI_API_BASE", "https://api.siliconflow.cn/v1")
+        model = os.getenv("OPENAI_REVISE_MODEL",
+                         os.getenv("OPENAI_MODEL", "deepseek-ai/DeepSeek-V3"))
+
+        if not api_key:
+            logger.warning("OPENAI_API_KEY not set for SiliconFlow")
+
+        logger.info(f"[Revise LLM] SiliconFlow | API_BASE={api_base} | MODEL={model}")
+
+        return ChatOpenAI(
+            base_url=api_base,
+            api_key=api_key or "",  # Allow empty, let API handle error
+            model=model,
+            temperature=0.7,
+            streaming=True,
+        )
+    else:
+        # Use Ollama
+        ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+        ollama_model = os.getenv("OLLAMA_REVISE_MODEL",
+                                 os.getenv("OLLAMA_MODEL", "qwen2.5:7b"))
+
+        logger.info(f"[Revise LLM] Ollama | BASE_URL={ollama_base_url} | MODEL={ollama_model}")
+
+        return ChatOllama(
+            base_url=ollama_base_url,
+            model=ollama_model,
+            temperature=0.7,
+            streaming=True,
+            keep_alive=-1
+        )
 
 
 # Status message variations for better UX
@@ -432,6 +504,78 @@ async def generate_openai_stream_v2(
 
                     # 保存对话并退出
                     await conversation_workflow.save_conversation(final_state)
+
+                    # 这里的输出会发生给语音合成服务
+                    # 优先使用 teaching_script_tts，如果为空或查询不到则走 LLM 转换逻辑
+                    chunk_id = direct_match.get("chunk_id")
+                    teaching_script_tts = None
+
+                    # 从 MongoDB 查询 teaching_script_tts
+                    if chunk_id:
+                        try:
+                            tts_chunk = await db.document_chunks.find_one(
+                                {"chunk_id": chunk_id},
+                                {"teaching_script_tts": 1}
+                            )
+                            if tts_chunk:
+                                teaching_script_tts = tts_chunk.get("teaching_script_tts")
+                                logger.info(f"Found teaching_script_tts for chunk_id={chunk_id}, length={len(teaching_script_tts) if teaching_script_tts else 0}")
+                                logger.info(f"teaching_script_tts content: {teaching_script_tts}")
+                        except Exception as e:
+                            logger.warning(f"Failed to query teaching_script_tts: {e}")
+
+                    # 如果 teaching_script_tts 存在且非空，直接流式输出；否则走 LLM 转换
+                    if teaching_script_tts and teaching_script_tts.strip():
+                        # 直接输出 teaching_script_tts
+                        logger.info(f"Using teaching_script_tts directly, length={len(teaching_script_tts)}")
+                        for char in teaching_script_tts:
+                            token_chunk_data = {
+                                "id": chat_id,
+                                "object": "chat.completion.chunk",
+                                "created": created,
+                                "model": request.model,
+                                "choices": [{
+                                    "index": 0,
+                                    "delta": {"content": char},
+                                    "finish_reason": None,
+                                }],
+                            }
+                            chunk_sequence += 1
+                            yield json.dumps(token_chunk_data)
+                        logger.info(f"teaching_script_tts output completed: {len(teaching_script_tts)} chars")
+                    else:
+                        # teaching_script_tts 为空或查询不到，走 LLM 转换逻辑
+                        logger.info("teaching_script_tts not found, using LLM to revise for voice output")
+                        system_prompt = _load_revise_prompt()
+                        revise_llm = _get_revise_llm()
+                        revise_messages = [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": existing_answer}
+                        ]
+                        revised_answer = ""
+                        async for chunk in revise_llm.astream(revise_messages):
+                            token = chunk.content
+                            if token:
+                                revised_answer += token
+                                token_chunk_data = {
+                                    "id": chat_id,
+                                    "object": "chat.completion.chunk",
+                                    "created": created,
+                                    "model": request.model,
+                                    "choices": [{
+                                        "index": 0,
+                                        "delta": {"content": token},
+                                        "finish_reason": None,
+                                    }],
+                                }
+                                chunk_sequence += 1
+                                yield json.dumps(token_chunk_data)
+
+                        logger.info("Answer revised for voice output: ")
+                        logger.info(f"original={existing_answer}")
+                        logger.info(f"revised_answer={revised_answer}")
+
+                    # Break out of workflow loop
                     break
 
                 # Build messages for LLM

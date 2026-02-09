@@ -306,15 +306,15 @@ class MathTextbookProcessor:
         print("-" * 80)
 
         try:
-            qa_data, qa_stats = self._parse_json_file(self.qa_json_path, "qa")
-            if qa_data:
-                print(f"\n  QA File: {self.qa_json_path.name}")
-                print(f"    Book Title: {qa_data.get('book_title', 'N/A')}")
-                print(f"    Chapters: {qa_stats.get('chapters', 0)}")
-                print(f"    Sections: {qa_stats.get('sections', 0)}")
-                print(f"    QA Pairs: {qa_stats.get('items', 0)}")
-            else:
-                print(f"\n  QA File not found: {self.qa_json_path.name}")
+            # qa_data, qa_stats = self._parse_json_file(self.qa_json_path, "qa")
+            # if qa_data:
+            #     print(f"\n  QA File: {self.qa_json_path.name}")
+            #     print(f"    Book Title: {qa_data.get('book_title', 'N/A')}")
+            #     print(f"    Chapters: {qa_stats.get('chapters', 0)}")
+            #     print(f"    Sections: {qa_stats.get('sections', 0)}")
+            #     print(f"    QA Pairs: {qa_stats.get('items', 0)}")
+            # else:
+            #     print(f"\n  QA File not found: {self.qa_json_path.name}")
 
             script_data, script_stats = self._parse_json_file(self.script_json_path, "teaching_script")
             if script_data:
@@ -327,7 +327,7 @@ class MathTextbookProcessor:
                 print(f"\n  Teaching Script File not found: {self.script_json_path.name}")
 
             self.results["parse_result"] = {
-                "qa": qa_stats,
+                # "qa": qa_stats,
                 "teaching_script": script_stats,
             }
 

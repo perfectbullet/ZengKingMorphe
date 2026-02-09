@@ -311,9 +311,14 @@ class ConversationNodes:
 用户查询: {query}
 
 评分标准：
-- 0-3分（简单）：直接的事实问答、天气/价格查询、简单知识查询
-- 4-6分（中等）：需要一定推理、涉及多个方面、需要上下文理解
-- 7-10分（复杂）：需要多步推理、模糊问题需要意图澄清、多文档综合分析
+- 0-3分（简单）：直接的事实问答、天气/价格查询、问候语、简单常识
+- 4-6分（中等）：概念解释、定义问题、需要一定推理的知识问答
+- 7-10分（复杂）：需要多步推理、模糊问题、需要深度分析或综合多个知识点
+
+特别注意：
+- 数学概念定义类问题（如"什么是xxx定理"、"xxx公式是什么"）通常评 4-5 分, 在 "reason"的值为 `数学概念`
+- 数学证明推导类问题（如"证明xxx"、"为什么xxx成立"）评 6-8 分， 在 "reason"的值为 `数学概念`
+- 数学相关的问题，在 "reason"的值为 `数学相关`
 
 请以JSON格式返回：
 {{"score": 分数0-10, "reason": "简短原因说明"}}
@@ -776,6 +781,7 @@ class ConversationNodes:
                         state["direct_match"] = {
                             "content_type": content_type,
                             "doc_id": top_doc.get("doc_id"),
+                            "chunk_id": top_doc.get("chunk_id"),  # 添加 chunk_id 用于查询 teaching_script_tts
                             "rerank_score": float(rerank_score) if rerank_score else 0.0,
                             "content_snippet": direct_content[:100]
                         }
@@ -784,6 +790,7 @@ class ConversationNodes:
                             content_type=content_type,
                             rerank_score=float(rerank_score) if rerank_score else 0.0,
                             doc_id=top_doc.get("doc_id"),
+                            chunk_id=top_doc.get("chunk_id"),
                             answer_length=len(direct_content)
                         )
 
