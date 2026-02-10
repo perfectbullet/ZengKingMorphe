@@ -132,17 +132,17 @@ ai-service/
 
 ### 数字员工管理
 
-- `POST /api/ai/digital-employee/create` - 创建数字员工
-- `GET /api/ai/digital-employee/{employee_id}` - 获取数字员工信息
-- `PUT /api/ai/digital-employee/{employee_id}` - 更新数字员工配置
-- `DELETE /api/ai/digital-employee/{employee_id}` - 删除数字员工
-- `GET /api/ai/digital-employee/list` - 列出数字员工
+- `POST /api/employee/create` - 创建数字员工
+- `GET /api/employee/{employee_id}` - 获取数字员工信息
+- `PUT /api/employee/{employee_id}` - 更新数字员工配置
+- `DELETE /api/employee/{employee_id}` - 删除数字员工
+- `GET /api/employee/list` - 列出数字员工
 
 ### Webhook 接口
 
-- `POST /api/ai/sensitive-words/sync-notify` - 敏感词同步通知
-- `POST /api/ai/professional-words/sync-notify` - 专业词同步通知
-- `POST /api/ai/faq/sync-notify` - FAQ 同步通知
+- `POST /api/thesaurus_sensitive/update` - 敏感词同步更新
+- `POST /api/thesaurus_major/update` - 专业词同步更新
+- `POST /api/dataset_faq/update` - FAQ 更新
 
 ## 开发计划
 

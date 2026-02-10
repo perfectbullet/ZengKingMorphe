@@ -279,39 +279,38 @@ async def sync_digital_employee_config(db, request_employee_id: str, external_da
 async def create_session(
     request: CreateSessionRequest,
     api_key: str = Depends(get_api_key),
-    db = Depends(get_database)
+    db=Depends(get_database)
 ):
     """
-    创建新会话（集成外部API调用和FAQ向量化）。
-    
-    **请求参数**：
-    - `user_id` (required, str): 用户唯一标识，用于关联用户身份和对话历史
-    - `employee_id` (required, str): 数字员工ID，用于调用外部API获取员工配置
-    - `session_id` (optional, str): 客户端指定的会话ID，支持幂等创建（格式: sess_{12位MD5})
-    - `metadata` (optional, dict): 会话元数据，用于记录会话上下文信息
-        - `platform`: 来源平台（web/mobile/desktop）
-        - `device`: 设备类型（desktop/mobile/tablet）
-        - `source`: 来源页面（homepage/chatbot/embed）
-        - `user_agent`: 浏览器User-Agent
-        - `ip_address`: 客户端IP地址
-    
-    **响应数据**：
-    - `session_id` (str): 自动生成的会话ID（格式: sess_{12位MD5哈希}）
-    - `user_id` (str): 用户ID
-    - `employee_id` (str): 员工ID
-    - `status` (str): 会话状态（"active" | "ended"）
-    - `message_count` (int): 消息数量（初始为0）
-    - `context_messages` (list): 上下文消息列表（初始为空）
-    - `created_at` (str): 创建时间（ISO 8601格式）
-    - `last_activity` (str): 最后活动时间（ISO 8601格式）
-    - `ended_at` (str|null): 结束时间（初始为null）
-    - `metadata` (dict): 会话元数据（来自请求）
-    
-    Returns:
+        创建新会话（集成外部API调用和FAQ向量化）。
 
-        - 201: Created session information with session_id and metadata
-        - 200: Existing session returned for idempotent request
+        **请求参数**：
+        - `user_id` (required, str): 用户唯一标识，用于关联用户身份和对话历史
+        - `employee_id` (required, str): 数字员工ID，用于调用外部API获取员工配置
+        - `session_id` (optional, str): 客户端指定的会话ID，支持幂等创建（格式: sess_{12位MD5})
+        - `metadata` (optional, dict): 会话元数据，用于记录会话上下文信息
+            - `platform`: 来源平台（web/mobile/desktop）
+            - `device`: 设备类型（desktop/mobile/tablet）
+            - `source`: 来源页面（homepage/chatbot/embed）
+            - `user_agent`: 浏览器User-Agent
+            - `ip_address`: 客户端IP地址
 
+        **响应数据**：
+        - `session_id` (str): 自动生成的会话ID（格式: sess_{12位MD5哈希}）
+        - `user_id` (str): 用户ID
+        - `employee_id` (str): 员工ID
+        - `status` (str): 会话状态（"active" | "ended"）
+        - `message_count` (int): 消息数量（初始为0）
+        - `context_messages` (list): 上下文消息列表（初始为空）
+        - `created_at` (str): 创建时间（ISO 8601格式）
+        - `last_activity` (str): 最后活动时间（ISO 8601格式）
+        - `ended_at` (str|null): 结束时间（初始为null）
+        - `metadata` (dict): 会话元数据（来自请求）
+
+        Returns:
+
+            - 201: Created session information with session_id and metadata
+            - 200: Existing session returned for idempotent request
     """
     def _format_session_doc(session_doc: dict) -> dict:
         formatted = session_doc.copy()
@@ -326,26 +325,26 @@ async def create_session(
         logger.info(f"Create session request: user_id={request.user_id}, employee_id={request.employee_id}")
         
         # Step 1: Fetch external employee data
-        external_data = await fetch_external_employee_data(request.employee_id)
-        
-        if external_data:
-            # Step 2: 同步数字员工配置、FAQs到MongoDB
-            synced_employee_id = await sync_digital_employee_config(db, request.employee_id, external_data)
-            
-            if synced_employee_id:
-                # Step 3: Trigger FAQ vectorization task (async background)
-                from app.services.task_processor import task_processor
-                
-                faqs_count = len(external_data["setting"]["knowledge"]["faqs"])
-                
-                if faqs_count > 0:
-                    employee_name = external_data["employee"]["name"]
-                    # task_id = await task_processor.submit_faq_vectorization_task_by_employee_id(
-                    #     employee_id=synced_employee_id
-                    # )
-                    # logger.info(f"FAQ vectorization task submitted: task_id={task_id}, employee_id={synced_employee_id} ({employee_name}), faq_count={faqs_count}")
-        else:
-            logger.warning(f"Failed to fetch external employee data for {request.employee_id}, using existing config")
+        # external_data = await fetch_external_employee_data(request.employee_id)
+        #
+        # if external_data:
+        #     # Step 2: 同步数字员工配置、FAQs到MongoDB
+        #     synced_employee_id = await sync_digital_employee_config(db, request.employee_id, external_data)
+        #
+        #     if synced_employee_id:
+        #         # Step 3: Trigger FAQ vectorization task (async background)
+        #         from app.services.task_processor import task_processor
+        #
+        #         faqs_count = len(external_data["setting"]["knowledge"]["faqs"])
+        #
+        #         if faqs_count > 0:
+        #             employee_name = external_data["employee"]["name"]
+        #             # task_id = await task_processor.submit_faq_vectorization_task_by_employee_id(
+        #             #     employee_id=synced_employee_id
+        #             # )
+        #             # logger.info(f"FAQ vectorization task submitted: task_id={task_id}, employee_id={synced_employee_id} ({employee_name}), faq_count={faqs_count}")
+        # else:
+        #     logger.warning(f"Failed to fetch external employee data for {request.employee_id}, using existing config")
         
         # Step 4: Check if employee exists (either from sync or existing)
         employee = await db.digital_employee_configs.find_one({"employee_id": request.employee_id})

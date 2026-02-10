@@ -217,137 +217,6 @@ class SessionResponse(BaseModel):
     data: Dict[str, Any]
 
 
-# Digital Employee API Schemas
-class EmployeePersonality(BaseModel):
-    """Employee personality configuration."""
-    tone: str = Field(default="professional")
-    style: str = Field(default="friendly")
-    language: str = Field(default="zh-CN")
-    formality: str = Field(default="moderate")
-
-
-class EmployeeCapabilities(BaseModel):
-    """Employee capabilities configuration."""
-    kb_ids: List[str] = Field(default_factory=list)
-    web_search_enabled: bool = True
-    max_context_turns: int = 10
-    multimodal_enabled: bool = False
-
-
-class EmployeePersonalization(BaseModel):
-    """Employee personalization configuration."""
-    user_profiling_enabled: bool = True
-    personalized_recommendations: bool = True
-    adaptive_tone: bool = True
-
-
-class CreateEmployeeRequest(BaseModel):
-    """Create employee request schema."""
-    model_config = ConfigDict(
-        json_schema_extra={
-            "example": {
-                "employee_id": "emp_customer_service",
-                "name": "客服小助手",
-                "domain": "客户服务",
-                "role": "客服专员",
-                "description": "专业的客户服务数字员工，擅长解答产品问题和售后咨询",
-                "personality": {
-                    "tone": "professional",
-                    "style": "friendly",
-                    "language": "zh-CN",
-                    "formality": "moderate"
-                },
-                "capabilities": {
-                    "kb_ids": ["kb_product_manual", "kb_faq"],
-                    "web_search_enabled": True,
-                    "max_context_turns": 10,
-                    "multimodal_enabled": False
-                },
-                "greeting": "您好！我是客服小助手，很高兴为您服务。有什么我可以帮到您的吗？",
-                "hot_questions": [
-                    "如何申请退款？",
-                    "产品保修期是多久？",
-                    "如何联系人工客服？"
-                ],
-                "personalization": {
-                    "user_profiling_enabled": True,
-                    "personalized_recommendations": True,
-                    "adaptive_tone": True
-                }
-            }
-        }
-    )
-    
-    employee_id: str
-    name: str
-    domain: str
-    role: str
-    description: str
-    personality: EmployeePersonality = Field(default_factory=EmployeePersonality)
-    capabilities: EmployeeCapabilities = Field(default_factory=EmployeeCapabilities)
-    greeting: str = ""
-    hot_questions: List[str] = Field(default_factory=list)
-    personalization: EmployeePersonalization = Field(default_factory=EmployeePersonalization)
-
-
-class UpdateEmployeeRequest(BaseModel):
-    """Update employee request schema.
-
-    Supports both nested structure (personality/capabilities) and flat structure
-    for backward compatibility with existing API clients.
-    """
-    # Core fields
-    name: Optional[str] = None
-    domain: Optional[str] = None
-    role: Optional[str] = None
-    description: Optional[str] = None
-    position: Optional[str] = None
-    intro: Optional[str] = None
-
-    # Personality/Style fields (flat structure)
-    persona: Optional[str] = None
-    tone: Optional[str] = None
-    style: Optional[str] = None
-    style_desc: Optional[str] = None
-    language: Optional[str] = None
-
-    # Nested structure (for new API)
-    personality: Optional[EmployeePersonality] = None
-    capabilities: Optional[EmployeeCapabilities] = None
-    greeting: Optional[str] = None
-    personalization: Optional[EmployeePersonalization] = None
-
-    # Configuration fields (flat structure)
-    kb_ids: Optional[List[str]] = None
-    web_search_enabled: Optional[bool] = None
-    is_multimodal: Optional[bool] = None
-
-    # FAQ settings
-    faq_sim_threshold: Optional[float] = None
-    faq_top_k: Optional[int] = None
-
-    # Prologue settings
-    prologue: Optional[str] = None
-    is_opening_questions: Optional[bool] = None
-
-    # Custom prompt
-    is_my_prompt: Optional[bool] = None
-    my_prompt: Optional[str] = None
-
-    # Display settings
-    is_show_sign: Optional[bool] = None
-    portrait: Optional[str] = None
-    model_image: Optional[str] = None
-
-    # Status
-    onduty_status: Optional[str] = None
-    status: Optional[str] = None
-
-    # Metadata
-    metadata: Optional[Dict[str, Any]] = None
-    hot_questions: Optional[List[str]] = None
-
-
 # Knowledge Base API Schemas
 class KnowledgeBaseConfig(BaseModel):
     """Knowledge base configuration."""
@@ -386,7 +255,7 @@ class CreateKnowledgeBaseRequest(BaseModel):
 class UpdateKnowledgeBaseRequest(BaseModel):
     """Update knowledge base request schema."""
     kb_id: str = Field(..., description="Knowledge base ID")
-    name: Optional[str] = Field(..., description="Knowledge base Name")
+    name: str = Field(..., description="Knowledge base Name")
     description: Optional[str] = ""
     priority: Optional[str] = "medium"
     tags: List[str] = Field(default_factory=list)
@@ -675,11 +544,11 @@ class ExternalKnowledgeConfig(BaseModel):
 
 class ExternalPrologueConfig(BaseModel):
     """外部API开场白配置。"""
-    prologue: Optional[str] = Field(None, description="开场白文本")
-    is_opening_questions: bool = Field(False, alias="isOpeningQuestions", description="是否开启问题")
-    question_type: int = Field(0, alias="questionType", description="问题类型")
+    prologue: Optional[str] = Field(None, description="开场白内容")
+    is_opening_questions: bool = Field(False, description="是否开启开场热门问题")
+    question_type: int = Field(0, description="热门问题类型: 1-自动推荐 2-FAQ 3-自定义")
     faqs: List[ExternalFAQItem] = Field(default_factory=list, description="开场推荐FAQ列表")
-    my_questions: List[str] = Field(default_factory=list, alias="myQuestions", description="自定义问题列表")
+    my_questions: List[str] = Field(default_factory=list, description="自定义问题列表")
     
     model_config = ConfigDict(populate_by_name=True)
 
@@ -741,26 +610,29 @@ class ExternalRoleConfig(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
-class ExternalSettingConfig(BaseModel):
+class EmployeeSettingConfig(BaseModel):
     """外部API设置配置。"""
-    knowledge: ExternalKnowledgeConfig = Field(..., description="知识配置")
-    prologue: ExternalPrologueConfig = Field(..., description="开场白配置")
-    rule: ExternalRuleConfig = Field(..., description="规则配置")
-    role: ExternalRoleConfig = Field(..., description="角色配置")
-    employee_id: str = Field('', description="员工ID")
+    employee_id: int = Field('', description="数字员工id")
+    knowledge: ExternalKnowledgeConfig = Field(..., description="对话准备--知识库配置")
+    prologue: ExternalPrologueConfig = Field(..., description="对话开始--开场白配置")
+    rule: ExternalRuleConfig = Field(..., description="对话中--规则规则、异常或未匹配规则、安全规则配置")
+    role: ExternalRoleConfig = Field(..., description="角色--人设配置")
+    plugins: str = Field(..., description="高级设置--插件配置")
+    major_word: str = Field(..., description="高级设置--专业词库配置")
+
     model_config = ConfigDict(populate_by_name=True)
 
 
 class ExternalEmployeeAPIData(BaseModel):
     """外部API完整数据结构（data字段）。"""
     employee: ExternalEmployeeInfo = Field(..., description="员工信息")
-    setting: ExternalSettingConfig = Field(..., description="设置配置")
+    setting: EmployeeSettingConfig = Field(..., description="对话设定")
     
     model_config = ConfigDict(populate_by_name=True)
 
 
 class ExternalEmployeeAPIResponse(BaseModel):
-    """外部API响应结构。"""
+    """ 数字员工请求参数对象 """
     status: int = Field(..., description="状态码")
     message: str = Field(..., description="消息")
     data: ExternalEmployeeAPIData = Field(..., description="数据内容")
@@ -894,3 +766,166 @@ class ThesaurusRequest(BaseModel):
     is_enable: int = Field(1, description="是否启用：0=不启用，1=启用")
     update_time: Optional[str] = Field(None, description="更新时间")
     thesaurus_words: List[ThesaurusWord] = Field(default_factory=list, description="词条名称列表")
+
+
+class CreateEmployeeRequest(BaseModel):
+    """ 创建数字员工请求参数对象 """
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "employee_id": 23,
+                "team_id": 28,
+                "name": "陈晓燕",
+                "position": "校园助教",
+                "employee_type": "FULL",
+                "tone": "intellectual",
+                "language": "mandarin",
+                "gender": 2,
+                "intro": "心理关怀/n辅导员",
+                "portrait": "/edu-api/fileserver/default/image/2026/2/5/371587a2-ef39-4c04-83ea-991e15e33801.png",
+                "model_image": "/edu-api/fileserver/default/image/2026/2/5/371587a2-ef39-4c04-83ea-991e15e33801.png",
+                "digital_code": "suwenxin",
+                "onduty_status": 1,
+                "create_time": "2025-12-17 16:49:29",
+                "update_time": "2025-12-17 16:49:29"
+            }
+        }
+    )
+
+    employee_id: int = Field(..., description="数字员工id")
+    team_id: int = Field(..., description="团队id")
+    name: str = Field(..., description="员工名称")
+    position: str = Field(None, description="职位")
+    employee_type: str = Field(..., description="数字员工类型: AVATAR=头像, HALF=半身, FULL=全身")
+    tone: str = Field(..., description="音色")
+    language: str = Field(..., description="语言")
+    gender: int = Field(0, description="数字员工性别: 1-男 2-女, 0-未知")
+    intro: str = Field(..., description="数字员工简介")
+    portrait: str = Field(..., description="头像地址")
+    model_image: str = Field(..., description="模型图片或模型地址")
+    digital_code: str = Field(..., description="数字人在AI平台的唯一编码")
+    onduty_status: int = Field(0, description="值班状态: 0-休息中，1-值班中")
+    create_time: str = Field(None, description="创建时间")
+    update_time: str = Field(None, description="更新时间")
+
+
+class UpdateEmployeeRequest(BaseModel):
+    """ 修改数字员工请求参数对象 """
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "employee_id": 23,
+                "team_id": 28,
+                "name": "陈晓燕",
+                "position": "校园助教",
+                "employee_type": "FULL",
+                "tone": "intellectual",
+                "language": "mandarin",
+                "update_time": "2025-12-17 16:49:29"
+            }
+        }
+    )
+
+    employee_id: int = Field(..., description="数字员工id")
+    team_id: int = Field(..., description="团队id")
+    name: str = Field(..., description="员工名称")
+    position: str = Field(None, description="职位")
+    employee_type: str = Field(..., description="数字员工类型: AVATAR=头像, HALF=半身, FULL=全身")
+    tone: str = Field(..., description="音色")
+    language: str = Field(..., description="语言")
+    update_time: Optional[str] = Field(None, description="更新时间")
+
+
+class EmployeeSettingKnowledge(BaseModel):
+    kb_ids: List[str] = Field(default_factory=list, description="知识库id列表")
+    faqs: List[DatasetFaqRequest] = Field(default_factory=list, description="FAQ问答列表")
+    video_ids: List[str] = Field(default_factory=list, description="视频资源id列表")
+
+
+class EmployeeSettingPrologue(BaseModel):
+    prologue: Optional[str] = Field(None, description="开场白内容")
+    is_opening_questions: bool = Field(False, description="是否开启开场热门问题")
+    prologue_question_type: int = Field(None, description="热门问题类型: 1-自动推荐 2-FAQ 3-自定义")
+    prologue_faqs: Optional[List[str]] = Field(default_factory=list, description="开场热门问题关联FAQ列表")
+    hot_questions: Optional[List[str]] = Field(default_factory=list, description="开场热门问题自定义列表")
+
+
+class EmployeeSettingChatRule(BaseModel):
+    is_multimodal: bool = Field(False, description="是否支持多模态")
+    fixed_answer: Optional[str] = Field(None, description="关闭图片理解后返回的固定回复话术")
+    faq_sim_threshold: Optional[float] = Field(None, description="FAQ相似度阈值")
+    faq_top_k: Optional[int] = Field(None, description="FAQ最多推荐数量")
+
+
+class EmployeeSettingUnusualRule(BaseModel):
+    exception_reply: Optional[str] = Field(None, description="系统异常时的回复话术")
+    not_match_reply_type: Optional[int] = Field(None, description="未匹配时的回复类型：0：固定话术，1：模型闲聊回复")
+    fixed_replys: Optional[List[str]] = Field(None, description="not_match_reply_type=0时的固定回复列表")
+    is_web_search: bool = Field(False, description="not_match_reply_type=1时的模型闲聊回复：是否联网搜索")
+    is_show_sign: bool = Field(False, description="not_match_reply_type=1时的模型闲聊回复：是否显示标识")
+    is_my_prompt: bool = Field(False, description="not_match_reply_type=1时的模型闲聊回复：是否启用自定义提示词")
+    my_prompt: Optional[str] = Field(None, description="not_match_reply_type=1时的模型闲聊回复：自定义提示词内容")
+
+
+class EmployeeSettingSafeRule(BaseModel):
+    is_reject_answer: bool = Field(False, description="命中敏感词时是否拒绝回答")
+    reject_answer: Optional[str] = Field(None, description="拒绝回答时的回复内容")
+    thesaurus_sensitive: List[ThesaurusRequest] = Field(default_factory=list, description="敏感词库列表")
+
+
+class EmployeeSettingRole(BaseModel):
+    persona: Optional[str] = Field(None, description="人设")
+    style: Optional[str] = Field(None, description="风格名称")
+    style_desc: Optional[str] = Field(None, description="风格描述")
+
+
+class EmployeeSettingPlugin(BaseModel):
+    plugin_id: int = Field(..., description="插件id")
+    plugin_name: str = Field(None, description="插件名称")
+    plugin_code: Optional[str] = Field(None, description="插件编码")
+    plugin_intro: Optional[str] = Field(None, description="插件简介")
+    plugin_icon: Optional[str] = Field(None, description="插件图标")
+    plugin_params: Optional[str] = Field(None, description="插件参数")
+
+
+class EmployeePersonality(BaseModel):
+    """Employee personality configuration."""
+    tone: str = Field(default="professional")
+    style: str = Field(default="friendly")
+    language: str = Field(default="zh-CN")
+
+
+class EmployeeCapabilities(BaseModel):
+    """Employee capabilities configuration."""
+    kb_ids: List[str] = Field(default_factory=list)
+    is_web_search: bool = True
+    max_context_turns: int = 10
+    multimodal_enabled: bool = False
+
+
+class EmployeePersonalization(BaseModel):
+    """Employee personalization configuration."""
+    user_profiling_enabled: bool = True
+    personalized_recommendations: bool = True
+    adaptive_tone: bool = True
+
+
+class UpdateEmployeeSettingRequest(BaseModel):
+    """ 数字员工对话设定请求参数对象 """
+    employee_id: int = Field(..., description="数字员工id")
+    update_time: str = Field(None, description="更新时间")
+    knowledge: EmployeeSettingKnowledge = Field(None, description="对话准备--知识库配置")
+    prologue: EmployeeSettingPrologue = Field(None, description="对话开始--开场白、开场热门问题")
+    chat_rule: EmployeeSettingChatRule = Field(None, description="对话中--对话规则")
+    unusual_rule: EmployeeSettingUnusualRule = Field(None, description="对话中--异常或未匹配规则")
+    safe_rule: EmployeeSettingSafeRule = Field(None, description="对话中--安全规则配置")
+    role: EmployeeSettingRole = Field(None, description="角色--人设")
+    plugins: List[EmployeeSettingPlugin] = Field(default_factory=list, description="高级设置--插件")
+    thesaurus_major: List[ThesaurusRequest] = Field(default_factory=list, description="高级设置--专业词库列表")
+    # Nested structure (for new API) 具体作用？
+    # personality: Optional[EmployeePersonality] = None
+    # capabilities: Optional[EmployeeCapabilities] = None
+    # greeting: Optional[str] = None
+    # personalization: Optional[EmployeePersonalization] = None
+    # metadata: Optional[Dict[str, Any]] = None
+

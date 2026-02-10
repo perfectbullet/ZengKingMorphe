@@ -1,7 +1,7 @@
 """
 MongoDB database connection and operations.
 """
-from typing import Optional, List, Dict, Any
+from typing import Optional
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from pymongo import IndexModel, ASCENDING, DESCENDING
 from app.core.config import settings

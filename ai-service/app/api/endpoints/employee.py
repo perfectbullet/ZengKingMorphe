@@ -1,191 +1,294 @@
 """
-Digital Employee management API endpoints.
+    数字员工接口服务
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status, Path, Query, Body
+from fastapi import APIRouter, Depends, HTTPException, status, Path, Query
 from datetime import datetime
 
-from app.models.schemas import CreateEmployeeRequest, UpdateEmployeeRequest
+from app.models.database import DigitalEmployeeConfigModel, DigitalEmployeeConfigSettingModel
+from app.models.schemas import CreateEmployeeRequest, UpdateEmployeeRequest, ResponseResult, \
+    UpdateEmployeeSettingRequest
 from app.api.middleware.auth import get_api_key
 from app.core.database import get_database
 from app.core.logging import get_logger
+from app.services.dataset_faq_service import faq_processor
+from app.services.thesaurus_major_service import thesaurus_major_processor
+from app.services.thesaurus_sensitive_service import thesaurus_sensitive_processor
 
 logger = get_logger(__name__)
 
 router = APIRouter()
 
 
-@router.get("/list")
-async def list_employees(
-    limit: int = Query(10, ge=1, le=100, description="Maximum number of employees to return"),
-    api_key: str = Depends(get_api_key),
-    db=Depends(get_database),
-):
-    """
-    获取数字员工列表（前N个）。
-
-    \nArgs:
-        \n- limit: 返回的最大数量（默认10，最大100）
-        \n- api_key: API key from auth
-        \n- db: Database instance
-
-    \nReturns:
-        \n- Employee list with total count
-    """
-    try:
-        logger.info(f"List employees request: limit={limit}")
-
-        # 查询员工列表，按创建时间倒序
-        cursor = db.digital_employee_configs.find().sort("created_at", -1).limit(limit)
-        employees = await cursor.to_list(length=limit)
-
-        # 统计总数
-        total = await db.digital_employee_configs.count_documents({})
-
-        # 格式化返回数据
-        result = []
-        for emp in employees:
-            emp.pop("_id", None)
-            emp["created_at"] = emp["created_at"].isoformat() + "Z"
-            emp["updated_at"] = emp["updated_at"].isoformat() + "Z"
-            if emp.get("synced_at"):
-                emp["synced_at"] = emp["synced_at"].isoformat() + "Z"
-            result.append(emp)
-
-        return {
-            "code": 200,
-            "message": "success",
-            "data": {
-                "total": total,
-                "count": len(result),
-                "employees": result,
-            }
-        }
-
-    except Exception as e:
-        logger.exception(f"List employees error: limit={limit}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to list employees",
-        )
-
-
-@router.get("/detail/{employee_id}")
-async def get_employee(
-    employee_id: str = Path(..., description="Employee ID"),
-    api_key: str = Depends(get_api_key),
-    db=Depends(get_database),
-):
-    """
-    获取数字员工配置。
-
-    \nArgs:
-        \n- employee_id: Employee ID
-        \n- api_key: API key from auth
-        \n- db: Database instance
-
-    \nReturns:
-        \n- Employee configuration
-    """
-    try:
-        logger.info(f"Get employee request: employee_id={employee_id}")
-
-        employee = await db.digital_employee_configs.find_one({"employee_id": employee_id})
-
-        if not employee:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found"
-            )
-
-        # Convert MongoDB document to dict
-        employee.pop("_id", None)
-        employee["created_at"] = employee["created_at"].isoformat() + "Z"
-        employee["updated_at"] = employee["updated_at"].isoformat() + "Z"
-        if employee.get("synced_at"):
-            employee["synced_at"] = employee["synced_at"].isoformat() + "Z"
-
-        return {"code": 200, "message": "success", "data": employee}
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception(f"Get employee error: employee_id={employee_id}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to get employee",
-        )
-
-
 @router.post("/create")
 async def create_employee(
     request: CreateEmployeeRequest,
     api_key: str = Depends(get_api_key),
+    db=Depends(get_database)
+):
+    """
+        创建数字员工配置
+
+        \nArgs:
+            \n- request: 数字员工请求参数对象
+            \n- api_key: API key from auth
+            \n- db: Database instance
+
+        \nReturns:
+            \n- ResponseResult
+    """
+    employee_id = request.employee_id
+    try:
+        logger.info(f"create_employee request: employee_id={employee_id}")
+
+        employee = await db.digital_employee_configs.find_one({"employee_id": employee_id})
+        if employee:
+            return ResponseResult.error(status.HTTP_409_CONFLICT, "error",
+                                        f"create_employee already exists: employee_id={employee_id}")
+
+        insert_data = DigitalEmployeeConfigModel(
+            employee_id=employee_id,
+            external_employee_id=employee_id,
+            team_id=request.team_id,
+            name=request.name,
+            position=request.position,
+            employee_type=request.employee_type,
+            tone=request.tone,
+            language=request.language,
+            gender=request.gender,
+            intro=request.intro,
+            portrait=request.portrait,
+            model_image=request.model_image,
+            digital_code=request.digital_code,
+            onduty_status=request.onduty_status,
+            create_time=request.create_time,
+            update_time=request.update_time,
+            created_at=datetime.now(),
+            updated_at=datetime.now()
+        )
+
+        result = await db.digital_employee_configs.insert_one(insert_data.model_dump())
+
+        if result and result.inserted_id:
+            return ResponseResult.success(None)
+        else:
+            return ResponseResult.error(status.HTTP_400_BAD_REQUEST, "error",
+                                        "create_employee failed")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"create_employee exception: employee_id={employee_id} error={str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="create_employee error",
+        )
+
+
+@router.put("/update")
+async def update_employee(
+    request: UpdateEmployeeRequest,
+    api_key: str = Depends(get_api_key),
+    db=Depends(get_database)
+):
+    """
+        更新数字员工配置
+
+        \nArgs:
+            \n- request: 数字员工请求参数对象
+            \n- api_key: API key from auth
+            \n- db: Database instance
+
+        \nReturns:
+            \n- ResponseResult
+    """
+    employee_id = request.employee_id
+    try:
+        logger.info(f"update_employee request: employee_id={employee_id}")
+
+        employee = await db.digital_employee_configs.find_one({"external_employee_id": employee_id})
+        if not employee:
+            return ResponseResult.error(status.HTTP_404_NOT_FOUND, "error",
+                                        f"update_employee not found: employee_id={employee_id}")
+
+        update_data = DigitalEmployeeConfigModel(
+            team_id=request.team_id,
+            name=request.name,
+            position=request.position,
+            employee_type=request.employee_type,
+            tone=request.tone,
+            language=request.language,
+            update_time=request.update_time,
+            updated_at=datetime.now()
+        )
+        result = await db.digital_employee_configs.update_one(
+            {'external_employee_id': employee_id},
+            {"$set": update_data.model_dump()}
+        )
+
+        if result and result.modified_count == 1:
+            return ResponseResult.success(None)
+        else:
+            return ResponseResult.error(status.HTTP_400_BAD_REQUEST, "error",
+                                        "update_employee failed")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"update_employee exception: employee_id={employee_id} error={str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="update_employee error",
+        )
+
+
+@router.put("/setting/update")
+async def update_employee_setting(
+    request: UpdateEmployeeSettingRequest,
+    api_key: str = Depends(get_api_key),
+    db=Depends(get_database)
+):
+    """
+        更新数字员工对话设定
+
+        \nArgs:
+            \n- request: 数字员工对话设定请求参数对象
+            \n- api_key: API key from auth
+            \n- db: Database instance
+
+        \nReturns:
+            \n- ResponseResult
+    """
+    employee_id = request.employee_id
+    try:
+        logger.info(f"update_employee_setting request: employee_id={employee_id}")
+
+        employee = await db.digital_employee_configs.find_one({"employee_id": employee_id})
+        if not employee:
+            return ResponseResult.error(status.HTTP_404_NOT_FOUND, "error",
+                                        f"update_employee_setting not found: employee_id={employee_id}")
+
+        update_data = DigitalEmployeeConfigSettingModel(
+            employee_id=employee_id,
+            update_time=request.update_time,
+            knowledge=request.knowledge,  # 对话准备--知识库配置
+            prologue=request.prologue,  # 对话开始--开场白配置
+            chat_rule=request.chat_rule,  # 对话中--对话规则
+            unusual_rule=request.unusual_rule,  # 对话中--异常或未匹配规则
+            safe_rule=request.safe_rule,  # 对话中--安全规则配置
+            role=request.role,  # 角色--人设
+            plugins=request.plugins,  # 高级设置--插件
+            thesaurus_major=request.thesaurus_major,  # 高级设置--专业词库
+            updated_at=datetime.now()
+        )
+        result = await db.digital_employee_configs.update_one(
+                {"employee_id": employee_id},
+                {"$set": update_data.model_dump()}
+            )
+
+        if result and result.modified_count == 1:
+            return ResponseResult.success(None)
+        else:
+            return ResponseResult.error(status.HTTP_400_BAD_REQUEST, "error",
+                                        "update_employee_setting failed")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"update_employee_setting exception: employee_id={employee_id} error={str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="update_employee_setting error",
+        )
+
+
+@router.delete("/delete/{employee_id}")
+async def delete_employee(
+    employee_id: int,
+    api_key: str = Depends(get_api_key),
     db=Depends(get_database),
 ):
     """
-    创建数字员工配置。
+        删除数字员工配置。
 
-    \nArgs:
-        \n- request: CreateEmployeeRequest with employee configuration
-        \n- api_key: API key from auth
-        \n- db: Database instance
+        \nArgs:
+            \n- employee_id: 数字员工id
+            \n- api_key: API key from auth
+            \n- db: Database instance
 
-    \nReturns:
-        \n- Created employee configuration
+        \nReturns:
+            \n- Deletion result
     """
     try:
-        logger.info(f"Create employee request: employee_id={request.employee_id}")
+        logger.info(f"delete_employee request: employee_id={employee_id}")
 
-        # Check if employee already exists
-        existing = await db.digital_employee_configs.find_one(
-            {"employee_id": request.employee_id}
-        )
-        if existing:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"Employee {request.employee_id} already exists",
-            )
+        employee = await db.digital_employee_configs.find_one({"employee_id": employee_id})
+        if not employee:
+            return ResponseResult.error(status.HTTP_404_NOT_FOUND, "error",
+                                        f"delete_employee not found: employee_id={employee_id}")
 
-        # Prepare employee document
-        now = datetime.utcnow()
-        employee_doc = {
-            "employee_id": request.employee_id,
-            "name": request.name,
-            "domain": request.domain,
-            "role": request.role,
-            "description": request.description,
-            "personality": request.personality.model_dump(),
-            "capabilities": request.capabilities.model_dump(),
-            "greeting": request.greeting,
-            "hot_questions": request.hot_questions,
-            "personalization": request.personalization.model_dump(),
-            "created_at": now,
-            "updated_at": now,
-            "synced_at": None,
-        }
+        # 删除数字员工关联的数据：知识库（文档、FAQ，视频）
+        for kb_id in employee["knowledge"]["kb_ids"]:
+            # 刪除ChromaDB记录和ElasticSearch记录
+            # 待补充
+            await db.documents.delete_many({"kb_id": kb_id})
+            await db.knowledge_bases.delete_one({'kb_id': kb_id})
 
-        # Insert into database
-        await db.digital_employee_configs.insert_one(employee_doc)
+        for faq_id in employee["knowledge"]["faqs"]:
+            # 刪除ChromaDB记录和ElasticSearch记录
+            await faq_processor.delete_faq_vectorization_data(faq_id)
 
-        # Return created employee
-        employee_doc["created_at"] = employee_doc["created_at"].isoformat() + "Z"
-        employee_doc["updated_at"] = employee_doc["updated_at"].isoformat() + "Z"
+            # 刪除faq任务记录
+            await db.document_tasks.delete_many({"doc_id": faq_id})
 
-        return {"code": 200, "message": "success", "data": employee_doc}
+            # 删除faq记录
+            await db.faqs.delete_many({"faq_id": faq_id})
+
+        for doc_id in employee["knowledge"]["video_ids"]:
+            # 刪除ChromaDB记录和ElasticSearch记录
+            # 待补充
+            await db.documents.delete_one({'doc_id': doc_id})
+
+        # 删除数字员工关联的数据：敏感词库
+        for thesaurus_id in employee["safe_rule"]["thesaurus_sensitive"]:
+            # 刪除ChromaDB记录和ElasticSearch记录
+            await thesaurus_sensitive_processor.delete_thesaurus_vectorization_data(thesaurus_id)
+
+            # 刪除敏感词库任务记录
+            await db.document_tasks.delete_many({"kb_id": f"sensitive_{thesaurus_id}"})
+
+            # 删除敏感词库记录
+            await db.thesaurus_sensitive.delete_many({"thesaurus_id": thesaurus_id})
+
+        # 删除数字员工关联的数据：专业词库
+        for thesaurus_id in employee["thesaurus_major"]:
+            # 刪除ChromaDB记录和ElasticSearch记录
+            await thesaurus_major_processor.delete_thesaurus_vectorization_data(thesaurus_id)
+
+            # 刪除专业词库任务记录
+            await db.document_tasks.delete_many({"kb_id": f"major_{thesaurus_id}"})
+
+            # 删除专业词库记录
+            await db.thesaurus_major.delete_many({"thesaurus_id": thesaurus_id})
+
+        result = await db.digital_employee_configs.delete_one({"employee_id": employee_id})
+
+        if result and result.deleted_count == 1:
+            return ResponseResult.success(None)
+        else:
+            return ResponseResult.error(status.HTTP_400_BAD_REQUEST, "error",
+                                        "delete_employee failed")
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception(f"Create employee error: employee_id={request.employee_id}")
+        logger.exception(f"delete_employee exception: employee_id={employee_id} error={str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to create employee",
+            detail="delete_employee error",
         )
 
 
 @router.get("/{employee_id}/faqs")
 async def get_employee_faqs(
-    employee_id: str = Path(..., description="Employee ID"),
+    employee_id: int = Path(..., description="数字员工id"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     enabled_only: bool = Query(False, description="Only return enabled FAQs"),
@@ -228,16 +331,117 @@ async def get_employee_faqs(
     }
 
 
+@router.get("/list")
+async def list_employees(
+    limit: int = Query(10, ge=1, le=100, description="Maximum number of employees to return"),
+    api_key: str = Depends(get_api_key),
+    db=Depends(get_database),
+):
+    """
+        获取数字员工列表（前N个）。
+
+        \nArgs:
+            \n- limit: 返回的最大数量（默认10，最大100）
+            \n- api_key: API key from auth
+            \n- db: Database instance
+
+        \nReturns:
+            \n- Employee list with total count
+    """
+    try:
+        logger.info(f"List employees request: limit={limit}")
+
+        # 查询员工列表，按创建时间倒序
+        cursor = db.digital_employee_configs.find().sort("created_at", -1).limit(limit)
+        employees = await cursor.to_list(length=limit)
+
+        # 统计总数
+        total = await db.digital_employee_configs.count_documents({})
+
+        # 格式化返回数据
+        result = []
+        for emp in employees:
+            emp.pop("_id", None)
+            emp["created_at"] = emp["created_at"].isoformat() + "Z"
+            emp["updated_at"] = emp["updated_at"].isoformat() + "Z"
+            if emp.get("synced_at"):
+                emp["synced_at"] = emp["synced_at"].isoformat() + "Z"
+            result.append(emp)
+
+        return {
+            "code": 200,
+            "message": "success",
+            "data": {
+                "total": total,
+                "count": len(result),
+                "employees": result,
+            }
+        }
+
+    except Exception as e:
+        logger.exception(f"List employees error: limit={limit} error={str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to list employees",
+        )
+
+
+@router.get("/detail/{employee_id}")
+async def get_employee(
+    employee_id: int = Path(..., description="数字员工id"),
+    api_key: str = Depends(get_api_key),
+    db=Depends(get_database),
+):
+    """
+        获取数字员工配置。
+
+        \nArgs:
+            \n- employee_id: 数字员工id
+            \n- api_key: API key from auth
+            \n- db: Database instance
+
+        \nReturns:
+            \n- Employee configuration
+    """
+    try:
+        logger.info(f"Get employee request: employee_id={employee_id}")
+
+        employee = await db.digital_employee_configs.find_one({"employee_id": employee_id})
+
+        if not employee:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found"
+            )
+
+        # Convert MongoDB document to dict
+        employee.pop("_id", None)
+        employee["created_at"] = employee["created_at"].isoformat() + "Z"
+        employee["updated_at"] = employee["updated_at"].isoformat() + "Z"
+        if employee.get("synced_at"):
+            employee["synced_at"] = employee["synced_at"].isoformat() + "Z"
+
+        return {"code": 200, "message": "success", "data": employee}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Get employee error: employee_id={employee_id} error={str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get employee",
+        )
+
+
 @router.post("/create/test-financial-analyst")
 async def create_test_financial_analyst(
     api_key: str = Depends(get_api_key),
     db=Depends(get_database),
 ):
     """
-    创建测试用的金融分析师数字员工（基于期刊文件主题）。
+        创建测试用的金融分析师数字员工（基于期刊文件主题）。
 
-    \nReturns:
-        \n- Created employee configuration
+        \nReturns:
+            \n- Created employee configuration
     """
     try:
         logger.info("Create test financial analyst employee")
@@ -255,9 +459,10 @@ async def create_test_financial_analyst(
             )
 
         # Prepare employee document with test data based on journal files
-        now = datetime.utcnow()
+        now = datetime.now()
         employee_doc = {
-            "employee_id": employee_id,
+            "employee_id": 1,
+            "external_employee_id": employee_id,
             "name": "金融分析师小智",
             "domain": "金融经济",
             "role": "金融研究分析师",
@@ -299,7 +504,7 @@ async def create_test_financial_analyst(
 
         # Prepare response data (create new dict to avoid ObjectId serialization issues)
         response_data = {
-            "employee_id": employee_id,
+            "employee_id": 1,
             "name": "金融分析师小智",
             "domain": "金融经济",
             "role": "金融研究分析师",
@@ -341,204 +546,8 @@ async def create_test_financial_analyst(
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception("Create test financial analyst error")
+        logger.exception(f"Create test financial analyst error={str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create test financial analyst",
         )
-
-
-@router.delete("/delete/{employee_id}")
-async def delete_employee(
-    employee_id: str = Path(..., description="Employee ID"),
-    api_key: str = Depends(get_api_key),
-    db=Depends(get_database),
-):
-    """
-    删除数字员工配置。
-
-    \nArgs:
-        \n- employee_id: Employee ID
-        \n- api_key: API key from auth
-        \n- db: Database instance
-
-    \nReturns:
-        \n- Deletion result
-    """
-    try:
-        logger.info(f"Delete employee request: employee_id={employee_id}")
-
-        # Check if employee exists
-        existing = await db.digital_employee_configs.find_one(
-            {"employee_id": employee_id}
-        )
-        if not existing:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Employee {employee_id} not found",
-            )
-
-        # Delete employee
-        result = await db.digital_employee_configs.delete_one(
-            {"employee_id": employee_id}
-        )
-
-        return {
-            "code": 200,
-            "message": "success",
-            "data": {"deleted_count": result.deleted_count}
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception(f"Delete employee error: employee_id={employee_id}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to delete employee",
-        )
-
-
-@router.put("/update/{employee_id}")
-async def update_employee(
-    employee_id: str = Path(..., description="Employee ID"),
-    request: UpdateEmployeeRequest = Body(None),
-    api_key: str = Depends(get_api_key),
-    db=Depends(get_database),
-):
-    """
-    更新数字员工配置（按 employee_id 部分更新）。
-
-    \nArgs:
-        \n- employee_id: Employee ID
-        \n- request: UpdateEmployeeRequest with fields to update (all optional)
-        \n- api_key: API key from auth
-        \n- db: Database instance
-
-    \nReturns:
-        \n- Updated employee configuration
-
-    \nExample:
-        \n- Update kb_ids: {"kb_ids": ["kb_8aa64d4d6698"]}
-        \n- Update name: {"name": "陈晓燕"}
-    """
-    try:
-        logger.info(f"Update employee request employee_id={employee_id} update_fields={request.model_dump(exclude_none=True)}")
-
-        # Check if employee exists
-        existing = await db.digital_employee_configs.find_one(
-            {"employee_id": employee_id}
-        )
-        if not existing:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Employee {employee_id} not found",
-            )
-
-        # Build update document with only non-None fields
-        update_doc = {"updated_at": datetime.utcnow()}
-
-        # Core fields
-        if request.name is not None:
-            update_doc["name"] = request.name
-        if request.position is not None:
-            update_doc["position"] = request.position
-        if request.intro is not None:
-            update_doc["intro"] = request.intro
-
-        # Personality/Style fields
-        if request.persona is not None:
-            update_doc["persona"] = request.persona
-        if request.tone is not None:
-            update_doc["tone"] = request.tone
-        if request.style is not None:
-            update_doc["style"] = request.style
-        if request.style_desc is not None:
-            update_doc["style_desc"] = request.style_desc
-        if request.language is not None:
-            update_doc["language"] = request.language
-
-        # Configuration fields
-        if request.kb_ids is not None:
-            update_doc["kb_ids"] = request.kb_ids
-        if request.web_search_enabled is not None:
-            update_doc["web_search_enabled"] = request.web_search_enabled
-        if request.is_multimodal is not None:
-            update_doc["is_multimodal"] = request.is_multimodal
-
-        # FAQ settings
-        if request.faq_sim_threshold is not None:
-            update_doc["faq_sim_threshold"] = request.faq_sim_threshold
-        if request.faq_top_k is not None:
-            update_doc["faq_top_k"] = request.faq_top_k
-
-        # Prologue settings
-        if request.prologue is not None:
-            update_doc["prologue"] = request.prologue
-        if request.is_opening_questions is not None:
-            update_doc["is_opening_questions"] = request.is_opening_questions
-
-        # Custom prompt
-        if request.is_my_prompt is not None:
-            update_doc["is_my_prompt"] = request.is_my_prompt
-        if request.my_prompt is not None:
-            update_doc["my_prompt"] = request.my_prompt
-
-        # Display settings
-        if request.is_show_sign is not None:
-            update_doc["is_show_sign"] = request.is_show_sign
-        if request.portrait is not None:
-            update_doc["portrait"] = request.portrait
-        if request.model_image is not None:
-            update_doc["model_image"] = request.model_image
-
-        # Status
-        if request.onduty_status is not None:
-            update_doc["onduty_status"] = request.onduty_status
-        if request.status is not None:
-            update_doc["status"] = request.status
-
-        # Metadata
-        if request.metadata is not None:
-            update_doc["metadata"] = request.metadata
-        if request.hot_questions is not None:
-            update_doc["hot_questions"] = request.hot_questions
-
-        # Perform update if there are fields to update
-        if len(update_doc) > 1:  # More than just updated_at
-            await db.digital_employee_configs.update_one(
-                {"employee_id": employee_id},
-                {"$set": update_doc}
-            )
-            logger.info(
-                "Employee updated successfully",
-                employee_id=employee_id,
-                updated_fields=list(update_doc.keys())
-            )
-        else:
-            logger.warning(
-                "No fields to update",
-                employee_id=employee_id
-            )
-
-        # Fetch updated document
-        updated = await db.digital_employee_configs.find_one(
-            {"employee_id": employee_id}
-        )
-        updated.pop("_id", None)
-        updated["created_at"] = updated["created_at"].isoformat() + "Z"
-        updated["updated_at"] = updated["updated_at"].isoformat() + "Z"
-        if updated.get("synced_at"):
-            updated["synced_at"] = updated["synced_at"].isoformat() + "Z"
-
-        return {"code": 200, "message": "success", "data": updated}
-
-    except HTTPException as e:
-        print(e)
-        logger.exception(e)
-        raise e
-    except Exception as e:
-        print(e)
-        logger.exception(e)
-        raise e
-
