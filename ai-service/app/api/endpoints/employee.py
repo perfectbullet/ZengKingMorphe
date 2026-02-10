@@ -388,7 +388,7 @@ async def list_employees(
 
 @router.get("/detail/{employee_id}")
 async def get_employee(
-    employee_id: int = Path(..., description="数字员工id"),
+    employee_id: str = Path(..., description="数字员工id"),
     api_key: str = Depends(get_api_key),
     db=Depends(get_database),
 ):
