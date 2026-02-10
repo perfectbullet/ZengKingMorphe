@@ -91,6 +91,12 @@ PYTHONPATH=. python scripts/test_rag_e2e.py --sample-only --kb-id kb_5f2a02bd5df
 
 # Full RAG e2e test with JSON input
 PYTHONPATH=. python scripts/test_rag_e2e.py --json input.json --kb-id kb_5f2a02bd5dfe
+
+# Stream client test (v2 API)
+PYTHONPATH=. python scripts/stream_client.py --query "你好"
+
+# Stream client with custom host
+PYTHONPATH=. python scripts/stream_client.py --host http://192.168.8.233:8100 --query "失蜡铸造的原理"
 ```
 
 ---
@@ -240,16 +246,33 @@ class ChatResponse(BaseModel):
 
 Chat streaming uses SSE (Server-Sent Events) via `sse-starlette` ([ai-service/app/api/endpoints/chat.py](ai-service/app/api/endpoints/chat.py)):
 
+**API Versions**:
+- `/api/chat/v1/chat/completions` - Original chat completions endpoint
+- `/api/chat/v2/chat/completions` - Enhanced version with math textbook direct match and TTS support
+
 **Event Types**:
 - `user_query` - Echoes the original query
 - `role` - Message role (assistant)
 - `token` - Individual LLM output tokens
+- `status` - Status messages during workflow (e.g., "好的，我正在梳理您的问题要点…")
 - `done` - Stream completion (includes timing and sources)
 - `error` - Error information
 
 **TTFB Tracking**: Time To First Byte is tracked via `state["ttfb_ms"]` in the workflow.
 
-**Chunk Storage**: Streaming chunks optionally stored in MongoDB `stream_chunks` collection for debugging.
+**Chunk Storage**: Streaming chunks stored in MongoDB `stream_chunks` collection for debugging and WebSocket monitoring.
+
+**WebSocket Endpoints**:
+- `/api/chat/ws/chunks` - Real-time stream chunks updates
+- `/api/chat/ws/view/chunks` - Frontend-optimized version with improved disconnect handling
+
+**Stream Chunks Query**: REST API `/api/chat/stream/chunks` for querying historical chunks with pagination and filters.
+
+**Math Textbook Direct Match (v2 only)**:
+When a math textbook query directly matches a document chunk:
+- Skips LLM generation, streams pre-generated answer by punctuation segments
+- Checks for `teaching_script_tts` field in document chunk for voice-friendly output
+- Falls back to LLM-based text revision if `teaching_script_tts` is not available
 
 **Non-Streaming Usage**: If you need the complete response without handling streaming, consume the stream internally:
 ```python
@@ -340,6 +363,30 @@ SILICONFLOW_API_KEY=sk-...
 
 **Embedding Cache**: LRU cache in `app/services/embedding_cache.py` reduces redundant API calls.
 
+### Revise LLM for Voice Output (数学公式口语化讲解)
+
+**代码位置**: `app/api/endpoints/chat_stream_v2.py:58-123`
+
+**用途**: 将数学公式和概念转换为流畅的语音播报文本
+
+**配置**:
+```bash
+REVISE_PROVIDER=siliconflow  # or ollama
+
+# SiliconFlow (推荐)
+OPENAI_API_KEY=sk-...
+OPENAI_API_BASE=https://api.siliconflow.cn/v1
+OPENAI_REVISE_MODEL=deepseek-ai/DeepSeek-V3
+
+# Ollama (备选)
+OLLAMA_BASE_URL=http://192.168.8.233:11434
+OLLAMA_REVISE_MODEL=qwen2.5:7b
+```
+
+**提示词模板**: `prompts/数学公式口语化讲解.txt`
+
+**触发条件**: v2 API 匹配数学教材知识库，但 `teaching_script_tts` 字段为空时
+
 ### OllamaEmbeddings (当前配置)
 
 **代码位置**: `app/utils/embeddings.py:26-362`
@@ -426,6 +473,8 @@ POST /api/embeddings (逐个调用，非批量)
 | `image_captions` | List[str] | 图片描述列表 |
 | `title_path` | List[str] | **标题路径 (会前缀到 content)** |
 | `structure_level` | int | 文档结构层级 |
+| **语音播报字段 (v2 API)** | | |
+| `teaching_script_tts` | str\|None | 预生成的语音播报文本 (数学教材) |
 
 ### BGE Reranker Docker Deployment
 
@@ -474,7 +523,11 @@ AI service calls Java backend via `JAVA_API_BASE_URL`:
 | Document service | [ai-service/app/services/document_service.py](ai-service/app/services/document_service.py) | Document CRUD and chunk management |
 | MinerU client | [ai-service/app/services/mineru_client.py](ai-service/app/services/mineru_client.py) | PDF parsing with caching/chunking |
 | MinerU API | [ai-service/app/api/endpoints/mineru.py](ai-service/app/api/endpoints/mineru.py) | Web interface for PDF processing |
-| Chat endpoints | [ai-service/app/api/endpoints/chat.py](ai-service/app/api/endpoints/chat.py) | Streaming chat SSE implementation |
+| Chat endpoints | [ai-service/app/api/endpoints/chat.py](ai-service/app/api/endpoints/chat.py) | Streaming chat SSE (v1/v2), stream chunks query |
+| Chat stream v1 | [ai-service/app/api/endpoints/chat_stream_v1.py](ai-service/app/api/endpoints/chat_stream_v1.py) | v1 stream generator |
+| Chat stream v2 | [ai-service/app/api/endpoints/chat_stream_v2.py](ai-service/app/api/endpoints/chat_stream_v2.py) | v2 stream generator with math TTS support |
+| WebSocket endpoints | [ai-service/app/api/endpoints/websocket.py](ai-service/app/api/endpoints/websocket.py) | Real-time stream chunks updates |
+| WebSocket view | [ai-service/app/api/endpoints/websocket_view.py](ai-service/app/api/endpoints/websocket_view.py) | Frontend-optimized WebSocket with better disconnect handling |
 | Session endpoints | [ai-service/app/api/endpoints/session.py](ai-service/app/api/endpoints/session.py) | Session CRUD operations |
 | Employee endpoints | [ai-service/app/api/endpoints/employee.py](ai-service/app/api/endpoints/employee.py) | Digital employee management |
 | Knowledge base endpoints | [ai-service/app/api/endpoints/knowledge_base.py](ai-service/app/api/endpoints/knowledge_base.py) | KB and document upload |
@@ -492,6 +545,7 @@ AI service calls Java backend via `JAVA_API_BASE_URL`:
 | Ollama keep-alive | [ai-service/app/services/ollama_keepalive.py](ai-service/app/services/ollama_keepalive.py) | Prevents model unloading |
 | Reranker test | [ai-service/scripts/test_ollama_reranker.py](ai-service/scripts/test_ollama_reranker.py) | BGE Reranker API test script |
 | RAG e2e test | [ai-service/scripts/test_rag_e2e.py](ai-service/scripts/test_rag_e2e.py) | End-to-end RAG testing |
+| Stream client | [ai-service/scripts/stream_client.py](ai-service/scripts/stream_client.py) | OpenAI-style streaming test client for v2 API |
 
 ---
 
