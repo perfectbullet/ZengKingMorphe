@@ -201,7 +201,7 @@ async def update_employee_setting(
 
 @router.delete("/delete/{employee_id}")
 async def delete_employee(
-    employee_id: int,
+    employee_id: str,
     api_key: str = Depends(get_api_key),
     db=Depends(get_database),
 ):
@@ -288,7 +288,7 @@ async def delete_employee(
 
 @router.get("/{employee_id}/faqs")
 async def get_employee_faqs(
-    employee_id: int = Path(..., description="数字员工id"),
+    employee_id: str = Path(..., description="数字员工id"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     enabled_only: bool = Query(False, description="Only return enabled FAQs"),

@@ -612,7 +612,7 @@ class ExternalRoleConfig(BaseModel):
 
 class EmployeeSettingConfig(BaseModel):
     """外部API设置配置。"""
-    employee_id: int = Field('', description="数字员工id")
+    employee_id: str = Field('', description="数字员工id")
     knowledge: ExternalKnowledgeConfig = Field(..., description="对话准备--知识库配置")
     prologue: ExternalPrologueConfig = Field(..., description="对话开始--开场白配置")
     rule: ExternalRuleConfig = Field(..., description="对话中--规则规则、异常或未匹配规则、安全规则配置")
@@ -792,7 +792,7 @@ class CreateEmployeeRequest(BaseModel):
         }
     )
 
-    employee_id: int = Field(..., description="数字员工id")
+    employee_id: str = Field(..., description="数字员工id")
     team_id: int = Field(..., description="团队id")
     name: str = Field(..., description="员工名称")
     position: str = Field(None, description="职位")
@@ -826,7 +826,7 @@ class UpdateEmployeeRequest(BaseModel):
         }
     )
 
-    employee_id: int = Field(..., description="数字员工id")
+    employee_id: str = Field(..., description="数字员工id")
     team_id: int = Field(..., description="团队id")
     name: str = Field(..., description="员工名称")
     position: str = Field(None, description="职位")
@@ -912,7 +912,7 @@ class EmployeePersonalization(BaseModel):
 
 class UpdateEmployeeSettingRequest(BaseModel):
     """ 数字员工对话设定请求参数对象 """
-    employee_id: int = Field(..., description="数字员工id")
+    employee_id: str = Field(..., description="数字员工id")
     update_time: str = Field(None, description="更新时间")
     knowledge: EmployeeSettingKnowledge = Field(None, description="对话准备--知识库配置")
     prologue: EmployeeSettingPrologue = Field(None, description="对话开始--开场白、开场热门问题")

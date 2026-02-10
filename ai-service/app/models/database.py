@@ -204,7 +204,7 @@ class StreamChunkModel(BaseModel):
 class FAQModel(BaseModel):
     """FAQ model for vector and keyword retrieval."""
     faq_id: str  # FAQ问答唯一id: faq_{employee_id}_{external_faq_id}
-    employee_id: int  # 数字员工id（mysql库）
+    employee_id: str  # 数字员工id（mysql库）
     external_faq_id: int  # FAQ问答id（mysql库）
     question_name: str  # 问题名称
     start_time: Optional[str] = None
@@ -283,7 +283,7 @@ class EmployeeSettingPlugin(BaseModel):
 class DigitalEmployeeConfigModel(BaseModel):
     """ MongoDB数字员工 """
     # 基本信息
-    employee_id: int = Field(..., description="数字员工id")
+    employee_id: str = Field(..., description="数字员工id")
     external_employee_id: str = Field(..., description="数字员工id（mysql库）")
     team_id: int = Field(..., description="团队id")
     name: str = Field(..., description="员工姓名")
@@ -307,7 +307,7 @@ class DigitalEmployeeConfigModel(BaseModel):
 
 class DigitalEmployeeConfigSettingModel(BaseModel):
     """ MongoDB数字员工对话设定 """
-    employee_id: int = Field(..., description="数字员工id")
+    employee_id: str = Field(..., description="数字员工id")
     update_time: str = Field(None, description="更新时间（mysql库）")
     knowledge: EmployeeSettingKnowledge = Field(..., description="对话准备--知识库配置")
     prologue: EmployeeSettingPrologue = Field(..., description="对话开始--开场白、开场热门问题")
@@ -345,7 +345,7 @@ class MinerUStructuredModel(BaseModel):
 class ThesaurusMajorModel(BaseModel):
     """ MongoDB专业词库 """
     thesaurus_id: str  # 专业词库唯一id: major_{employee_id}_{external_thesaurus_id}_{external_word_id}
-    employee_id: int  # 数字员工id（mysql库）
+    employee_id: str  # 数字员工id（mysql库）
     external_thesaurus_id: int  # 专业词库id（mysql库）
     thesaurus_name: str  # 专业词库名称
     is_enable: int = 1  # 是否启用：0=不启用，1=启用
@@ -365,7 +365,7 @@ class ThesaurusMajorModel(BaseModel):
 class ThesaurusSensitiveModel(BaseModel):
     """ MongoDB敏感词库 """
     thesaurus_id: str  # 敏感词库唯一id: major_{employee_id}_{external_thesaurus_id}_{external_word_id}
-    employee_id: int  # 数字员工id（mysql库）
+    employee_id: str  # 数字员工id（mysql库）
     external_thesaurus_id: int  # 敏感词库id（mysql库）
     external_word_id: int  # 敏感词条id（mysql库）
     thesaurus_name: str  # 敏感词库名称
