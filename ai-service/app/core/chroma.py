@@ -187,7 +187,7 @@ class ChromaDB:
             Query results
         """
         try:
-            collection = self.get_collection(collection_name)
+            collection = self._get_collection(collection_name)
             results = collection.query(
                 query_texts=query_texts, n_results=n_results, where=where
             )

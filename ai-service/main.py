@@ -135,6 +135,7 @@ app.include_router(conversation.router, prefix="/api/conversation", tags=["Conve
 app.include_router(mineru.router, prefix="/api/mineru", tags=["MinerU"])
 app.include_router(metrics.router, prefix="/api/metrics", tags=["Metrics"])
 app.include_router(websocket.router, prefix="/api/chat", tags=["WebSocket 数字员工对话"])
+app.include_router(websocket_view.router, prefix="/api/chat", tags=["WebSocket 数字员工对话v2"])
 app.include_router(dataset_faq.router, prefix="/api/dataset_faq", tags=["dataset_faq FAQ问答库"])
 app.include_router(thesaurus_major.router, prefix="/api/thesaurus_major", tags=["thesaurus_major 专业词库"])
 app.include_router(thesaurus_sensitive.router, prefix="/api/thesaurus_sensitive", tags=["thesaurus_sensitive 敏感词库"])
