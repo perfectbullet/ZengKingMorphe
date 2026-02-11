@@ -221,16 +221,15 @@ def get_revise_llm():
 
         return ChatOpenAI(
             base_url=api_base,
-            api_key=api_key or "",  # 允许空值，由 API 端处理错误
+            api_key=api_key,  # 允许空值，由 API 端处理错误
             model=model,
             temperature=0.7,
             streaming=True,
         )
     else:
         # 使用 Ollama
-        ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-        ollama_model = os.getenv("OLLAMA_REVISE_MODEL",
-                                 os.getenv("OLLAMA_MODEL", "qwen2.5:7b"))
+        ollama_base_url = 'http://192.168.8.231:11434'
+        ollama_model = 'qwen2.5:32b'
 
         logger.info(f"[Revise LLM] Ollama | BASE_URL={ollama_base_url} | MODEL={ollama_model}")
 

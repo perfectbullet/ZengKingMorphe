@@ -108,7 +108,7 @@ def _get_revise_llm():
     - OPENAI_API_BASE: SiliconFlow API base URL
     - OPENAI_REVISE_MODEL: SiliconFlow model name (default: deepseek-ai/DeepSeek-V3)
     - OLLAMA_BASE_URL: Ollama base URL (default: http://localhost:11434)
-    - OLLAMA_REVISE_MODEL: Ollama model name (default: qwen2.5:7b)
+    - OLLAMA_REVISE_MODEL: Ollama model name (default: qwen2.5:32b)
     """
     # Get provider from env, default siliconflow
     provider = os.getenv("REVISE_PROVIDER", "siliconflow").lower()
@@ -116,16 +116,16 @@ def _get_revise_llm():
     if provider == "siliconflow":
         api_key = os.getenv("OPENAI_API_KEY")
         api_base = os.getenv("OPENAI_API_BASE", "https://api.siliconflow.cn/v1")
-        model = os.getenv("OPENAI_REVISE_MODEL",  os.getenv("OPENAI_MODEL", "deepseek-ai/DeepSeek-V3"))
+        model = os.getenv("OPENAI_REVISE_MODEL", os.getenv("OPENAI_MODEL", "deepseek-ai/DeepSeek-V3"))
 
         if not api_key:
             logger.warning("OPENAI_API_KEY not set for SiliconFlow")
-
+            raise "OPENAI_API_KEY not set for SiliconFlow"
         logger.info(f"[Revise LLM] SiliconFlow | API_BASE={api_base} | MODEL={model}")
 
         return ChatOpenAI(
             base_url=api_base,
-            api_key=api_key or "",  # Allow empty, let API handle error
+            api_key=api_key,  # Allow empty, let API handle error
             model=model,
             temperature=0.7,
             streaming=True,
@@ -134,7 +134,7 @@ def _get_revise_llm():
         # Use Ollama
         ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
         ollama_model = os.getenv("OLLAMA_REVISE_MODEL",
-                                 os.getenv("OLLAMA_MODEL", "qwen2.5:7b"))
+                                 os.getenv("OLLAMA_MODEL", "qwen2.5:32b"))
 
         logger.info(f"[Revise LLM] Ollama | BASE_URL={ollama_base_url} | MODEL={ollama_model}")
 
@@ -149,11 +149,15 @@ def _get_revise_llm():
 
 # Status message variations for better UX
 STATUS_TOKENS: list = [
-    "让我来思考一下这个问题，等等..",
+    "好的，我正在梳理您的问题要点…",
+    "这个我知道······",
+    "等我一小下下······",
 ]
 
 SEARCH_TOKENS: list = [
-    "让我来思考一下这个问题，等等..",
+    "好的，我正在梳理您的问题要点…",
+    "这个我知道······",
+    "等我一小下下······",
 ]
 
 
@@ -421,6 +425,31 @@ async def generate_openai_stream_v1(
         full_answer = ""
         model_name = request.model
 
+        # 结束 chunk data
+        finish_chunk_data = {
+            "id": chat_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": request.model,
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+            "usage": {
+                "prompt_tokens": len(user_query),
+                "completion_tokens": len(user_query),
+                "total_tokens": len(user_query),
+            },
+            "metadata": {
+                "conversation_id": "",
+                "confidence": 1,
+                "kb_used": [],
+                "web_search_used": False,
+                "sources": {},
+                "intent": "",
+                "is_realtime_query": False,
+                "realtime_category": False,
+                "model": model_name,
+            },
+        }
+        
         async for event in conversation_workflow.workflow.astream(
             initial_state, stream_mode="updates"
         ):
@@ -611,8 +640,8 @@ async def generate_openai_stream_v1(
                 complexity_reason = final_state.get("complexity_reason", "")
                 logger.info(f"complexity_reason is {complexity_reason}")
                 math_problem = False
-                # if "数学" in complexity_reason:
-                #     math_problem = True
+                if "数学" in complexity_reason:
+                    math_problem = True
                 first_token_received = False
                 full_answer = ""
                 async for chunk in streaming_llm.astream(messages):
@@ -643,36 +672,61 @@ async def generate_openai_stream_v1(
                             request.employee_id, "token", token_chunk_data,
                             final_state.get("conversation_id")
                         )
-                        # if not math_problem:
-                        #     yield json.dumps(token_chunk_data)
+                        if not math_problem:
+                            yield json.dumps(token_chunk_data)
+                # 保存结束块
+                chunk_sequence += 1
+                await save_stream_chunk(
+                    db, chat_id, chunk_sequence, session_id, request.user_id,
+                    request.employee_id, "done", finish_chunk_data,
+                    final_state.get("conversation_id", "")
+                )
+                logger.info(f'save_stream_chunk finish_chunk_data is {finish_chunk_data}')
+                # Send [DONE] marker
+                yield "[DONE]"
 
-                # if math_problem:
+                # 接下来是把
+                if math_problem:
                     # 数学问题才要走转换模型否则不转换
                     # 接下来把模型输出优化为适合语音的流式输出
-                system_prompt = _load_revise_prompt()
-                revise_llm = _get_revise_llm()
-                revise_messagesv2 = [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": full_answer}
-                ]
-                revised_answer = ""
-                async for chunk in revise_llm.astream(revise_messagesv2):
-                    token = chunk.content
-                    if token:
-                        revised_answer += token
-                        token_chunk_data = {
-                            "id": chat_id,
-                            "object": "chat.completion.chunk",
-                            "created": created,
-                            "model": request.model,
-                            "choices": [{
-                                "index": 0,
-                                "delta": {"content": token},
-                                "finish_reason": None,
-                            }],
-                        }
-                        yield json.dumps(token_chunk_data)
-                logger.info(f"revised_answer={revised_answer}")
+                    system_prompt = _load_revise_prompt()
+                    revise_llm = _get_revise_llm()
+                    revise_messagesv2 = [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": full_answer}
+                    ]
+                    revised_answer = ""
+                    revise_first_token_received = False
+                    revise_start_time = time.time()
+                    logger.info(f"start revised the answer, revise_messfull_answeragesv2 is {full_answer}")
+
+                    try:
+                        # Pass timeout via config for streaming
+                        async for chunk in revise_llm.astream(revise_messagesv2):
+                            logger.info(f"Revise chunk received: {chunk}")
+                            token = chunk.content
+                            if token:
+                                if not revise_first_token_received:
+                                    revise_first_token_received = True
+                                    revise_ttfb_ms = int((time.time() - revise_start_time) * 1000)
+                                    logger.info(f"Revise LLM first token received | revise_ttfb_ms={revise_ttfb_ms}")
+                                revised_answer += token
+                                token_chunk_data = {
+                                    "id": chat_id,
+                                    "object": "chat.completion.chunk",
+                                    "created": created,
+                                    "model": request.model,
+                                    "choices": [{
+                                        "index": 0,
+                                        "delta": {"content": token},
+                                        "finish_reason": None,
+                                    }],
+                                }
+                                yield json.dumps(token_chunk_data)
+                    except Exception as e:
+                        logger.error(f"Revise LLM stream error: {e}", exc_info=True)
+                        raise
+                    logger.info(f"Revise stream completed, revised_answer length={len(revised_answer)}")
 
                 # Log workflow completion time
                 workflow_end_time = time.time()
@@ -680,6 +734,18 @@ async def generate_openai_stream_v1(
                 logger.info(f"Workflow completed | total_time_ms={total_time_ms} | ttfb_ms={final_state.get('ttfb_ms')}")
                 # Update state with generated answer
                 final_state["final_answer"] = full_answer
+                
+                # 保存结束块
+                chunk_sequence += 1
+                await save_stream_chunk(
+                    db, chat_id, chunk_sequence, session_id, request.user_id,
+                    request.employee_id, "done", finish_chunk_data,
+                    final_state.get("conversation_id", "")
+                )
+                logger.info(f'save_stream_chunk finish_chunk_data is {finish_chunk_data}')
+                # Send [DONE] marker
+                yield "[DONE]"
+                
                 # Save conversation
                 await conversation_workflow.save_conversation(final_state)
                 # Break out of workflow loop
@@ -730,7 +796,6 @@ async def generate_openai_stream_v1(
         )
 
         yield json.dumps(finish_chunk_data)
-
         # Send [DONE] marker
         yield "[DONE]"
 

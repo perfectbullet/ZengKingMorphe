@@ -79,6 +79,19 @@ class ConversationWorkflow:
             keep_alive=-1
         )
 
+        # 打印 local_llm 配置
+        logger.info(
+            f"Local LLM configured | base_url={self.local_llm.base_url} | model={self.local_llm.model} | "
+            f"temperature={self.local_llm.temperature} | keep_alive={self.local_llm.keep_alive}"
+        )
+
+        # 打印 local_grader_llm 配置
+        logger.info(
+            f"Local Grader LLM configured | base_url={self.local_grader_llm.base_url} | model={self.local_grader_llm.model} | "
+            f"temperature={self.local_grader_llm.temperature} | format={getattr(self.local_grader_llm, 'format', None)} | "
+            f"keep_alive={self.local_grader_llm.keep_alive}"
+        )
+
         # Initialize remote LLM (OpenAI-style API) - for complex, accurate responses
         logger.info(
             "Initializing remote OpenAI-style LLM",

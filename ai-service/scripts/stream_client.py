@@ -204,7 +204,7 @@ def handle_stream_payloads(payload_iter: Iterator[str], start_time: float) -> in
 
 
 def run_stream(host: str, body: dict, api_key: Optional[str], timeout: int = 60) -> int:
-    url = host.rstrip("/") + "/api/chat/v2/chat/completions"
+    url = host.rstrip("/") + "/api/chat/v1/chat/completions"
     headers = {
         "Content-Type": "application/json",
         "Accept": "text/event-stream",
@@ -214,6 +214,7 @@ def run_stream(host: str, body: dict, api_key: Optional[str], timeout: int = 60)
 
     try:
         start_time = time.perf_counter()
+        print('url is {}'.format(url))
         with requests.post(url, json=body, headers=headers, stream=True, timeout=(5, timeout)) as resp:
             try:
                 resp.raise_for_status()

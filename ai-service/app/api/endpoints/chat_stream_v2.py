@@ -24,15 +24,25 @@ from langchain_community.chat_models import ChatOllama
 logger = get_logger(__name__)
 
 
+# Status message variations for better UX
+STATUS_TOKENS: list = [
+    "好的，我正在梳理您的问题要点…",
+    "这个我知道······",
+    "等我一小下下······",
+]
+
+SEARCH_TOKENS: list = [
+    "好的，我正在梳理您的问题要点…",
+    "这个我知道······",
+    "等我一小下下······",
+]
+
+
 def _clean_user_query(text: str) -> str:
     """
     清理用户查询，删除前导标点符号。
-
-    常见问题：用户输入如 "，请帮我解释二项式定理"，前面的逗号会影响检索效果。
-
     Args:
         text: 用户输入的查询文本
-
     Returns:
         清理后的文本
     """
@@ -111,17 +121,6 @@ def _get_revise_llm():
             streaming=True,
             keep_alive=-1
         )
-
-
-# Status message variations for better UX
-STATUS_TOKENS: list = [
-    "让我来思考一下这个问题，等等..",
-]
-
-SEARCH_TOKENS: list = [
-    "让我来思考一下这个问题，等等..",
-]
-
 
 def format_sources(
     retrieved_docs: list, web_search_results: list, max_content_length: int = 200
@@ -386,10 +385,33 @@ async def generate_openai_stream_v2(
         current_state = initial_state.copy()
         full_answer = ""
         model_name = request.model
+        
+        # 结束 chunk data
+        finish_chunk_data = {
+            "id": chat_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": request.model,
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+            "usage": {
+                "prompt_tokens": len(user_query),
+                "completion_tokens": len(user_query),
+                "total_tokens": len(user_query),
+            },
+            "metadata": {
+                "conversation_id": "",
+                "confidence": 1,
+                "kb_used": [],
+                "web_search_used": False,
+                "sources": {},
+                "intent": "",
+                "is_realtime_query": False,
+                "realtime_category": False,
+                "model": model_name,
+            },
+        }
 
-        async for event in conversation_workflow.workflow.astream(
-            initial_state, stream_mode="updates"
-        ):
+        async for event in conversation_workflow.workflow.astream(initial_state, stream_mode="updates"):
             node_name = list(event.keys())[0] if event else None
             state_update = event.get(node_name, {}) if node_name else {}
 
@@ -452,37 +474,9 @@ async def generate_openai_stream_v2(
                         f"rerank_score={direct_match.get('rerank_score')} | "
                         f"length={len(existing_answer)} | ttfb_ms={ttfb_ms}"
                     )
-
                     # 按中文标点符号切分流式返回答案
-                    segments = re.split(r'([，。！？、；：\n])', existing_answer)
-                    current_chunk = ""
-
+                    segments = re.split(r'([。！？\n])', existing_answer)
                     for segment in segments:
-                        current_chunk += segment
-
-                        if segment in '，。！？、；：\n' or len(current_chunk) >= 20:
-                            token_chunk_data = {
-                                "id": chat_id,
-                                "object": "chat.completion.chunk",
-                                "created": created,
-                                "model": request.model,
-                                "choices": [{
-                                    "index": 0,
-                                    "delta": {"content": current_chunk},
-                                    "finish_reason": None,
-                                }],
-                            }
-                            chunk_sequence += 1
-                            await save_stream_chunk(
-                                db, chat_id, chunk_sequence, session_id, request.user_id,
-                                request.employee_id, "token", token_chunk_data,
-                                final_state.get("conversation_id")
-                            )
-                            yield json.dumps(token_chunk_data)
-                            current_chunk = ""
-
-                    # 发送剩余内容
-                    if current_chunk:
                         token_chunk_data = {
                             "id": chat_id,
                             "object": "chat.completion.chunk",
@@ -490,26 +484,33 @@ async def generate_openai_stream_v2(
                             "model": request.model,
                             "choices": [{
                                 "index": 0,
-                                "delta": {"content": current_chunk},
+                                "delta": {"content": segment},
                                 "finish_reason": None,
                             }],
                         }
                         chunk_sequence += 1
+                        # Save finish chunk to DB， 通过 ws 发送
                         await save_stream_chunk(
                             db, chat_id, chunk_sequence, session_id, request.user_id,
                             request.employee_id, "token", token_chunk_data,
                             final_state.get("conversation_id")
                         )
-                        yield json.dumps(token_chunk_data)
-
-                    # 保存对话并退出
+                    # 保存结束块
+                    chunk_sequence += 1
+                    await save_stream_chunk(
+                        db, chat_id, chunk_sequence, session_id, request.user_id,
+                        request.employee_id, "done", finish_chunk_data,
+                        final_state.get("conversation_id", "")
+                    )
+                    logger.info(f'save_stream_chunk finish_chunk_data is {finish_chunk_data}')
+                    # Send [DONE] marker
+                    yield "[DONE]"
                     await conversation_workflow.save_conversation(final_state)
 
                     # 这里的输出会发生给语音合成服务
                     # 优先使用 teaching_script_tts，如果为空或查询不到则走 LLM 转换逻辑
                     chunk_id = direct_match.get("chunk_id")
                     teaching_script_tts = None
-
                     # 从 MongoDB 查询 teaching_script_tts
                     if chunk_id:
                         try:
@@ -523,12 +524,12 @@ async def generate_openai_stream_v2(
                                 logger.info(f"teaching_script_tts content: {teaching_script_tts}")
                         except Exception as e:
                             logger.warning(f"Failed to query teaching_script_tts: {e}")
-
                     # 如果 teaching_script_tts 存在且非空，直接流式输出；否则走 LLM 转换
                     if teaching_script_tts and teaching_script_tts.strip():
                         # 直接输出 teaching_script_tts
                         logger.info(f"Using teaching_script_tts directly, length={len(teaching_script_tts)}")
-                        for char in teaching_script_tts:
+                        tst_ls = re.split(r'([。！？\n])', teaching_script_tts)
+                        for tst_token in tst_ls:
                             token_chunk_data = {
                                 "id": chat_id,
                                 "object": "chat.completion.chunk",
@@ -536,7 +537,7 @@ async def generate_openai_stream_v2(
                                 "model": request.model,
                                 "choices": [{
                                     "index": 0,
-                                    "delta": {"content": char},
+                                    "delta": {"content": tst_token},
                                     "finish_reason": None,
                                 }],
                             }
@@ -574,7 +575,8 @@ async def generate_openai_stream_v2(
                         logger.info("Answer revised for voice output: ")
                         logger.info(f"original={existing_answer}")
                         logger.info(f"revised_answer={revised_answer}")
-
+                    # 标记结束
+                    yield json.dumps(finish_chunk_data)
                     # Break out of workflow loop
                     break
 
@@ -600,9 +602,7 @@ async def generate_openai_stream_v2(
                             ttfb_ms = int((time.time() - initial_state["workflow_start_time"]) * 1000)
                             final_state["ttfb_ms"] = ttfb_ms
                             logger.info(f"First token received | ttfb_ms={ttfb_ms}")
-
                         full_answer += token
-
                         token_chunk_data = {
                             "id": chat_id,
                             "object": "chat.completion.chunk",
@@ -616,27 +616,31 @@ async def generate_openai_stream_v2(
                                 }
                             ],
                         }
-
                         chunk_sequence += 1
                         await save_stream_chunk(
                             db, chat_id, chunk_sequence, session_id, request.user_id,
                             request.employee_id, "token", token_chunk_data,
                             final_state.get("conversation_id")
                         )
-
                         yield json.dumps(token_chunk_data)
 
                 # Log workflow completion time
                 workflow_end_time = time.time()
                 total_time_ms = int((workflow_end_time - initial_state["workflow_start_time"]) * 1000)
                 logger.info(f"Workflow completed | total_time_ms={total_time_ms} | ttfb_ms={final_state.get('ttfb_ms')}")
-
                 # Update state with generated answer
                 final_state["final_answer"] = full_answer
-
+                chunk_sequence += 1
+                await save_stream_chunk(
+                    db, chat_id, chunk_sequence, session_id, request.user_id,
+                    request.employee_id, "done", finish_chunk_data,
+                    final_state.get("conversation_id", "")
+                )
+                logger.info(f'save_stream_chunk finish_chunk_data is {finish_chunk_data}')
+                # Send [DONE] marker
+                yield "[DONE]"
                 # Save conversation
                 await conversation_workflow.save_conversation(final_state)
-
                 # Break out of workflow loop
                 break
 
@@ -645,7 +649,7 @@ async def generate_openai_stream_v2(
             final_state = current_state
 
         # Format source attribution
-        sources = format_sources(
+        sources: dict = format_sources(
             retrieved_docs=final_state.get("retrieved_docs", []),
             web_search_results=final_state.get("web_search_results", []),
         )
@@ -713,3 +717,5 @@ async def generate_openai_stream_v2(
             logger.error(f"Failed to save error chunk to DB | error={str(db_error)}", exc_info=True)
 
         yield json.dumps(error_chunk_data)
+
+

@@ -99,7 +99,7 @@ class OllamaEmbeddings(Embeddings):
             payload = {
                 "model": self.model,
                 "prompt": truncated_text,
-                "keep_alive": -1  # Keep model loaded indefinitely
+                "keep_alive": 0  # 用完立即卸载，避免与其他模型冲突
             }
 
             # 尝试 API 调用（带重试机制）
@@ -244,8 +244,23 @@ class OllamaEmbeddings(Embeddings):
         payload = {
             "model": self.model,
             "input": truncated_texts,  # Batch input
-            "keep_alive": -1
+            "keep_alive": 0  # 用完立即卸载，避免与其他模型冲突
         }
+
+        # 记录请求前的上下文信息
+        import traceback
+        stack_context = "".join(traceback.format_stack()[-4:-1])  # 获取调用栈的上3层
+
+        logger.info(
+            f"[OllamaEmbedding] Starting batch embedding request | "
+            f"url={url} | model={self.model} | batch_size={len(uncached_texts)} | "
+            f"total_texts={len(texts)} | cached_count={len(cached_indices)} | "
+            f"total_input_chars={sum(len(t) for t in truncated_texts)}"
+        )
+
+        # 打印调用栈上下文（帮助定位是哪个服务调用的）
+        for line in stack_context.strip().split('\n'):
+            logger.debug(f"[OllamaEmbedding] Call stack: {line.strip()}")
 
         last_error = None
         for attempt in range(self.max_retries):
@@ -285,6 +300,12 @@ class OllamaEmbeddings(Embeddings):
                 for idx, embedding in zip(uncached_indices, batch_embeddings):
                     cached_results[idx] = np.array(embedding, dtype=float)
 
+                logger.info(
+                    f"[OllamaEmbedding] Batch embedding succeeded | "
+                    f"model={self.model} | batch_size={len(uncached_texts)} | "
+                    f"embedding_dim={len(batch_embeddings[0]) if batch_embeddings else 0}"
+                )
+
                 return cached_results
 
             except requests.exceptions.HTTPError as e:
@@ -316,14 +337,15 @@ class OllamaEmbeddings(Embeddings):
                 if attempt < self.max_retries - 1:
                     wait_time = self.retry_delay * (2 ** attempt)
                     logger.warning(
-                        f"Ollama batch embedding timeout/connection error (attempt {attempt + 1}/{self.max_retries}), "
-                        f"retrying in {wait_time}s: batch_size={len(uncached_texts)}, error={str(e)}"
+                        f"[OllamaEmbedding] Timeout/connection error (attempt {attempt + 1}/{self.max_retries}) | "
+                        f"url={url} | model={self.model} | batch_size={len(uncached_texts)} | "
+                        f"timeout=120s | retrying_in={wait_time}s | error={str(e)}"
                     )
                     time.sleep(wait_time)
                 else:
                     logger.error(
-                        f"Ollama batch embedding failed after {self.max_retries} attempts: "
-                        f"url={url}, batch_size={len(uncached_texts)}, error={str(e)}"
+                        f"[OllamaEmbedding] Failed after {self.max_retries} attempts | "
+                        f"url={url} | model={self.model} | batch_size={len(uncached_texts)} | error={str(e)}"
                     )
 
             except Exception as e:

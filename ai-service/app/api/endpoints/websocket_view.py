@@ -90,14 +90,14 @@ async def websocket_stream_chunks(
                 poll_new_chunks(websocket, db, query_filter, last_timestamp, sent_chunk_ids)
             )
 
-    except* WebSocketDisconnect:
+    except WebSocketDisconnect:
         # Note: except* is for ExceptionGroup in Python 3.11+
         logger.info(
             "WebSocket View disconnected normally",
             user_id=user_id,
             session_id=session_id
         )
-    except* Exception as e:
+    except Exception as e:
         logger.error(
             "WebSocket View error",
             error=str(e),
@@ -137,7 +137,7 @@ async def send_chunk(websocket: WebSocket, chunk: dict) -> None:
         chunk_copy["timestamp"] = chunk_copy["timestamp"].isoformat() + "Z"
     if "created_at" in chunk_copy and isinstance(chunk_copy["created_at"], datetime):
         chunk_copy["created_at"] = chunk_copy["created_at"].isoformat() + "Z"
-
+    # logger.info(f'chunk_copy is {chunk_copy}')
     await websocket.send_json(chunk_copy)
 
 
