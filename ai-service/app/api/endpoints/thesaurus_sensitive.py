@@ -16,7 +16,7 @@ logger = get_logger(__name__)
 router = APIRouter()
 
 
-@router.post("/update")
+@router.put("/update")
 async def update_thesaurus_sensitive(
     request: ThesaurusRequest,
     api_key: str = Depends(get_api_key),
@@ -47,7 +47,7 @@ async def update_thesaurus_sensitive(
                     update_thesaurus_id = f"sensitive_{employee_id}_{thesaurus_id}_{thesaurus_word.word_id}"
                     update_data = ThesaurusSensitiveModel(
                         thesaurus_id=update_thesaurus_id,
-                        employee_id=employee_id,
+                        employee_id=str(employee_id),
                         external_thesaurus_id=thesaurus_id,
                         external_word_id=thesaurus_word.word_id,
                         thesaurus_name=request.thesaurus_name,
@@ -55,13 +55,13 @@ async def update_thesaurus_sensitive(
                         update_time=request.update_time,
                         word_name=thesaurus_word.word_name,
                         combined_text=combined_text,
-                        keywords=thesaurus_word.similar_words,
+                        keywords=thesaurus_word.word_name,
                         vector_id=update_thesaurus_id,  # Will be set after vectorization
                         es_indexed=False,  # Will be set after ElasticSearch indexing
-                    )
+                    ).model_dump()
                     await db.thesaurus_sensitive.update_one(
                         {"thesaurus_id": update_thesaurus_id},
-                        {"$set": update_data.model_dump()},
+                        {"$set": update_data},
                         upsert=True
                     )
 

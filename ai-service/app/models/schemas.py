@@ -773,7 +773,7 @@ class CreateEmployeeRequest(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "employee_id": 23,
+                "employee_id": "23",
                 "team_id": 28,
                 "name": "陈晓燕",
                 "position": "校园助教",
@@ -814,7 +814,7 @@ class UpdateEmployeeRequest(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "employee_id": 23,
+                "employee_id": "23",
                 "team_id": 28,
                 "name": "陈晓燕",
                 "position": "校园助教",
@@ -846,7 +846,7 @@ class EmployeeSettingPrologue(BaseModel):
     prologue: Optional[str] = Field(None, description="开场白内容")
     is_opening_questions: bool = Field(False, description="是否开启开场热门问题")
     prologue_question_type: int = Field(None, description="热门问题类型: 1-自动推荐 2-FAQ 3-自定义")
-    prologue_faqs: Optional[List[str]] = Field(default_factory=list, description="开场热门问题关联FAQ列表")
+    prologue_faqs: List[DatasetFaqRequest] = Field(default_factory=list, description="开场热门问题关联FAQ列表")
     hot_questions: Optional[List[str]] = Field(default_factory=list, description="开场热门问题自定义列表")
 
 
@@ -888,6 +888,11 @@ class EmployeeSettingPlugin(BaseModel):
     plugin_params: Optional[str] = Field(None, description="插件参数")
 
 
+class EmployeeSettingThesaurusMajor(BaseModel):
+    is_synonym_rewrite: bool = Field(False, description="是否同义词重写")
+    thesaurus_major: List[ThesaurusRequest] = Field(default_factory=list, description="专业词库列表")
+
+
 class EmployeePersonality(BaseModel):
     """Employee personality configuration."""
     tone: str = Field(default="professional")
@@ -914,14 +919,15 @@ class UpdateEmployeeSettingRequest(BaseModel):
     """ 数字员工对话设定请求参数对象 """
     employee_id: str = Field(..., description="数字员工id")
     update_time: str = Field(None, description="更新时间")
+    update_type: str = Field(..., description="更新类型：knowledge、prologue、rule、role、plugins、thesaurus_major")
     knowledge: EmployeeSettingKnowledge = Field(None, description="对话准备--知识库配置")
     prologue: EmployeeSettingPrologue = Field(None, description="对话开始--开场白、开场热门问题")
     chat_rule: EmployeeSettingChatRule = Field(None, description="对话中--对话规则")
     unusual_rule: EmployeeSettingUnusualRule = Field(None, description="对话中--异常或未匹配规则")
     safe_rule: EmployeeSettingSafeRule = Field(None, description="对话中--安全规则配置")
     role: EmployeeSettingRole = Field(None, description="角色--人设")
-    plugins: List[EmployeeSettingPlugin] = Field(default_factory=list, description="高级设置--插件")
-    thesaurus_major: List[ThesaurusRequest] = Field(default_factory=list, description="高级设置--专业词库列表")
+    plugins: List[EmployeeSettingPlugin] = Field(None, description="高级设置--插件")
+    thesaurus_major: EmployeeSettingThesaurusMajor = Field(None, description="高级设置--专业词库配置")
     # Nested structure (for new API) 具体作用？
     # personality: Optional[EmployeePersonality] = None
     # capabilities: Optional[EmployeeCapabilities] = None

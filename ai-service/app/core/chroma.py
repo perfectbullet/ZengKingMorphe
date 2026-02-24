@@ -156,7 +156,7 @@ class ChromaDB:
             ids: List of document IDs
         """
         try:
-            collection = self.get_collection(collection_name)
+            collection = self._get_collection(collection_name)
             collection.add(documents=documents, metadatas=metadatas, ids=ids)
             logger.info(
                 f"Added documents to Chroma: collection={collection_name}, count={len(documents)}"
@@ -222,7 +222,7 @@ class ChromaDB:
             ids: List of document IDs to delete
         """
         try:
-            collection = self.get_collection(collection_name)
+            collection = self._get_collection(collection_name)
             collection.delete(ids=ids)
             logger.info(
                 f"Deleted documents from Chroma: collection={collection_name}, count={len(ids)}"

@@ -19,7 +19,7 @@ logger = get_logger(__name__)
 router = APIRouter()
 
 
-@router.post("/update")
+@router.put("/update")
 async def update_faq(
     request: DatasetFaqRequest,
     api_key: str = Depends(get_api_key),
@@ -38,7 +38,7 @@ async def update_faq(
     """
     faq_id = request.faq_id
     try:
-        logger.info(f"update_faq request: faq_id={faq_id} employee_ids={request.employee_ids} request={request}")
+        logger.info(f"update_faq request: faq_id={faq_id} employee_ids={request.employee_ids}")
 
         # Build combined_text for embedding (question + similar questions)
         combined_text = request.question_name
@@ -50,7 +50,7 @@ async def update_faq(
                 update_faq_id = f"faq_{employee_id}_{faq_id}"
                 update_data = FAQModel(
                     faq_id=update_faq_id,
-                    employee_id=employee_id,
+                    employee_id=str(employee_id),
                     external_faq_id=faq_id,
                     question_name=request.question_name,
                     start_time=request.start_time,
@@ -94,7 +94,7 @@ async def delete_faq(
     db=Depends(get_database)
 ):
     """
-        删除FAQ
+        FAQ删除
 
         \nArgs:
             \n- faq_id: FAQ问答id
@@ -121,13 +121,13 @@ async def delete_faq(
         # 删除faq记录
         result = await db.faqs.delete_many({"external_faq_id": faq_id})
 
-        if result:
+        if result and result.deleted_count == 1:
             logger.info(f"delete_faq success: faq_id={faq_id}")
 
             return ResponseResult.success(None)
         else:
             return ResponseResult.error(status.HTTP_404_NOT_FOUND, "error",
-                                        f"delete_faq not found: faq_id={faq_id}")
+                                        f"delete_faq failed: faq_id={faq_id}")
 
     except HTTPException:
         raise

@@ -125,8 +125,7 @@ class ThesaurusSensitiveProcessor:
 
         # 删除ChromaDB记录
         try:
-            chroma_collection = chroma_db._get_collection("sensitive")
-            chroma_collection.delete(ids=[thesaurus_id])
+            chroma_db.sensitive_collection.delete(ids=[thesaurus_id])
             logger.debug(f"delete_thesaurus_vectorization_data Deleted FAQ thesaurus_id={thesaurus_id} from ChromaDB")
         except Exception as e:
             logger.warning(f"delete_thesaurus_vectorization_data ChromaDB delete failed: thesaurus_id={thesaurus_id} "
@@ -167,7 +166,7 @@ class ThesaurusSensitiveProcessor:
 
         # 5、生成向量并保存到ChromaDB向量库中
         try:
-            chroma_collection = chroma_db._get_collection("sensitive")
+            chroma_collection = chroma_db.sensitive_collection
 
             # 先删除已存在的向量数据
             if thesaurus.get("vector_id"):

@@ -334,13 +334,13 @@ class ElasticSearchDB:
     def _get_collection(self, index: str):
         """Get collection by name."""
         if index == "faq":
-            index_name = self.faq_index
+            return self.faq_index
         elif index == "doc":
-            index_name = self.doc_index
+            return self.doc_index
         elif index == "major":
-            index_name = self.major_index
+            return self.major_index
         elif index == "sensitive":
-            index_name = self.sensitive_index
+            return self.sensitive_index
         else:
             raise ValueError(f"Unknown index: {index}")
 

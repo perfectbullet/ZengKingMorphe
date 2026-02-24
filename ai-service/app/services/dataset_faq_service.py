@@ -120,8 +120,7 @@ class FaqProcessor:
 
         # 删除ChromaDB记录
         try:
-            chroma_collection = chroma_db._get_collection("faq")
-            chroma_collection.delete(ids=[faq_id])
+            chroma_db.faq_collection.delete(ids=[faq_id])
             logger.debug(f"delete_faq_vectorization_data Deleted FAQ faq_id={faq_id} from ChromaDB")
         except Exception as e:
             logger.warning(f"delete_faq_vectorization_data ChromaDB delete failed: faq_id={faq_id} "
@@ -156,7 +155,7 @@ class FaqProcessor:
 
         # 5、生成向量并保存到ChromaDB向量库中
         try:
-            chroma_collection = chroma_db._get_collection("faq")
+            chroma_collection = chroma_db.faq_collection
 
             # 先删除已存在的向量数据
             if faq.get("vector_id"):

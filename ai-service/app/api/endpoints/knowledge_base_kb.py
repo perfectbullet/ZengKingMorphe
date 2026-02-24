@@ -3,7 +3,6 @@ Knowledge base management API endpoints.
 """
 import hashlib
 import os
-from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from fastapi.responses import FileResponse
 from datetime import datetime
@@ -49,10 +48,10 @@ async def create_knowledge_base(
             - Created knowledge base data
     """
     try:
-        logger.info(f"create_knowledge_base request name={request.name} category={request.category}")
+        logger.info(f"create_knowledge_base request: name={request.name}")
 
         # Generate KB ID
-        kb_id = f"kb_{hashlib.md5(f'{request.name}_{datetime.utcnow().timestamp()}'.encode()).hexdigest()[:12]}"
+        kb_id = f"kb_{hashlib.md5(f'{request.name}_{datetime.now().timestamp()}'.encode()).hexdigest()[:12]}"
 
         # Create KB document
         kb_doc = {
@@ -64,19 +63,16 @@ async def create_knowledge_base(
             "tags": request.tags,
             "config": request.config.model_dump(),
             "status": "active",
-            "created_at": datetime.utcnow(),
-            "updated_at": datetime.utcnow()
+            "created_at": datetime.now(),
+            "updated_at": datetime.now()
         }
 
         # Insert into knowledge_bases collection
         result = await db.knowledge_bases.insert_one(kb_doc)
 
-        if result and result.inserted_id:
+        if result and result.inserted_id == 1:
             data = {
-                "kb_id": kb_id,
-                "name": request.name,
-                "status": "active",
-                "created_at": kb_doc["created_at"].isoformat() + "Z"
+                "kb_id": kb_id
             }
             return ResponseResult.success(data)
         else:
@@ -91,7 +87,7 @@ async def create_knowledge_base(
         )
 
 
-@router.post("/update")
+@router.put("/update")
 async def update_knowledge_base(
     request: UpdateKnowledgeBaseRequest,
     api_key: str = Depends(get_api_key),
@@ -110,13 +106,13 @@ async def update_knowledge_base(
     """
     kb_id = request.kb_id
     try:
-        logger.info(f"update_knowledge_base request kb_id={kb_id} updates={request.model_dump(exclude_none=True)}")
+        logger.info(f"update_knowledge_base request: kb_id={kb_id}")
 
         # Check if knowledge base exists
         kb = await db.knowledge_bases.find_one({'kb_id': kb_id})
         if not kb:
             return ResponseResult.error(status.HTTP_404_NOT_FOUND, "error",
-                                        f"update_knowledge_base not found kb_id={kb_id}")
+                                        f"update_knowledge_base not found: kb_id={kb_id}")
 
         # Build update data (only include non-None fields)
         update_data = {}
@@ -130,7 +126,7 @@ async def update_knowledge_base(
             update_data["tags"] = request.tags
 
         # Add updated_at timestamp
-        update_data["updated_at"] = datetime.utcnow()
+        update_data["updated_at"] = datetime.now()
 
         if not update_data:
             raise HTTPException(
@@ -145,27 +141,8 @@ async def update_knowledge_base(
         )
 
         if result and result.modified_count == 1:
-            logger.info(
-                f"update_knowledge_base {kb_id} updated success",
-                kb_id=kb_id,
-                fields_updated=list(update_data.keys())
-            )
-
-            # Get updated document
-            updated_kb = await db.knowledge_bases.find_one({"kb_id": kb_id})
-            updated_kb.pop("_id", None)
-
-            data = {
-                "kb_id": updated_kb["kb_id"],
-                "name": updated_kb["name"],
-                "description": updated_kb["description"],
-                "priority": updated_kb["priority"],
-                "tags": updated_kb.get("tags", []),
-                "status": updated_kb["status"],
-                "created_at": updated_kb["created_at"].isoformat() + "Z",
-                "updated_at": updated_kb["updated_at"].isoformat() + "Z"
-            }
-            return ResponseResult.success(data)
+            logger.info(f"update_knowledge_base success: kb_id={kb_id}")
+            return ResponseResult.success(None)
         else:
             return ResponseResult.error(status.HTTP_400_BAD_REQUEST, "error",
                                         "update_knowledge_base failed")
@@ -173,7 +150,7 @@ async def update_knowledge_base(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"update_knowledge_base exception kb_id={kb_id} error={str(e)}", exc_info=True)
+        logger.error(f"update_knowledge_base exception: kb_id={kb_id} error={str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="update_knowledge_base error"
@@ -189,13 +166,13 @@ async def delete_knowledge_bases(
     """
         删除知识库信息。
 
-    Args:
-        - kb_id: knowledge base ID
-        - api_key: API key from auth
-        - db: Database instance
+        Args:
+            - kb_id: knowledge base ID
+            - api_key: API key from auth
+            - db: Database instance
 
-    Returns:
-        - result with chunks_deleted count
+        Returns:
+            - result with chunks_deleted count
     """
     try:
         logger.info(f"delete_knowledge_bases request: kb_id={kb_id}")
@@ -203,48 +180,31 @@ async def delete_knowledge_bases(
         # 检查知识库是否存在
         kb = await db.knowledge_bases.find_one({'kb_id': kb_id})
         if not kb:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Knowledge base {kb_id} not found"
-            )
+            return ResponseResult.error(status.HTTP_404_NOT_FOUND, "error",
+                                        f"delete_knowledge_bases not found: kb_id={kb_id}")
 
         # 获取该知识库的所有 chunk_id（用于删除 ChromaDB 和 ES）
         chunks_cursor = db.document_chunks.find({"kb_id": kb_id}, {"chunk_id": 1})
         chunks = await chunks_cursor.to_list(length=None)
         chunk_ids = [c["chunk_id"] for c in chunks]
 
-        logger.info(
-            f"Deleting knowledge base data: kb_id={kb_id}, chunks_count={len(chunk_ids)}"
-        )
+        logger.info(f"delete_knowledge_bases: kb_id={kb_id}, chunks_count={len(chunk_ids)}")
 
         # 1. 删除 MongoDB document_chunks
         chunks_result = await db.document_chunks.delete_many({"kb_id": kb_id})
-        logger.info(
-            f"Deleted document_chunks: kb_id={kb_id}, count={chunks_result.deleted_count}"
-        )
+        logger.info(f"delete_knowledge_bases delete document_chunks: kb_id={kb_id}, count={chunks_result.deleted_count}")
 
         # 2. 删除 MongoDB documents
         docs_result = await db.documents.delete_many({"kb_id": kb_id})
-        logger.info(
-            f"Deleted documents: kb_id={kb_id}, count={docs_result.deleted_count}"
-        )
+        logger.info(f"delete_knowledge_bases delete documents: kb_id={kb_id}, count={docs_result.deleted_count}")
 
         # 3. 删除 ChromaDB 向量数据
         if chunk_ids:
             try:
                 await chroma_db.delete_documents(collection_name="doc", ids=chunk_ids)
-                logger.info(
-                    "Deleted ChromaDB documents",
-                    kb_id=kb_id,
-                    count=len(chunk_ids)
-                )
+                logger.info(f"delete_knowledge_bases delete ChromaDB documents: kb_id={kb_id}, count={len(chunk_ids)}")
             except Exception as e:
-                logger.error(
-                    "Failed to delete ChromaDB data",
-                    kb_id=kb_id,
-                    error=str(e),
-                    exc_info=True
-                )
+                logger.error(f"delete_knowledge_bases delete ChromaDB documents exception: kb_id={kb_id} error={str(e)}", exc_info=True)
 
         # 4. 删除 ElasticSearch 索引数据
         if chunk_ids:
@@ -254,42 +214,27 @@ async def delete_knowledge_bases(
                     await es_db.delete_document(index=es_db.doc_index, doc_id=chunk_id)
                     deleted_es_count += 1
                 except Exception as e:
-                    logger.warning(
-                        "Failed to delete ES document",
-                        chunk_id=chunk_id,
-                        error=str(e)
-                    )
-            logger.info(
-                "Deleted ES documents",
-                kb_id=kb_id,
-                count=deleted_es_count
-            )
+                    logger.warning(f"delete_knowledge_bases delete ES document exception: chunk_id={chunk_id} error={str(e)}")
+            logger.info(f"delete_knowledge_bases deleted ES documents: kb_id={kb_id} count={deleted_es_count}")
 
         # 5. 最后删除知识库元数据
         result = await db.knowledge_bases.delete_one({'kb_id': kb_id})
 
-        if result.deleted_count == 1:
-            logger.info(
-                "Knowledge base deleted successfully",
-                kb_id=kb_id,
-                chunks_deleted=len(chunk_ids)
-            )
+        if result and result.deleted_count == 1:
+            logger.info(f"delete_knowledge_bases success: kb_id={kb_id} chunks_deleted={len(chunk_ids)}")
             return ResponseResult.success({
                 "kb_id": kb_id,
                 "chunks_deleted": len(chunk_ids)
             })
         else:
-            logger.error(f"delete_knowledge_bases {kb_id} failed")
-            return ResponseResult.error(
-                status.HTTP_400_BAD_REQUEST,
-                "error",
-                f"delete_knowledge_bases {kb_id} failed"
-            )
+            logger.error(f"delete_knowledge_bases failed: kb_id={kb_id}")
+            return ResponseResult.error(status.HTTP_400_BAD_REQUEST, "error",
+                                        f"delete_knowledge_bases failed: kb_id={kb_id}")
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"delete_knowledge_bases exception kb_id={kb_id} error={str(e)}", exc_info=True)
+        logger.error(f"delete_knowledge_bases exception: kb_id={kb_id} error={str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="delete_knowledge_bases error"
@@ -303,21 +248,21 @@ async def list_knowledge_bases(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     api_key: str = Depends(get_api_key),
-    db = Depends(get_database)
+    db=Depends(get_database)
 ):
     """
-    获取知识库列表。
+        获取知识库列表。
 
-    \nArgs:
-        \n- category: Filter by category
-        \n- status_filter: Filter by status
-        \n- page: Page number
-        \n- page_size: Page size
-        \n- api_key: API key from auth
-        \n- db: Database instance
+        \nArgs:
+            \n- category: Filter by category
+            \n- status_filter: Filter by status
+            \n- page: Page number
+            \n- page_size: Page size
+            \n- api_key: API key from auth
+            \n- db: Database instance
 
-    \nReturns:
-        \n- List of knowledge bases
+        \nReturns:
+            \n- List of knowledge bases
     """
     try:
         # Build query
@@ -346,23 +291,16 @@ async def list_knowledge_bases(
                 "created_at": kb["created_at"].isoformat() + "Z"
             })
 
-        return {
-            "code": 200,
-            "message": "success",
-            "data": {
-                "total": total,
-                "page": page,
-                "page_size": page_size,
-                "items": items
-            }
+        data = {
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "items": items
         }
+        return ResponseResult.success(data)
 
     except Exception as e:
-        logger.error(
-            "List knowledge bases error",
-            error=str(e),
-            exc_info=True
-        )
+        logger.error("List knowledge bases error", error=str(e), exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to list knowledge bases"
@@ -374,10 +312,10 @@ async def list_test_files(
     api_key: str = Depends(get_api_key)
 ):
     """
-    列出测试文件夹中的所有文件（仅用于测试）。
+        列出测试文件夹中的所有文件（仅用于测试）。
 
-    \nReturns:
-        \n- List of available test files with download URLs
+        \nReturns:
+            \n- List of available test files with download URLs
     """
     try:
         logger.info("List test files request")
@@ -411,22 +349,15 @@ async def list_test_files(
                     "full_download_url": f"http://localhost:8000/api/knowledge-base/test-files/download/{file_path.name}"
                 })
 
-        return {
-            "code": 200,
-            "message": "success",
-            "data": {
+        data = {
                 "test_files_dir": str(test_files_path),
                 "total_files": len(files),
                 "files": files
             }
-        }
+        return ResponseResult.success(data)
 
     except Exception as e:
-        logger.error(
-            "List test files error",
-            error=str(e),
-            exc_info=True
-        )
+        logger.error("List test files error", error=str(e), exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to list test files"
@@ -439,13 +370,13 @@ async def download_test_file(
     api_key: str = Depends(get_api_key)
 ):
     """
-    下载测试文件（仅用于测试）。
+        下载测试文件（仅用于测试）。
 
-    \nArgs:
-        \n- filename: Name of the file to download
+        \nArgs:
+            \n- filename: Name of the file to download
 
-    \nReturns:
-        \n- File download response
+        \nReturns:
+            \n- File download response
     """
     try:
         logger.info(f"Download test file request: filename={filename}")
@@ -463,18 +394,14 @@ async def download_test_file(
 
         # Check if file exists
         if not file_path.exists() or not file_path.is_file():
-            logger.warning(
-                f"Test file not found: filename={filename}, requested_path={str(file_path)}"
-            )
+            logger.warning(f"Test file not found: filename={filename}, requested_path={str(file_path)}")
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"File '{filename}' not found in test files directory"
             )
 
         # Return file
-        logger.info(
-            f"Serving test file: filename={filename}, file_path={str(file_path)}"
-        )
+        logger.info(f"Serving test file: filename={filename}, file_path={str(file_path)}")
         return FileResponse(
             path=str(file_path),
             filename=filename,
@@ -484,12 +411,7 @@ async def download_test_file(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(
-            "Download test file error",
-            filename=filename,
-            error=str(e),
-            exc_info=True
-        )
+        logger.error("Download test file error", filename=filename, error=str(e), exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to download test file"
@@ -500,18 +422,18 @@ async def download_test_file(
 async def get_knowledge_base_detail(
     kb_id: str,
     api_key: str = Depends(get_api_key),
-    db = Depends(get_database)
+    db=Depends(get_database)
 ):
     """
-    获取知识库详情及前10个文档块。
+        获取知识库详情及前10个文档块。
 
-    \nArgs:
-        \n- kb_id: Knowledge base ID
-        \n- api_key: API key from auth
-        \n- db: Database instance
+        \nArgs:
+            \n- kb_id: Knowledge base ID
+            \n- api_key: API key from auth
+            \n- db: Database instance
 
-    \nReturns:
-        \n- Knowledge base detail information with top 10 document chunks
+        \nReturns:
+            \n- Knowledge base detail information with top 10 document chunks
     """
     try:
         logger.info(f"Get knowledge base detail request: kb_id={kb_id}")
@@ -520,11 +442,8 @@ async def get_knowledge_base_detail(
         kb = await db.knowledge_bases.find_one({"kb_id": kb_id})
 
         if not kb:
-            logger.warning(f"Knowledge base not found: kb_id={kb_id}")
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Knowledge base {kb_id} not found"
-            )
+            return ResponseResult.error(status.HTTP_404_NOT_FOUND, "error",
+                                        f"get_knowledge_base_detail not found: kb_id={kb_id}")
 
         # Remove MongoDB _id field
         kb.pop("_id", None)
@@ -551,28 +470,14 @@ async def get_knowledge_base_detail(
         kb["chunks"] = formatted_chunks
         kb["total_chunks"] = len(formatted_chunks)
 
-        logger.info(
-            "Knowledge base detail retrieved",
-            kb_id=kb_id,
-            name=kb.get("name"),
-            chunks_count=len(formatted_chunks)
-        )
+        logger.info("Knowledge base detail retrieved", kb_id=kb_id, name=kb.get("name"), chunks_count=len(formatted_chunks))
 
-        return {
-            "code": 200,
-            "message": "success",
-            "data": kb
-        }
+        return ResponseResult.success(kb)
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(
-            "Get knowledge base detail error",
-            kb_id=kb_id,
-            error=str(e),
-            exc_info=True
-        )
+        logger.error("Get knowledge base detail error", kb_id=kb_id, error=str(e), exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to get knowledge base detail"
