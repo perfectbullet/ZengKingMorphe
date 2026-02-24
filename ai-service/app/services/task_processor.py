@@ -285,7 +285,7 @@ class DocumentTaskProcessor:
 
         # Create task record in database
         db = await get_database()
-        task_model = DocumentTaskModel(
+        insert_data = DocumentTaskModel(
             task_id=task_id,
             kb_id=kb_id,
             enhance=1,
@@ -295,10 +295,7 @@ class DocumentTaskProcessor:
             category=None,
             status="pending",
             metadata={}
-        )
-
-        insert_data = task_model.model_dump()
-
+        ).model_dump()
         await db.document_tasks.insert_one(insert_data)
 
         # Add to queue for background processing
@@ -321,7 +318,7 @@ class DocumentTaskProcessor:
 
         # Create task record in database
         db = await get_database()
-        task_model = DocumentTaskModel(
+        insert_data = DocumentTaskModel(
             task_id=task_id,
             kb_id=kb_id,
             enhance=1,
@@ -331,10 +328,7 @@ class DocumentTaskProcessor:
             category=None,
             status="pending",
             metadata={}
-        )
-
-        insert_data = task_model.model_dump()
-
+        ).model_dump()
         await db.document_tasks.insert_one(insert_data)
 
         # Add to queue for background processing
@@ -357,7 +351,7 @@ class DocumentTaskProcessor:
 
         # Create task record in database
         db = await get_database()
-        task_model = DocumentTaskModel(
+        insert_data = DocumentTaskModel(
             task_id=task_id,
             kb_id=kb_id,
             enhance=1,
@@ -367,10 +361,7 @@ class DocumentTaskProcessor:
             category=None,
             status="pending",
             metadata={}
-        )
-
-        insert_data = task_model.model_dump()
-
+        ).model_dump()
         await db.document_tasks.insert_one(insert_data)
 
         # Add to queue for background processing

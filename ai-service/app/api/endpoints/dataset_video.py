@@ -33,11 +33,7 @@ async def create_dataset_video(
     """
     kb_id = request.kb_id
     try:
-        logger.info(
-            f"create_dataset_video request: kb_id={request.kb_id}, "
-            f"enhance={request.enhance}, document_name={request.document_name}, "
-            f"resource_id={request.resource_id}, resource_url={request.resource_url}"
-        )
+        logger.info(f"create_dataset_video request: kb_id={kb_id}")
 
         # 下载远程服务器上的文档文件
         file_path = await download_file(request.document_name, request.resource_id, request.resource_url)

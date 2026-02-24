@@ -225,7 +225,7 @@ class FAQModel(BaseModel):
 
 class EmployeeSettingKnowledge(BaseModel):
     kb_ids: List[str] = Field(default_factory=list, description="知识库id列表")
-    faqs: List[str] = Field(default_factory=list, description="FAQ问答id列表")
+    faq_ids: List[str] = Field(default_factory=list, description="FAQ问答id列表")
     video_ids: List[str] = Field(default_factory=list, description="视频资源id列表")
 
 
@@ -247,7 +247,7 @@ class EmployeeSettingChatRule(BaseModel):
 class EmployeeSettingUnusualRule(BaseModel):
     exception_reply: Optional[str] = Field(None, description="系统异常时的回复话术")
     not_match_reply_type: Optional[int] = Field(None, description="未匹配时的回复类型：0：固定话术，1：模型闲聊回复")
-    fixed_replys: Optional[List[str]] = Field(None, description="not_match_reply_type=0时的固定回复列表")
+    fixed_replys: Optional[List[str]] = Field(default_factory=list, description="not_match_reply_type=0时的固定回复列表")
     is_web_search: bool = Field(False, description="not_match_reply_type=1时的模型闲聊回复：是否联网搜索")
     is_show_sign: bool = Field(False, description="not_match_reply_type=1时的模型闲聊回复：是否显示标识")
     is_my_prompt: bool = Field(False, description="not_match_reply_type=1时的模型闲聊回复：是否启用自定义提示词")
@@ -263,7 +263,8 @@ class ThesaurusWord(BaseModel):
 class EmployeeSettingSafeRule(BaseModel):
     is_reject_answer: bool = Field(False, description="命中敏感词时是否拒绝回答")
     reject_answer: Optional[str] = Field(None, description="拒绝回答时的回复内容")
-    thesaurus_sensitive: List[str] = Field(default_factory=list, description="敏感词库的词条id列表：sensitive_41_67_118")
+    sensitive_ids: List[str] = Field(default_factory=list, description="敏感词库的词条id列表：sensitive_41_67_118")
+
 
 class EmployeeSettingRole(BaseModel):
     persona: Optional[str] = Field(None, description="人设")
@@ -278,6 +279,11 @@ class EmployeeSettingPlugin(BaseModel):
     plugin_intro: Optional[str] = Field(None, description="插件简介")
     plugin_icon: Optional[str] = Field(None, description="插件图标")
     plugin_params: Optional[str] = Field(None, description="插件参数")
+
+
+class EmployeeSettingThesaurusMajor(BaseModel):
+    is_synonym_rewrite: bool = Field(False, description="是否同义词重写")
+    major_ids: List[str] = Field(default_factory=list, description="专业词库的词条id列表：major_41_67_118")
 
 
 class DigitalEmployeeConfigModel(BaseModel):
@@ -302,6 +308,14 @@ class DigitalEmployeeConfigModel(BaseModel):
     created_at: datetime = Field(default_factory=datetime.now, description="创建时间")
     updated_at: datetime = Field(default_factory=datetime.now, description="更新时间")
     synced_at: datetime = Field(default_factory=datetime.now, description="同步时间")
+    knowledge: EmployeeSettingKnowledge = Field(None, description="对话准备--知识库配置")
+    prologue: EmployeeSettingPrologue = Field(None, description="对话开始--开场白、开场热门问题")
+    chat_rule: EmployeeSettingChatRule = Field(None, description="对话中--对话规则")
+    unusual_rule: EmployeeSettingUnusualRule = Field(None, description="对话中--异常或未匹配规则")
+    safe_rule: EmployeeSettingSafeRule = Field(None, description="对话中--安全规则配置")
+    role: EmployeeSettingRole = Field(None, description="角色--人设")
+    plugins: List[EmployeeSettingPlugin] = Field(default_factory=list, description="高级设置--插件")
+    thesaurus_major: EmployeeSettingThesaurusMajor = Field(None, description="高级设置--专业词库配置")
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -309,14 +323,14 @@ class DigitalEmployeeConfigSettingModel(BaseModel):
     """ MongoDB数字员工对话设定 """
     employee_id: str = Field(..., description="数字员工id")
     update_time: str = Field(None, description="更新时间（mysql库）")
-    knowledge: EmployeeSettingKnowledge = Field(..., description="对话准备--知识库配置")
-    prologue: EmployeeSettingPrologue = Field(..., description="对话开始--开场白、开场热门问题")
-    chat_rule: EmployeeSettingChatRule = Field(..., description="对话中--对话规则")
-    unusual_rule: EmployeeSettingUnusualRule = Field(..., description="对话中--异常或未匹配规则")
-    safe_rule: EmployeeSettingSafeRule = Field(..., description="对话中--安全规则配置")
+    knowledge: EmployeeSettingKnowledge = Field(None, description="对话准备--知识库配置")
+    prologue: EmployeeSettingPrologue = Field(None, description="对话开始--开场白、开场热门问题")
+    chat_rule: EmployeeSettingChatRule = Field(None, description="对话中--对话规则")
+    unusual_rule: EmployeeSettingUnusualRule = Field(None, description="对话中--异常或未匹配规则")
+    safe_rule: EmployeeSettingSafeRule = Field(None, description="对话中--安全规则配置")
     role: EmployeeSettingRole = Field(..., description="角色--人设")
     plugins: List[EmployeeSettingPlugin] = Field(default_factory=list, description="高级设置--插件")
-    thesaurus_major: List[str] = Field(default_factory=list, description="高级设置--专业词库的词条id列表：major_41_67_118")
+    thesaurus_major: EmployeeSettingThesaurusMajor = Field(None, description="高级设置--专业词库配置")
     updated_at: datetime = Field(default_factory=datetime.now)
 
 
@@ -347,10 +361,10 @@ class ThesaurusMajorModel(BaseModel):
     thesaurus_id: str  # 专业词库唯一id: major_{employee_id}_{external_thesaurus_id}_{external_word_id}
     employee_id: str  # 数字员工id（mysql库）
     external_thesaurus_id: int  # 专业词库id（mysql库）
+    external_word_id: int  # 专业词条id（mysql库）
     thesaurus_name: str  # 专业词库名称
     is_enable: int = 1  # 是否启用：0=不启用，1=启用
     update_time: str  # 更新时间（mysql库）
-    external_word_id: int  # 专业词条id（mysql库）
     word_name: str  # 词条名称
     similar_words: List[str] = Field(default_factory=list)  # 相似词条名称列表
     # Vector and keyword indexing metadata
