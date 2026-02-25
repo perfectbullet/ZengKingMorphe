@@ -66,6 +66,8 @@ class ConversationState(TypedDict):
     messages: Annotated[List, add]
     user_query: str
     user_id: str
+    user_name: str
+    head_url: str
     session_id: str
     employee_id: str
     employee_config: Dict[str, Any]

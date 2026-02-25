@@ -148,7 +148,9 @@ class OpenAIChatRequest(BaseModel):
                 "user_id": "user_123456",
                 "session_id": "sess_20251218_abc123",
                 "channel_name": "web",
-                "team_id": "team_001"
+                "team_id": "team_001",
+                "user_name": "苏文心",
+                "head_url": "/edu-api/fileserver/default/image/2025/5/14/e6d399d9-3785-4d08-bbab-213a6df390c4.jpeg"
             }
         }
     )
@@ -169,6 +171,8 @@ class OpenAIChatRequest(BaseModel):
     # Custom fields for our system
     employee_id: str = Field(default="29", description="Digital employee ID")
     user_id: str = Field(default="user_20260122", description="User ID")
+    user_name: str = Field(default="用户名称", description="用户登录后的名字")
+    head_url: str = Field(default="用户头像", description="用户头像")
     session_id: Optional[str] = Field(default="sess_4_42478261_29", description="Session ID")
     channel_name: Optional[str] = Field(default=None, description="Channel name (web, mobile, etc.)")
     team_id: Optional[str] = Field(default=None, description="Team ID")
@@ -193,6 +197,8 @@ class CreateSessionRequest(BaseModel):
                     "platform": "web",
                     "device": "desktop",
                     "source": "metahuman_app",
+                    "device_id": "CJQX-YJO1",
+                    "device_name": "数字人全息舱 DSee型号",
                 }
             }
         }
@@ -206,7 +212,7 @@ class CreateSessionRequest(BaseModel):
     )
     metadata: Dict[str, Any] = Field(
         default_factory=dict,
-        description="Additional session metadata (e.g., platform, device, source)"
+        description="Additional session metadata (e.g., platform, device, source, device_id, device_name)"
     )
 
 
@@ -773,7 +779,7 @@ class CreateEmployeeRequest(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "employee_id": 23,
+                "employee_id": "23",
                 "team_id": 28,
                 "name": "陈晓燕",
                 "position": "校园助教",
@@ -814,7 +820,7 @@ class UpdateEmployeeRequest(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "employee_id": 23,
+                "employee_id": "23",
                 "team_id": 28,
                 "name": "陈晓燕",
                 "position": "校园助教",
@@ -846,7 +852,7 @@ class EmployeeSettingPrologue(BaseModel):
     prologue: Optional[str] = Field(None, description="开场白内容")
     is_opening_questions: bool = Field(False, description="是否开启开场热门问题")
     prologue_question_type: int = Field(None, description="热门问题类型: 1-自动推荐 2-FAQ 3-自定义")
-    prologue_faqs: Optional[List[str]] = Field(default_factory=list, description="开场热门问题关联FAQ列表")
+    prologue_faqs: List[DatasetFaqRequest] = Field(default_factory=list, description="开场热门问题关联FAQ列表")
     hot_questions: Optional[List[str]] = Field(default_factory=list, description="开场热门问题自定义列表")
 
 
@@ -888,6 +894,11 @@ class EmployeeSettingPlugin(BaseModel):
     plugin_params: Optional[str] = Field(None, description="插件参数")
 
 
+class EmployeeSettingThesaurusMajor(BaseModel):
+    is_synonym_rewrite: bool = Field(False, description="是否同义词重写")
+    thesaurus_major: List[ThesaurusRequest] = Field(default_factory=list, description="专业词库列表")
+
+
 class EmployeePersonality(BaseModel):
     """Employee personality configuration."""
     tone: str = Field(default="professional")
@@ -914,14 +925,15 @@ class UpdateEmployeeSettingRequest(BaseModel):
     """ 数字员工对话设定请求参数对象 """
     employee_id: str = Field(..., description="数字员工id")
     update_time: str = Field(None, description="更新时间")
+    update_type: str = Field(..., description="更新类型：knowledge、prologue、rule、role、plugins、thesaurus_major")
     knowledge: EmployeeSettingKnowledge = Field(None, description="对话准备--知识库配置")
     prologue: EmployeeSettingPrologue = Field(None, description="对话开始--开场白、开场热门问题")
     chat_rule: EmployeeSettingChatRule = Field(None, description="对话中--对话规则")
     unusual_rule: EmployeeSettingUnusualRule = Field(None, description="对话中--异常或未匹配规则")
     safe_rule: EmployeeSettingSafeRule = Field(None, description="对话中--安全规则配置")
     role: EmployeeSettingRole = Field(None, description="角色--人设")
-    plugins: List[EmployeeSettingPlugin] = Field(default_factory=list, description="高级设置--插件")
-    thesaurus_major: List[ThesaurusRequest] = Field(default_factory=list, description="高级设置--专业词库列表")
+    plugins: List[EmployeeSettingPlugin] = Field(None, description="高级设置--插件")
+    thesaurus_major: EmployeeSettingThesaurusMajor = Field(None, description="高级设置--专业词库配置")
     # Nested structure (for new API) 具体作用？
     # personality: Optional[EmployeePersonality] = None
     # capabilities: Optional[EmployeeCapabilities] = None

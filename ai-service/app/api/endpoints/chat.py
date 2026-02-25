@@ -217,7 +217,9 @@ async def openai_chat_completions_v2(
             - user_id: 用户ID
             - session_id: 会话ID
             - channel_name: 渠道名称
-            - team_id: 团队ID
+            - team_id: 团队id
+            - user_name: 用户名称
+            - head_url: 用户头像
 
         api_key: 来自身份验证的应用程序接口密钥
 
@@ -231,6 +233,8 @@ async def openai_chat_completions_v2(
         effective_user_id = request.user_id
         effective_employee_id = request.employee_id
         effective_channel_name = request.channel_name
+        effective_user_name = request.user_name
+        effective_head_url = request.head_url
 
         # 只有当 team_id/user_id/employee_id 不存在时，才从 channel_name 解析
         if request.extra_body and "channel_name" in request.extra_body:
@@ -249,6 +253,8 @@ async def openai_chat_completions_v2(
                             parsed_team_id = parts[1]
                             parsed_user_id = parts[2]
                             parsed_employee_id = parts[3]
+                            parsed_user_name = parts[4]
+                            parsed_head_url = parts[5]
 
                             # 只覆盖缺失的值
                             if not effective_team_id:
@@ -257,6 +263,10 @@ async def openai_chat_completions_v2(
                                 effective_user_id = parsed_user_id
                             if not effective_employee_id:
                                 effective_employee_id = parsed_employee_id
+                            if not effective_user_name:
+                                effective_user_name = parsed_user_name
+                            if not effective_head_url:
+                                effective_head_url = parsed_head_url
 
                             logger.info(
                                 f"Parsed from channel_name: team_id={effective_team_id}, "
@@ -279,6 +289,10 @@ async def openai_chat_completions_v2(
                 effective_employee_id = request.extra_body["employee_id"]
             if "channel_name" in request.extra_body and request.extra_body["channel_name"] and not effective_channel_name:
                 effective_channel_name = request.extra_body["channel_name"]
+            if "user_name" in request.extra_body and request.extra_body["user_name"]:
+                effective_user_name = request.extra_body["user_name"]
+            if "head_url" in request.extra_body and request.extra_body["head_url"]:
+                effective_head_url = request.extra_body["head_url"]
 
         # Rate limiting
         await rate_limit_middleware(
@@ -296,6 +310,8 @@ async def openai_chat_completions_v2(
             f"OpenAI v2 chat completion request | "
             f"model={request.model} | "
             f"user_id={effective_user_id} | "
+            f"user_name={effective_user_name} | "
+            f"head_url={effective_head_url} | "
             f"employee_id={effective_employee_id} | "
             f"session_id={request.session_id} | "
             f"stream={request.stream} | "
@@ -319,6 +335,8 @@ async def openai_chat_completions_v2(
             stream_request = request.model_copy(
                 update={
                     "user_id": effective_user_id,
+                    "user_name": effective_user_name,
+                    "head_url": effective_head_url,
                     "employee_id": effective_employee_id,
                     "team_id": effective_team_id,
                     "channel_name": effective_channel_name,
