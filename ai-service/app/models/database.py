@@ -31,7 +31,9 @@ class ConversationModel(BaseModel):
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: Optional[datetime] = None
     context: Dict[str, Any] = Field(default_factory=dict)
-
+    # 
+    user_name: str
+    head_url: str
 
 class SessionModel(BaseModel):
     """Session model."""

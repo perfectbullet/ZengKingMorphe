@@ -519,11 +519,12 @@ async def generate_openai_stream_v1(
                     )
 
                     # 按中文标点符号切分然后保存，但是不 yield， 这里的输出会在 `ai-service/app/api/endpoints/websocket.py` 被返回给前端
-                    segments = re.split(r'([。！？])', existing_answer)
+                    # 使用 lookahead 保持标点与句子在同一 segment
+                    segments = re.split(r'(?<=[。！？])', existing_answer)
                     current_chunk = ""
                     for segment in segments:
                         current_chunk += segment
-                        if segment in '，。！？、；：\n' or len(current_chunk) >= 20:
+                        if segment and segment[-1] in '，。！？、；：\n' or len(current_chunk) >= 20:
                             token_chunk_data = {
                                 "id": chat_id,
                                 "object": "chat.completion.chunk",
@@ -570,8 +571,9 @@ async def generate_openai_stream_v1(
                     # 如果 teaching_script_tts 存在且非空，直接流式输出；否则走 LLM 转换
                     if teaching_script_tts and teaching_script_tts.strip():
                         # 直接输出 teaching_script_tts
+                        # 使用 lookahead 保持标点与句子在同一 segment
                         logger.info(f"Using teaching_script_tts directly, length={len(teaching_script_tts)}")
-                        tts_segments = re.split(r'([。！？])', existing_answer)
+                        tts_segments = re.split(r'(?<=[。！？，、；：])', teaching_script_tts)
                         for ts in tts_segments:
                             token_chunk_data = {
                                 "id": chat_id,
@@ -623,6 +625,7 @@ async def generate_openai_stream_v1(
                     break
                 
                 # 没有预生产答案，按 LLM 流式输出处理
+                logger.info('没有预生产答案，按 LLM 流式输出处理')
                 # Build messages for LLM
                 messages = conversation_workflow.build_generation_messages(final_state)
                 # Get appropriate LLM for streaming
