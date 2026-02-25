@@ -254,7 +254,7 @@ class OllamaEmbeddings(Embeddings):
         logger.info(
             f"[OllamaEmbedding] Starting batch embedding request | "
             f"url={url} | model={self.model} | batch_size={len(uncached_texts)} | "
-            f"total_texts={len(texts)} | cached_count={len(cached_indices)} | "
+            f"total_texts={len(texts)} | cached_count={len(cached_results)} | "
             f"total_input_chars={sum(len(t) for t in truncated_texts)}"
         )
 

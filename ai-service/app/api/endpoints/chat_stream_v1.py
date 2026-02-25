@@ -548,7 +548,6 @@ async def generate_openai_stream_v1(
                     # Save conversation and exit
                     await conversation_workflow.save_conversation(final_state)
 
-
                     # 这里的输出会发生给语音合成服务
                     # 优先使用 teaching_script_tts，如果为空或查询不到则走 LLM 转换逻辑
                     chunk_id = direct_match.get("chunk_id")

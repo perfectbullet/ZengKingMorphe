@@ -249,9 +249,9 @@ def main():
         """
     )
     parser.add_argument("--host", default="http://192.168.8.233:8100", help="Base host (including port), 默认: http://192.168.8.233:8100")
-    parser.add_argument("--employee_id", default="29", help="Employee ID, 默认: 29")
+    parser.add_argument("--employee_id", default="33", help="Employee ID, 默认: 33")
     parser.add_argument("--user_id", default="3", help="User ID, 默认: 3")
-    parser.add_argument("--session_id", default="sess_4_3_29", help="Session ID, 默认: sess_4_3_29")
+    parser.add_argument("--session_id", default="sess_4_3_33", help="Session ID, 默认: sess_4_3_33")
     parser.add_argument("--model", default="qwen2.5:7b", help="Model name, 默认: qwen2.5:7b")
 
     # 新增参数
@@ -280,7 +280,7 @@ def main():
         team_id=args.team_id,
         extra_body=extra_body
     )
-
+    print(f'body: {body}')
     rc = run_stream(args.host, body, api_key, timeout=args.timeout)
 
     sys.exit(rc)
