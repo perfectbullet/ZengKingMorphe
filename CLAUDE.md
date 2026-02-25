@@ -27,7 +27,7 @@ A LangGraph-based conversational AI service providing RAG (Retrieval-Augmented G
 source .venv/bin/activate
 
 # Or run directly
-/mnt/d/zenking_work/metahuman_work/ZengKingMorphe/.venv/bin/python script.py
+/home/zj/ZengKingMorphe/.venv/bin/python script.py
 ```
 
 ### Docker Commands

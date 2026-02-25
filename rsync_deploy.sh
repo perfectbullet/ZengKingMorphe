@@ -8,7 +8,7 @@
 REMOTE_HOST="192.168.8.233"
 REMOTE_USER="zenking"
 SSH_KEY="/home/zj/.ssh/id_rsa"
-LOCAL_DIR="/mnt/d/zenking_work/metahuman_work/ZengKingMorphe"
+LOCAL_DIR="/home/zj/ZengKingMorphe"
 REMOTE_DIR="/data/metahuman_work/ZengKingMorphe"
 
 # rsync 选项

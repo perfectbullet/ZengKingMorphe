@@ -75,7 +75,7 @@ docker-compose logs -f ai-service
 ```bash
 # 虚拟环境已创建，依赖已安装
 # 如需重新安装，使用项目 Python 解释器：
-/mnt/d/zenking_work/metahuman_work/ZengKingMorphe/.venv/bin/python -m pip install -r ai-service/requirements.txt
+/home/zj/ZengKingMorphe/.venv/bin/python -m pip install -r ai-service/requirements.txt
 
 # 或激活虚拟环境后安装
 source .venv/bin/activate
@@ -94,7 +94,7 @@ docker-compose up -d mongodb elasticsearch chroma
 ```bash
 cd ai-service
 # 使用项目 Python 解释器
-/mnt/d/zenking_work/metahuman_work/ZengKingMorphe/.venv/bin/python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000
+/home/zj/ZengKingMorphe/.venv/bin/python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
 # 或激活虚拟环境后运行
 source ../.venv/bin/activate

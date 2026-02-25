@@ -22,6 +22,7 @@ from app.models.database import StreamChunkModel
 from app.core.logging import get_logger
 from app.core.database import get_database
 from app.services.conversation_service import conversation_workflow
+from app.utils.latex import normalize_latex_formulas
 
 logger = get_logger(__name__)
 
@@ -38,39 +39,6 @@ def _load_revise_prompt() -> str:
     except FileNotFoundError:
         logger.warning(f"Prompt file not found: {prompt_path}, using default prompt")
         return "你是一个数学公式口语化讲解专家。请将用户输入的数学公式和概念，用纯粹、流畅、易于理解的自然语言解释，完全不含任何数学符号或特殊格式，专为语音播报场景设计。"
-
-
-def _normalize_latex_delimiters(text: str) -> str:
-    """
-    规范化 LaTeX 定界符，将各种转义形式替换为标准格式。
-
-    替换规则：
-    - \( 或 \\( 或 \\\( → $
-    - \) 或 \\) 或 \\\) → $
-    - \[ 或 \\[ 或 \\\[ → $$
-    - \] 或 \\] 或 \\\] → $$
-
-    Args:
-        text: 包含可能转义的 LaTeX 定界符的文本
-
-    Returns:
-        规范化后的文本
-    """
-    # 按顺序处理，从多反斜杠到少反斜杠
-    # \\( 和 \\) → $ (两个反斜杠 + 括号)
-    text = re.sub(r'\\\\\(', '$', text)
-    text = re.sub(r'\\\\\)', '$', text)
-    text = re.sub(r'\\\\\[', '$$', text)
-    text = re.sub(r'\\\\\]', '$$', text)
-
-    # \( 和 \) → $ (一个反斜杠 + 括号)
-    # 注意：在原始字符串中，\\ 表示一个反斜杠，\( 表示字面上的括号
-    text = re.sub(r'\\\(', '$', text)
-    text = re.sub(r'\\\)', '$', text)
-    text = re.sub(r'\\\[', '$$', text)
-    text = re.sub(r'\\\]', '$$', text)
-
-    return text
 
 
 def _clean_user_query(text: str) -> str:
@@ -505,8 +473,8 @@ async def generate_openai_stream_v1(
                 direct_match = final_state.get("direct_match")
 
                 if existing_answer and direct_match and not final_state.get("faq_matched"):
-                    # 规范化 LaTeX 定界符（\( \) \[ \] → $ $$）
-                    existing_answer = _normalize_latex_delimiters(existing_answer)
+                    # 规范化 LaTeX 公式：定界符、空格清理、反斜杠转义
+                    existing_answer = normalize_latex_formulas(existing_answer)
 
                     ttfb_ms = int((time.time() - initial_state["workflow_start_time"]) * 1000)
                     final_state["ttfb_ms"] = ttfb_ms

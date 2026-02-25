@@ -100,7 +100,7 @@ claude --version
 
 ```bash
 # 切换到项目目录
-cd /mnt/d/zenking_work/metahuman_work/ZengKingMorphe
+cd /home/zj/ZengKingMorphe
 
 # 启动 Claude Code
 claude
@@ -114,7 +114,7 @@ claude
 # 或使用快捷键打开新的 WSL 标签
 
 # 切换到项目目录
-cd /mnt/d/zenking_work/metahuman_work/ZengKingMorphe
+cd /home/zj/ZengKingMorphe
 
 # 启动 Claude Code
 claude
@@ -124,7 +124,7 @@ claude
 
 ```bash
 # 在 WSL 终端中项目目录下执行
-cd /mnt/d/zenking_work/metahuman_work/ZengKingMorphe
+cd /home/zj/ZengKingMorphe
 code .
 
 # 安装 "Claude Code" VS Code 扩展
@@ -315,12 +315,12 @@ nano ~/.bashrc
 # 添加以下内容到文件末尾
 
 # Python 相关
-export PYTHONPATH="${PYTHONPATH}:/mnt/d/zenking_work/metahuman_work/ZengKingMorphe"
+export PYTHONPATH="${PYTHONPATH}:/home/zj/ZengKingMorphe"
 
 # 项目别名
-alias morphe="cd /mnt/d/zenking_work/metahuman_work/ZengKingMorphe"
-alias activate_morphe="cd /mnt/d/zenking_work/metahuman_work/ZengKingMorphe && source .venv/bin/activate"
-alias pymorphe="/mnt/d/zenking_work/metahuman_work/ZengKingMorphe/.venv/bin/python"
+alias morphe="cd /home/zj/ZengKingMorphe"
+alias activate_morphe="cd /home/zj/ZengKingMorphe && source .venv/bin/activate"
+alias pymorphe="/home/zj/ZengKingMorphe/.venv/bin/python"
 
 # 保存并退出（Ctrl+X, Y, Enter）
 
@@ -360,7 +360,7 @@ claude mcp install github://anthropics/mcp-server-git
 **方法 1：使用 Docker（推荐）**
 ```bash
 # 切换到项目目录
-cd /mnt/d/zenking_work/metahuman_work/ZengKingMorphe
+cd /home/zj/ZengKingMorphe
 
 # 启动数据库服务
 docker-compose up -d mongodb elasticsearch chroma
@@ -378,7 +378,7 @@ docker-compose logs -f
 docker-compose up -d mongodb elasticsearch chroma
 
 # 2. 进入项目目录
-cd /mnt/d/zenking_work/metahuman_work/ZengKingMorphe
+cd /home/zj/ZengKingMorphe
 
 # 3. 激活虚拟环境
 source .venv/bin/activate
@@ -409,7 +409,7 @@ docker-compose down
 
 ```bash
 # 确保在项目根目录
-cd /mnt/d/zenking_work/metahuman_work/ZengKingMorphe
+cd /home/zj/ZengKingMorphe
 
 # 激活虚拟环境
 source .venv/bin/activate
@@ -479,7 +479,7 @@ docker-compose logs -f ai-service
 
 ```bash
 # 在 WSL 终端中项目目录下执行
-cd /mnt/d/zenking_work/metahuman_work/ZengKingMorphe
+cd /home/zj/ZengKingMorphe
 code .
 
 # VS Code 会自动检测 WSL 环境并安装扩展
@@ -551,11 +551,11 @@ wsl --shutdown
 # 推荐将频繁访问的项目放在 WSL 文件系统中
 
 # 复制项目到 WSL 主目录
-cp -r /mnt/d/zenking_work/metahuman_work/ZengKingMorphe ~/morphe
+cp -r /home/zj/ZengKingMorphe ~/morphe
 cd ~/morphe
 
 # 或者创建符号链接
-ln -s /mnt/d/zenking_work/metahuman_work/ZengKingMorphe ~/morphe
+ln -s /home/zj/ZengKingMorphe ~/morphe
 ```
 
 ## 故障排除
@@ -750,7 +750,7 @@ Claude 会：
 - 安装命令: `npm install -g @anthropic-ai/claude-code`
 - 启动命令: `claude`
 - 帮助命令: `/help`
-- WSL 项目路径: `/mnt/d/zenking_work/metahuman_work/ZengKingMorphe`
+- WSL 项目路径: `/home/zj/ZengKingMorphe`
 - Python 虚拟环境: `source .venv/bin/activate`
 - 运行测试: `pytest tests/`
 

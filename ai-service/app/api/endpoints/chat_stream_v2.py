@@ -466,6 +466,10 @@ async def generate_openai_stream_v2(
                 direct_match = final_state.get("direct_match")
 
                 if existing_answer and direct_match and not final_state.get("faq_matched"):
+                    # 规范化 LaTeX 公式：定界符、空格清理、反斜杠转义
+                    from app.utils.latex import normalize_latex_formulas
+                    existing_answer = normalize_latex_formulas(existing_answer)
+
                     # 直接流式返回预生成的答案，跳过 LLM 生成
                     ttfb_ms = int((time.time() - initial_state["workflow_start_time"]) * 1000)
                     final_state["ttfb_ms"] = ttfb_ms
