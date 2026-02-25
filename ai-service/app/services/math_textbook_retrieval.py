@@ -178,7 +178,7 @@ class MathTextbookRetrieval(RAGRetrieval):
 
             # Search
             results = await es_db.search(
-                index=es_db.doc_index,
+                index="doc",
                 query=es_query,
                 size=top_k
             )
