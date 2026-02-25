@@ -207,7 +207,7 @@ async def sync_digital_employee_config(db, request_employee_id: str, external_da
         if faqs_data:
             synced_count = 0
             failed_faqs = []
-            current_time = datetime.utcnow()
+            current_time = datetime.now()
             logger.info(f"Syncing FAQ: employee_id={employee_id}, faqs_data={faqs_data[0]}")
             for faq_item in faqs_data:
                 try:
@@ -292,6 +292,8 @@ async def create_session(
             - `platform`: 来源平台（web/mobile/desktop）
             - `device`: 设备类型（desktop/mobile/tablet）
             - `source`: 来源页面（homepage/chatbot/embed）
+            - `device_id"`: 设备编号
+            - `device_name`: 设备名称
             - `user_agent`: 浏览器User-Agent
             - `ip_address`: 客户端IP地址
 
@@ -356,7 +358,7 @@ async def create_session(
             )
         
         # Step 5: Generate session ID
-        timestamp = datetime.utcnow().timestamp()
+        timestamp = datetime.now().timestamp()
         session_id = request.session_id or f"sess_{hashlib.md5(f'{request.user_id}_{timestamp}'.encode()).hexdigest()[:12]}"
         
         # Step 6: Check if session already exists (idempotent creation)
@@ -378,8 +380,8 @@ async def create_session(
             "status": "active",
             "message_count": 0,
             "context_messages": [],
-            "created_at": datetime.utcnow(),
-            "last_activity": datetime.utcnow(),
+            "created_at": datetime.now(),
+            "last_activity": datetime.now(),
             "ended_at": None,
             "metadata": request.metadata
         }
@@ -487,7 +489,7 @@ async def end_session(
             {
                 "$set": {
                     "status": "ended",
-                    "ended_at": datetime.utcnow()
+                    "ended_at": datetime.now()
                 }
             }
         )
