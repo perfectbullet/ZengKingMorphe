@@ -28,7 +28,7 @@ class ConversationModel(BaseModel):
     response_time_ms: int = 0
     satisfaction: Optional[str] = None
     has_sensitive: bool = False
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=datetime.now)
     updated_at: Optional[datetime] = None
     context: Dict[str, Any] = Field(default_factory=dict)
 
@@ -41,8 +41,8 @@ class SessionModel(BaseModel):
     status: str = "active"  # active/ended/timeout
     message_count: int = 0
     context_messages: List[Dict[str, Any]] = Field(default_factory=list)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    last_activity: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=datetime.now)
+    last_activity: datetime = Field(default_factory=datetime.now)
     ended_at: Optional[datetime] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
@@ -60,8 +60,8 @@ class EmployeeConfigModel(BaseModel):
     hot_questions: List[str] = Field(default_factory=list)
     personalization: Dict[str, bool] = Field(default_factory=dict)
     status: str = "active"
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: datetime = Field(default_factory=datetime.now)
     synced_at: Optional[datetime] = None
 
 
@@ -73,8 +73,8 @@ class UserProfileModel(BaseModel):
     tags: List[str] = Field(default_factory=list)
     conversation_count: int = 0
     satisfaction_avg: float = 0.0
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: datetime = Field(default_factory=datetime.now)
 
 
 class KnowledgeBaseModel(BaseModel):
@@ -87,8 +87,8 @@ class KnowledgeBaseModel(BaseModel):
     document_count: int = 0                      # 文档数量
     chunk_count: int = 0                         # 分块数量
     status: str = "active"                       # active/inactive
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: datetime = Field(default_factory=datetime.now)
 
 
 class DocumentModel(BaseModel):
@@ -106,7 +106,7 @@ class DocumentModel(BaseModel):
     error_message: Optional[str] = None
     segment_config: Optional[Dict[str, Any]] = None  # Custom segment configuration
     metadata: Dict[str, Any] = Field(default_factory=dict)
-    uploaded_at: datetime = Field(default_factory=datetime.utcnow)
+    uploaded_at: datetime = Field(default_factory=datetime.now)
     processed_at: Optional[datetime] = None
 
 
@@ -120,7 +120,7 @@ class DocumentChunkModel(BaseModel):
     summary: Optional[Dict[str, Any]] = None
     vector_id: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=datetime.now)
     updated_at: Optional[datetime] = None
 
     # MinerU结构化字段（新增）
@@ -144,7 +144,7 @@ class IntentLogModel(BaseModel):
     entities: Dict[str, Any] = Field(default_factory=dict)
     method: str  # rule-based/llm-based
     processing_time_ms: int = 0
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=datetime.now)
 
 
 class KBQualityMetricModel(BaseModel):
@@ -162,7 +162,7 @@ class KBQualityMetricModel(BaseModel):
     total_queries: int = 0
     successful_queries: int = 0
     failed_queries: int = 0
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=datetime.now)
     updated_at: Optional[datetime] = None
 
 
@@ -180,7 +180,7 @@ class DocumentTaskModel(BaseModel):
     processed_chunks: int = 0
     progress: float = 0.0  # 0-100
     error_message: Optional[str] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=datetime.now)
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
@@ -197,8 +197,8 @@ class StreamChunkModel(BaseModel):
     chunk_type: str  # start/role/token/progress/done/error
     chunk_data: Dict[str, Any] = Field(default_factory=dict)  # Full chunk payload
     sequence: int = 0  # Chunk sequence number
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=datetime.now)
 
 
 class FAQModel(BaseModel):
@@ -340,7 +340,7 @@ class MinerUImageCaptionModel(BaseModel):
     caption: str  # VLM-generated image description
     context: str = ""  # Surrounding text context when generating caption
     model_used: str = ""  # VLM model used (e.g., qwen-vl-max)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=datetime.now)
 
 
 class MinerUStructuredModel(BaseModel):
@@ -353,7 +353,7 @@ class MinerUStructuredModel(BaseModel):
     titles: List[Dict[str, Any]] = Field(default_factory=list)  # All titles with positions
     images: List[Dict[str, Any]] = Field(default_factory=list)  # All images with URLs
     title_hierarchy: List[Dict[str, Any]] = Field(default_factory=list)  # Title hierarchy
-    processed_at: datetime = Field(default_factory=datetime.utcnow)
+    processed_at: datetime = Field(default_factory=datetime.now)
 
 
 class ThesaurusMajorModel(BaseModel):

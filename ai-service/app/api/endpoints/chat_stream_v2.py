@@ -266,6 +266,8 @@ async def generate_openai_stream_v2(
             "messages": [],
             "user_query": user_query,
             "user_id": request.user_id,
+            "user_name": request.user_name,
+            "head_url": request.head_url,
             "session_id": session_id,
             "employee_id": request.employee_id,
             "employee_config": {},

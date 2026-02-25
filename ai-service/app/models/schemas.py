@@ -148,7 +148,9 @@ class OpenAIChatRequest(BaseModel):
                 "user_id": "user_123456",
                 "session_id": "sess_20251218_abc123",
                 "channel_name": "web",
-                "team_id": "team_001"
+                "team_id": "team_001",
+                "user_name": "苏文心",
+                "head_url": "/edu-api/fileserver/default/image/2025/5/14/e6d399d9-3785-4d08-bbab-213a6df390c4.jpeg"
             }
         }
     )
@@ -169,6 +171,8 @@ class OpenAIChatRequest(BaseModel):
     # Custom fields for our system
     employee_id: str = Field(default="29", description="Digital employee ID")
     user_id: str = Field(default="user_20260122", description="User ID")
+    user_name: str = Field(default="用户名称", description="用户登录后的名字")
+    head_url: str = Field(default="用户头像", description="用户头像")
     session_id: Optional[str] = Field(default="sess_4_42478261_29", description="Session ID")
     channel_name: Optional[str] = Field(default=None, description="Channel name (web, mobile, etc.)")
     team_id: Optional[str] = Field(default=None, description="Team ID")
@@ -193,6 +197,8 @@ class CreateSessionRequest(BaseModel):
                     "platform": "web",
                     "device": "desktop",
                     "source": "metahuman_app",
+                    "device_id": "CJQX-YJO1",
+                    "device_name": "数字人全息舱 DSee型号",
                 }
             }
         }
@@ -206,7 +212,7 @@ class CreateSessionRequest(BaseModel):
     )
     metadata: Dict[str, Any] = Field(
         default_factory=dict,
-        description="Additional session metadata (e.g., platform, device, source)"
+        description="Additional session metadata (e.g., platform, device, source, device_id, device_name)"
     )
 
 
