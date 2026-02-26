@@ -37,6 +37,8 @@ class SessionModel(BaseModel):
     """Session model."""
     session_id: str
     user_id: str
+    user_name: Optional[str] = None
+    head_url: Optional[str] = None
     employee_id: str
     status: str = "active"  # active/ended/timeout
     message_count: int = 0
