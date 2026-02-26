@@ -286,6 +286,8 @@ async def create_session(
 
         **请求参数**：
         - `user_id` (required, str): 用户唯一标识，用于关联用户身份和对话历史
+        - `user_name` (optional, str): 用户名称
+        - `head_url` (optional, str): 用户头像
         - `employee_id` (required, str): 数字员工ID，用于调用外部API获取员工配置
         - `session_id` (optional, str): 客户端指定的会话ID，支持幂等创建（格式: sess_{12位MD5})
         - `metadata` (optional, dict): 会话元数据，用于记录会话上下文信息
@@ -376,6 +378,8 @@ async def create_session(
         session_doc = {
             "session_id": session_id,
             "user_id": request.user_id,
+            "user_name": request.user_name,
+            "head_url": request.head_url,
             "employee_id": request.employee_id,
             "status": "active",
             "message_count": 0,
