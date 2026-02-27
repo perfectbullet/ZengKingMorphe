@@ -159,8 +159,9 @@ def handle_stream_payloads(payload_iter: Iterator[str], start_time: float) -> in
                             first_token_latency = time.perf_counter() - start_time
                             print(f"⏱️ First token latency: {first_token_latency*1000:.2f}ms\n", file=sys.stderr)
                         # 不换行，直接 flush
-                        sys.stdout.write(content)
-                        sys.stdout.flush()
+                        print(content)
+                        # sys.stdout.write(content)
+                        # sys.stdout.flush()
                         # print('time:', time.time())
                     # 检查 finish_reason
                     finish = choice.get("finish_reason")

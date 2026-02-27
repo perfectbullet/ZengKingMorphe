@@ -119,13 +119,13 @@ def _get_revise_llm():
 STATUS_TOKENS: list = [
     "好的，我正在梳理您的问题要点…",
     "这个我知道······",
-    "等我一小下下······",
+    "等我一下······",
 ]
 
 SEARCH_TOKENS: list = [
     "好的，我正在梳理您的问题要点…",
     "这个我知道······",
-    "等我一小下下······",
+    "等我一下······",
 ]
 
 
@@ -353,39 +353,6 @@ async def generate_openai_stream_v1(
 
         yield json.dumps(role_chunk_data)
 
-        # Quick check for realtime query BEFORE workflow starts
-        query_lower = user_query.lower()
-        is_likely_realtime = any(keyword in query_lower for keyword in
-                                  ['天气', '气温', '温度', '下雨', '下雪', '刮风',
-                                   '股价', '股票', '汇率', '金价', '银价',
-                                   '新闻', '今日', '最新', '实时'])
-
-        if is_likely_realtime:
-            # Send immediate search status indicator
-            search_token = random.choice(SEARCH_TOKENS)
-            search_chunk_data = {
-                "id": chat_id,
-                "object": "chat.completion.chunk",
-                "created": created,
-                "model": "status",
-                "choices": [
-                    {
-                        "index": 0,
-                        "delta": {"content": search_token},
-                        "finish_reason": None,
-                    }
-                ],
-            }
-
-            # Save search status chunk to DB
-            chunk_sequence += 1
-            await save_stream_chunk(
-                db, chat_id, chunk_sequence, session_id, request.user_id,
-                request.employee_id, "status", search_chunk_data
-            )
-
-            yield json.dumps(search_chunk_data)
-
         # Stream workflow execution and monitor for generate stage
         should_generate = False
         final_state = None
@@ -418,9 +385,7 @@ async def generate_openai_stream_v1(
             },
         }
         
-        async for event in conversation_workflow.workflow.astream(
-            initial_state, stream_mode="updates"
-        ):
+        async for event in conversation_workflow.workflow.astream(initial_state, stream_mode="updates"):
             node_name = list(event.keys())[0] if event else None
             state_update = event.get(node_name, {}) if node_name else {}
 
@@ -506,12 +471,20 @@ async def generate_openai_stream_v1(
                             }
                             chunk_sequence += 1
                             await asyncio.sleep(0.01)  # 等待10ms, 不然websocket有乱序的问题
-                            await save_stream_chunk(
-                                db, chat_id, chunk_sequence, session_id, request.user_id,
-                                request.employee_id, "token", token_chunk_data,
-                                final_state.get("conversation_id")
-                            )
+                            await save_stream_chunk(db, chat_id, chunk_sequence, session_id, 
+                                                    request.user_id, request.employee_id, "token", 
+                                                    token_chunk_data, final_state.get("conversation_id")
+                                                    )
                             current_chunk = ""
+                    # 保存结束块
+                    chunk_sequence += 1
+                    await save_stream_chunk(
+                        db, chat_id, chunk_sequence, session_id, request.user_id,
+                        request.employee_id, "done", finish_chunk_data,
+                        final_state.get("conversation_id", "")
+                    )
+                    logger.info(f'save_stream_chunk finish_chunk_data is {finish_chunk_data}')
+                    
                     # Update final_answer with revised version
                     final_state["final_answer"] = existing_answer
                     # Save conversation and exit
@@ -539,10 +512,46 @@ async def generate_openai_stream_v1(
                     # 如果 teaching_script_tts 存在且非空，直接流式输出；否则走 LLM 转换
                     if teaching_script_tts and teaching_script_tts.strip():
                         # 直接输出 teaching_script_tts
-                        # 使用 lookahead 保持标点与句子在同一 segment
+                        # 智能断句：优先保持句子完整性，只在必要时断句
                         logger.info(f"Using teaching_script_tts directly, length={len(teaching_script_tts)}")
-                        tts_segments = re.split(r'(?<=[。！？，、；：])', teaching_script_tts)
+
+                        # 先按句子结束标点切分（保持句子完整）
+                        sentence_ends = list(re.finditer(r'[^。！？]*[。！？]', teaching_script_tts))
+
+                        # 处理没有句子结束标点的尾部内容
+                        remaining_after_sentences = teaching_script_tts
+                        if sentence_ends:
+                            last_end = sentence_ends[-1].end()
+                            remaining_after_sentences = teaching_script_tts[last_end:]
+
+                        tts_segments = []
+                        for sent_match in sentence_ends:
+                            sentence = sent_match.group()
+                            # 如果单句过长（>80字），在逗号等标点处适当断开
+                            if len(sentence) > 80:
+                                # 逐字符遍历，在标点后切分，保持标点在前一个片段末尾
+                                current_part = ""
+                                for char in sentence:
+                                    current_part += char
+                                    # 在标点处且累积足够长度时切分
+                                    if len(current_part) >= 30 and char in '，；、' and len(current_part) < len(sentence):
+                                        tts_segments.append(current_part)
+                                        current_part = ""
+                                # 添加剩余内容
+                                if current_part:
+                                    tts_segments.append(current_part)
+                            else:
+                                tts_segments.append(sentence)
+
+                        # 添加尾部内容（如果有）
+                        if remaining_after_sentences.strip():
+                            tts_segments.append(remaining_after_sentences)
+
+                        logger.info(f"tts_segments: {tts_segments}")
                         for ts in tts_segments:
+                            ts = ts.strip()
+                            if not ts:
+                                continue
                             token_chunk_data = {
                                 "id": chat_id,
                                 "object": "chat.completion.chunk",
@@ -556,7 +565,7 @@ async def generate_openai_stream_v1(
                             }
                             chunk_sequence += 1
                             yield json.dumps(token_chunk_data)
-                        logger.info(f"teaching_script_tts output completed: {len(teaching_script_tts)} chars")
+                        logger.info(f"teaching_script_tts output completed: {len(tts_segments)} segments")
                     else:
                         # teaching_script_tts 为空或查询不到，走 LLM 转换逻辑
                         logger.info("teaching_script_tts not found, using LLM to revise for voice output")
