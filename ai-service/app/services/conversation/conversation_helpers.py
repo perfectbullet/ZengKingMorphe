@@ -166,7 +166,7 @@ def get_personality_description(personality: dict) -> Tuple[str, str, str]:
     }
 
     tone_desc = tone_map.get(personality.get("tone", "professional"), "专业")
-    style_desc = style_map.get(personality.get("style", "friendly"), "友好")
+    style_desc = style_map.get(personality.get("style", "concise"), "简明")
     formality_desc = formality_map.get(personality.get("formality", "moderate"), "适度")
 
     return tone_desc, style_desc, formality_desc

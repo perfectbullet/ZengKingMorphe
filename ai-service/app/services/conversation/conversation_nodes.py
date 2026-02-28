@@ -137,6 +137,8 @@ class ConversationNodes:
                     session_model = SessionModel(
                         session_id=state["session_id"],
                         user_id=state["user_id"],
+                        user_name=state.get("user_name", ""),
+                        head_url=state.get("head_url", ""),
                         employee_id=state["employee_id"],
                         status="active",
                         message_count=0
@@ -1213,8 +1215,6 @@ class ConversationNodes:
                     conversation_id=conv_id,
                     session_id=state["session_id"],
                     user_id=state["user_id"],
-                    user_name=state["user_name"],
-                    head_url=state["head_url"],
                     employee_id=state["employee_id"],
                     employee_name=employee_config.get("name", ""),
                     user_query=state["user_query"],
