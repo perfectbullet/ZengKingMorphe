@@ -201,7 +201,7 @@ class ChromaDB:
                 truncated_results["documents"] = truncated_docs
             if truncated_results:
                 logger.info(
-                    f"Queried documents from Chroma: collection={collection_name}, results[:1]={truncated_results}"
+                    f"Queried documents from Chroma: collection={collection_name}, results len={len(truncated_results)}"
                 )
             else:
                 logger.info("Queried documents from Chroma, but the truncated_results is empty")
