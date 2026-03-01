@@ -4,15 +4,14 @@ Chat stream response generator for /v1/chat/completions endpoint.
 This version can be modified for custom behavior specific to v1 API.
 """
 import asyncio
-import os
-import re
-import random
-import time
-import json
 import hashlib
+import json
+import random
+import re
+import time
 from datetime import datetime
 from pathlib import Path
-from typing import AsyncGenerator, Optional
+from typing import AsyncGenerator, Optional, Any, Callable
 
 from langchain_community.chat_models import ChatOllama
 from langchain_openai import ChatOpenAI
@@ -22,115 +21,75 @@ from app.models.database import StreamChunkModel
 from app.core.logging import get_logger
 from app.core.database import get_database
 from app.services.conversation_service import conversation_workflow
+from app.services.revise_llm import (
+    get_revise_llm,
+    convert_formula_to_voice,
+    convert_math_sentence_to_voice,
+)
 from app.utils.latex import normalize_latex_formulas
+from app.utils.sentence_buffer import SentenceBuffer, has_latex_formula
 
 logger = get_logger(__name__)
 
+# =============================================================================
+# Constants
+# =============================================================================
 
-def _load_revise_prompt() -> str:
-    """Load the system prompt for math formula voice explanation."""
-    # chat_stream_v1.py is at: app/api/endpoints/chat_stream_v1.py
-    # prompts dir is at: prompts/ (from ai-service root)
-    # So we need: app/api/endpoints/ -> app/api/ -> app/ -> ai-service/ -> prompts/
-    prompt_path = Path(__file__).parent.parent.parent.parent / "prompts" / "数学公式口语化讲解.txt"
-    try:
-        with open(prompt_path, "r", encoding="utf-8") as f:
-            return f.read().strip()
-    except FileNotFoundError:
-        logger.warning(f"Prompt file not found: {prompt_path}, using default prompt")
-        return "你是一个数学公式口语化讲解专家。请将用户输入的数学公式和概念，用纯粹、流畅、易于理解的自然语言解释，完全不含任何数学符号或特殊格式，专为语音播报场景设计。"
+SENTENCE_BUFFER_MAX_CHARS = 100
+SENTENCE_BUFFER_MAX_WAIT_SECONDS = 1
+SENTENCE_BUFFER_COMMA_SPLIT_THRESHOLD = 30
 
+RRF_K = 60
+MAX_CONTENT_LENGTH = 200
+CHUNK_SAVE_DELAY_SECONDS = 0.01
+
+MAX_RAG_SOURCES = 3
+MAX_WEB_SOURCES = 5
+LOG_TRUNCATE_LENGTH = 100
+
+CHUNK_TYPE_USER_QUERY = "user_query"
+CHUNK_TYPE_ROLE = "role"
+CHUNK_TYPE_TOKEN = "token"
+CHUNK_TYPE_DONE = "done"
+CHUNK_TYPE_ERROR = "error"
+
+# =============================================================================
+# Status messages for UX
+# =============================================================================
+
+STATUS_TOKENS: list[str] = [
+    "好的，我正在梳理您的问题要点…",
+    "这个我知道······",
+    "等我一下······",
+]
+
+SEARCH_TOKENS = STATUS_TOKENS
+
+# =============================================================================
+# Utility Functions
+# =============================================================================
 
 def _clean_user_query(text: str) -> str:
     """
-    清理用户查询，删除前导标点符号。
-
-    常见问题：用户输入如 "，请帮我解释二项式定理"，前面的逗号会影响检索效果。
+    Clean user query by removing leading punctuation.
 
     Args:
-        text: 用户输入的查询文本
+        text: User query text
 
     Returns:
-        清理后的文本
+        Cleaned text with leading punctuation removed
     """
-    # 删除前导标点符号（中文和英文）
     text = re.sub(r'^[，。！？、；：,.?!;:\s]+', '', text)
+    return text.lstrip()
 
-    # 删除前导空白字符
-    text = text.lstrip()
-
-    return text
-
-
-def _get_revise_llm():
-    """
-    Get LLM instance for text revision (voice-friendly output).
-
-    Supports:
-    - siliconflow: SiliconFlow API (recommended)
-    - ollama: Local Ollama
-
-    Environment Variables:
-    - REVISE_PROVIDER: Provider type (siliconflow or ollama), default siliconflow
-    - OPENAI_API_KEY: SiliconFlow API key
-    - OPENAI_API_BASE: SiliconFlow API base URL
-    - OPENAI_REVISE_MODEL: SiliconFlow model name (default: deepseek-ai/DeepSeek-V3)
-    - OLLAMA_BASE_URL: Ollama base URL (default: http://localhost:11434)
-    - OLLAMA_REVISE_MODEL: Ollama model name (default: qwen2.5:32b)
-    """
-    # Get provider from env, default siliconflow
-    provider = os.getenv("REVISE_PROVIDER", "siliconflow").lower()
-
-    if provider == "siliconflow":
-        api_key = os.getenv("OPENAI_API_KEY")
-        api_base = os.getenv("OPENAI_API_BASE", "https://api.siliconflow.cn/v1")
-        model = os.getenv("OPENAI_REVISE_MODEL", os.getenv("OPENAI_MODEL", "deepseek-ai/DeepSeek-V3"))
-
-        if not api_key:
-            logger.warning("OPENAI_API_KEY not set for SiliconFlow")
-            raise "OPENAI_API_KEY not set for SiliconFlow"
-        logger.info(f"[Revise LLM] SiliconFlow | API_BASE={api_base} | MODEL={model}")
-
-        return ChatOpenAI(
-            base_url=api_base,
-            api_key=api_key,  # Allow empty, let API handle error
-            model=model,
-            temperature=0.7,
-            streaming=True,
-        )
-    else:
-        # Use Ollama
-        ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-        ollama_model = os.getenv("OLLAMA_REVISE_MODEL",
-                                 os.getenv("OLLAMA_MODEL", "qwen2.5:32b"))
-
-        logger.info(f"[Revise LLM] Ollama | BASE_URL={ollama_base_url} | MODEL={ollama_model}")
-
-        return ChatOllama(
-            base_url=ollama_base_url,
-            model=ollama_model,
-            temperature=0.7,
-            streaming=True,
-            keep_alive=-1
-        )
-
-
-# Status message variations for better UX
-STATUS_TOKENS: list = [
-    "好的，我正在梳理您的问题要点…",
-    "这个我知道······",
-    "等我一下······",
-]
-
-SEARCH_TOKENS: list = [
-    "好的，我正在梳理您的问题要点…",
-    "这个我知道······",
-    "等我一下······",
-]
-
+# =============================================================================
+# Source Attribution
+# =============================================================================
 
 def format_sources(
-    retrieved_docs: list, web_search_results: list, max_content_length: int = 200
+    retrieved_docs: list[dict],
+    web_search_results: list[dict],
+    max_content_length: int = MAX_CONTENT_LENGTH,
 ) -> dict:
     """
     Format RAG documents and web search results for source attribution.
@@ -138,24 +97,24 @@ def format_sources(
     Args:
         retrieved_docs: List of retrieved document chunks from RAG
         web_search_results: List of web search results from Tavily
-        max_content_length: Maximum content snippet length (default: 200 chars)
+        max_content_length: Maximum content snippet length
 
     Returns:
         Dict with rag_sources and web_sources lists
     """
     sources = {"rag_sources": [], "web_sources": []}
 
-    # Format RAG document sources (top 3)
-    for idx, doc in enumerate(retrieved_docs[:3], 1):
-        content_snippet = doc.get("content", "")[:max_content_length]
-        if len(doc.get("content", "")) > max_content_length:
+    for idx, doc in enumerate(retrieved_docs[:MAX_RAG_SOURCES], 1):
+        content = doc.get("content", "")
+        content_snippet = content[:max_content_length]
+        if len(content) > max_content_length:
             content_snippet += "..."
 
-        # Normalize RRF score to 0-1 range for display
         raw_rrf_score = doc.get("rrf_score", doc.get("score", 0.0))
-        rrf_k = 60
-        max_possible_rrf = 2.0 / rrf_k
-        normalized_score = (raw_rrf_score / max_possible_rrf) if max_possible_rrf > 0 else 0.0
+        max_possible_rrf = 2.0 / RRF_K
+        normalized_score = (
+            (raw_rrf_score / max_possible_rrf) if max_possible_rrf > 0 else 0.0
+        )
         normalized_score = max(0.0, min(1.0, normalized_score))
 
         rag_source = {
@@ -171,8 +130,7 @@ def format_sources(
 
         sources["rag_sources"].append(rag_source)
 
-    # Format web search sources (top 5)
-    for result in web_search_results[:5]:
+    for result in web_search_results[:MAX_WEB_SOURCES]:
         web_source = {
             "rank": result.get("rank", 0),
             "title": result.get("title", ""),
@@ -183,9 +141,255 @@ def format_sources(
 
     return sources
 
+# =============================================================================
+# Formula to Voice Conversion
+# =============================================================================
+
+def _has_math_symbols_simple(text: str) -> bool:
+    """
+    Check if text contains math symbols without LaTeX delimiters.
+
+    Args:
+        text: Text to check
+
+    Returns:
+        True if text contains math symbols
+    """
+    math_symbol_pattern = re.compile(r'[∈∉⊂⊃⊆⊇∪∩∅∨∧¬∀∃→⇒⇐⇔≡≠≤≥≈≪≫√∞²³°π∏∑∫∂∇Δ]')
+    return math_symbol_pattern.search(text) is not None
+
+async def _process_segment_for_output(
+    segment: str,
+    revise_llm: ChatOllama | ChatOpenAI,
+    log_prefix: str = "",
+) -> tuple[str, str]:
+    """
+    Process a text segment for output.
+
+    This function:
+    1. Normalizes LaTeX delimiters
+    2. Converts LaTeX formulas to voice-friendly text using LLM
+    3. Converts sentences with math symbols to voice-friendly text using LLM
+
+    Args:
+        segment: Text segment to process
+        revise_llm: LLM for formula-to-voice conversion
+        log_prefix: Prefix for log messages
+
+    Returns:
+        Tuple of (display_content, voice_content)
+    """
+    if '$$' in segment:
+        logger.warning(
+            f"[{_process_segment_for_output.__name__}] Received segment with formula: "
+            f"len={len(segment)}, starts_with_$$={segment.startswith('$$')}, ends_with_$$={segment.endswith('$$')}, "
+            f"preview={repr(segment[:50])}...{repr(segment[-10:])}"
+        )
+
+    display_content = normalize_latex_formulas(segment)
+
+    if has_latex_formula(display_content):
+        logger.info(f"[{log_prefix}公式转换] 转换前长度={len(display_content)}, 转换前={repr(display_content)}")
+        voice_content = await convert_formula_to_voice(display_content, revise_llm)
+        logger.info(f"[{log_prefix}公式转换] 转换后长度={len(voice_content)}, 转换后={repr(voice_content)}")
+    elif _has_math_symbols_simple(display_content):
+        logger.info(f"[{log_prefix}数学句子转换] 转换前长度={len(display_content)}, 转换前={repr(display_content)}")
+        voice_content = await convert_math_sentence_to_voice(display_content, revise_llm)
+        logger.info(f"[{log_prefix}数学句子转换] 转换后长度={len(voice_content)}, 转换后={repr(voice_content)}")
+    else:
+        voice_content = display_content
+
+    return display_content, voice_content
+
+def _build_token_chunk_data(
+    chat_id: str,
+    created: int,
+    model: str,
+    content: str,
+) -> dict:
+    """Build token chunk data for SSE output."""
+    return {
+        "id": chat_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": model,
+        "choices": [{
+            "index": 0,
+            "delta": {"content": content},
+            "finish_reason": None,
+        }],
+    }
+
+async def _stream_segment_with_formula_conversion(
+    segment: str,
+    revise_llm: ChatOllama | ChatOpenAI,
+    chat_id: str,
+    created: int,
+    model: str,
+    db: Any,
+    chunk_sequence: int,
+    session_id: str,
+    user_id: str,
+    employee_id: str,
+    conversation_id: Optional[str],
+    log_prefix: str = "",
+) -> tuple[int, dict]:
+    """
+    Process a text segment and handle streaming with formula conversion.
+
+    Args:
+        segment: Text segment to process
+        revise_llm: LLM for formula-to-voice conversion
+        chat_id: Chat completion ID
+        created: Creation timestamp
+        model: Model name
+        db: Database instance
+        chunk_sequence: Current chunk sequence number
+        session_id: Session ID
+        user_id: User ID
+        employee_id: Employee ID
+        conversation_id: Optional conversation ID
+        log_prefix: Prefix for log messages
+
+    Returns:
+        Tuple of (updated_sequence, voice_chunk_data_for_yielding)
+    """
+    display_content, voice_content = await _process_segment_for_output(
+        segment, revise_llm, log_prefix
+    )
+
+    voice_chunk_data = _build_token_chunk_data(chat_id, created, model, voice_content)
+
+    new_sequence = chunk_sequence + 1
+    await asyncio.sleep(CHUNK_SAVE_DELAY_SECONDS)
+    await save_stream_chunk(
+        db, chat_id, new_sequence, session_id, user_id, employee_id,
+        "token",
+        {**voice_chunk_data, "choices": [{
+            **voice_chunk_data["choices"][0],
+            "delta": {"content": display_content},
+        }]},
+        conversation_id
+    )
+
+    return new_sequence, voice_chunk_data
+
+# =============================================================================
+# Main Stream Generator
+# =============================================================================
+
+def _extract_user_query(messages: list) -> str:
+    """Extract the last user message from the messages list."""
+    for msg in reversed(messages):
+        if msg.role == "user":
+            return msg.content
+    return messages[-1].content if messages else ""
+
+def _build_initial_state(request: OpenAIChatRequest, session_id: str, user_query: str) -> dict:
+    """Build the initial state for the conversation workflow."""
+    return {
+        "messages": [],
+        "user_query": user_query,
+        "user_id": request.user_id,
+        "session_id": session_id,
+        "employee_id": request.employee_id,
+        "employee_config": {},
+        "is_realtime_query": False,
+        "realtime_category": "",
+        "realtime_detect_reason": "",
+        "intent": "",
+        "entities": {},
+        "retrieved_docs": [],
+        "relevance_score": 0.0,
+        "web_search_results": [],
+        "final_answer": "",
+        "confidence": 0.0,
+        "context": {},
+        "has_sensitive": False,
+        "error": None,
+        "faq_matched": None,
+        "kb_used": [],
+        "web_search_used": False,
+        "web_search_error": None,
+        "conversation_id": "",
+        "response_time_ms": 0,
+        "workflow_start_time": time.time(),
+        "node_timings": {},
+        "ttfb_ms": None,
+        "llm_temperature": request.temperature,
+        "llm_top_p": request.top_p,
+        "llm_max_tokens": request.max_tokens,
+        "llm_presence_penalty": request.presence_penalty,
+        "llm_frequency_penalty": request.frequency_penalty,
+        "llm_seed": request.seed,
+        "llm_n": request.n,
+        "llm_tools": [tool.model_dump() for tool in request.tools] if request.tools else None,
+        "channel_name": request.channel_name,
+        "team_id": request.team_id,
+    }
+
+def _build_finish_chunk_data(
+    chat_id: str,
+    created: int,
+    model: str,
+    user_query: str,
+) -> dict:
+    """Build the finish chunk data template."""
+    return {
+        "id": chat_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": model,
+        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        "usage": {
+            "prompt_tokens": len(user_query),
+            "completion_tokens": len(user_query),
+            "total_tokens": len(user_query),
+        },
+        "metadata": {
+            "conversation_id": "",
+            "confidence": 1,
+            "kb_used": [],
+            "web_search_used": False,
+            "sources": {},
+            "intent": "",
+            "is_realtime_query": False,
+            "realtime_category": False,
+            "model": model,
+        },
+    }
+
+def _update_finish_chunk_metadata(
+    finish_chunk_data: dict,
+    final_state: dict,
+    user_query: str,
+    model_name: str,
+    sources: dict,
+) -> None:
+    """Update the finish chunk data with final state information."""
+    finish_chunk_data["usage"] = {
+        "prompt_tokens": len(user_query),
+        "completion_tokens": len(final_state.get("final_answer", "")),
+        "total_tokens": len(user_query) + len(final_state.get("final_answer", "")),
+    }
+    finish_chunk_data["metadata"] = {
+        "conversation_id": final_state.get("conversation_id", ""),
+        "confidence": final_state.get("confidence", 0.0),
+        "kb_used": final_state.get("kb_used", []),
+        "web_search_used": final_state.get("web_search_used", False),
+        "sources": sources,
+        "intent": final_state.get("intent", ""),
+        "is_realtime_query": final_state.get("is_realtime_query", False),
+        "realtime_category": final_state.get("realtime_category", ""),
+        "model": model_name,
+    }
+
+# =============================================================================
+# MongoDB Storage
+# =============================================================================
 
 async def save_stream_chunk(
-    db,
+    db: Any,
     chat_id: str,
     chunk_sequence: int,
     session_id: str,
@@ -224,7 +428,6 @@ async def save_stream_chunk(
     )
     await db.stream_chunks.insert_one(chunk_record.model_dump())
 
-
 async def generate_openai_stream_v1(
     request: OpenAIChatRequest,
 ) -> AsyncGenerator[str, None]:
@@ -240,10 +443,8 @@ async def generate_openai_stream_v1(
         OpenAI-formatted SSE messages
     """
     try:
-        # Get database instance
         db = await get_database()
 
-        # Generate IDs
         session_id = (
             request.session_id
             or f"sess_{hashlib.md5(f'{request.user_id}_{datetime.now().timestamp()}'.encode()).hexdigest()[:12]}"
@@ -251,68 +452,20 @@ async def generate_openai_stream_v1(
         chat_id = f"chatcmpl-{hashlib.md5(f'{session_id}_{time.time()}'.encode()).hexdigest()[:12]}"
         created = int(time.time())
 
-        # Chunk sequence counter
+        user_query = _clean_user_query(_extract_user_query(request.messages))
+
+        initial_state = _build_initial_state(request, session_id, user_query)
+
+        sentence_buffer = SentenceBuffer(
+            max_chars=SENTENCE_BUFFER_MAX_CHARS,
+            max_wait_seconds=SENTENCE_BUFFER_MAX_WAIT_SECONDS,
+            # comma_split_threshold=SENTENCE_BUFFER_COMMA_SPLIT_THRESHOLD
+        )
+
+        finish_chunk_data = _build_finish_chunk_data(chat_id, created, request.model, user_query)
+
         chunk_sequence = 0
 
-        # Extract user query from messages
-        user_query = ""
-        for msg in reversed(request.messages):
-            if msg.role == "user":
-                user_query = msg.content
-                break
-
-        if not user_query:
-            user_query = request.messages[-1].content if request.messages else ""
-
-        # 清理用户查询：删除前导标点符号
-        user_query = _clean_user_query(user_query)
-
-        # Build initial state with all parameters from request
-        initial_state = {
-            "messages": [],
-            "user_query": user_query,
-            "user_id": request.user_id,
-            "session_id": session_id,
-            "employee_id": request.employee_id,
-            "employee_config": {},
-            "is_realtime_query": False,
-            "realtime_category": "",
-            "realtime_detect_reason": "",
-            "intent": "",
-            "entities": {},
-            "retrieved_docs": [],
-            "relevance_score": 0.0,
-            "web_search_results": [],
-            "final_answer": "",
-            "confidence": 0.0,
-            "context": {},
-            "has_sensitive": False,
-            "error": None,
-            "faq_matched": None,
-            "kb_used": [],
-            "web_search_used": False,
-            "web_search_error": None,
-            "conversation_id": "",
-            "response_time_ms": 0,
-            # Performance monitoring
-            "workflow_start_time": time.time(),
-            "node_timings": {},
-            "ttfb_ms": None,
-            # LLM parameters from OpenAI request
-            "llm_temperature": request.temperature,
-            "llm_top_p": request.top_p,
-            "llm_max_tokens": request.max_tokens,
-            "llm_presence_penalty": request.presence_penalty,
-            "llm_frequency_penalty": request.frequency_penalty,
-            "llm_seed": request.seed,
-            "llm_n": request.n,
-            "llm_tools": [tool.model_dump() for tool in request.tools] if request.tools else None,
-            # Additional context
-            "channel_name": request.channel_name,
-            "team_id": request.team_id,
-        }
-
-        # Save user query chunk to DB
         chunk_sequence += 1
         user_query_chunk_data = {
             "id": chat_id,
@@ -329,7 +482,6 @@ async def generate_openai_stream_v1(
             request.employee_id, "user_query", user_query_chunk_data
         )
 
-        # Send initial role chunk
         role_chunk_data = {
             "id": chat_id,
             "object": "chat.completion.chunk",
@@ -344,7 +496,6 @@ async def generate_openai_stream_v1(
             ],
         }
 
-        # Save initial role chunk to DB
         chunk_sequence += 1
         await save_stream_chunk(
             db, chat_id, chunk_sequence, session_id, request.user_id,
@@ -353,47 +504,19 @@ async def generate_openai_stream_v1(
 
         yield json.dumps(role_chunk_data)
 
-        # Stream workflow execution and monitor for generate stage
         should_generate = False
+        finish_sent = False
         final_state = None
         current_state = initial_state.copy()
-        full_answer = ""
         model_name = request.model
 
-        # 结束 chunk data
-        finish_chunk_data = {
-            "id": chat_id,
-            "object": "chat.completion.chunk",
-            "created": created,
-            "model": request.model,
-            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
-            "usage": {
-                "prompt_tokens": len(user_query),
-                "completion_tokens": len(user_query),
-                "total_tokens": len(user_query),
-            },
-            "metadata": {
-                "conversation_id": "",
-                "confidence": 1,
-                "kb_used": [],
-                "web_search_used": False,
-                "sources": {},
-                "intent": "",
-                "is_realtime_query": False,
-                "realtime_category": False,
-                "model": model_name,
-            },
-        }
-        
         async for event in conversation_workflow.workflow.astream(initial_state, stream_mode="updates"):
             node_name = list(event.keys())[0] if event else None
             state_update = event.get(node_name, {}) if node_name else {}
 
-            # Accumulate state updates
             if state_update:
                 current_state.update(state_update)
 
-            # 检测 knowledge_retrieval 节点并发送状态提示
             if node_name == "knowledge_retrieval":
                 status_token = random.choice(STATUS_TOKENS)
                 status_chunk_data = {
@@ -418,7 +541,6 @@ async def generate_openai_stream_v1(
 
                 yield json.dumps(status_chunk_data)
 
-            # Check if we've reached generation stage
             if (
                 "confidence" in state_update
                 and state_update.get("confidence", 0) > 0
@@ -427,56 +549,56 @@ async def generate_openai_stream_v1(
                 should_generate = True
                 final_state = current_state
 
-            logger.info(f'final_state： {final_state}')
+            log_state = None
+            if final_state:
+                log_state = {
+                    k: v for k, v in final_state.items()
+                    if k not in ["retrieved_docs", "web_search_results", "context"]
+                }
+            logger.info(f'final_state: {log_state}')
 
-            # When ready to generate, do TRUE streaming
             if should_generate and final_state:
                 should_generate = False
 
-                # 检查是否已有预生成的答案（仅数学教材知识库的 direct match）
                 existing_answer = final_state.get("final_answer", "")
                 direct_match = final_state.get("direct_match")
 
                 if existing_answer and direct_match and not final_state.get("faq_matched"):
-                    # 规范化 LaTeX 公式：定界符、空格清理、反斜杠转义
                     existing_answer = normalize_latex_formulas(existing_answer)
 
                     ttfb_ms = int((time.time() - initial_state["workflow_start_time"]) * 1000)
                     final_state["ttfb_ms"] = ttfb_ms
 
                     logger.info(
-                        "Revising pre-generated answer for voice output \n "
-                        f"content_type={direct_match.get('content_type')} \n "
-                        f"rerank_score={direct_match.get('rerank_score')} \n "
-                        f"original_length={len(existing_answer)} \n ttfb_ms={ttfb_ms}"
+                        "Revising pre-generated answer for voice output | "
+                        f"content_type={direct_match.get('content_type')} | "
+                        f"rerank_score={direct_match.get('rerank_score')} | "
+                        f"original_length={len(existing_answer)} | ttfb_ms={ttfb_ms}"
                     )
 
-                    # 按中文标点符号切分然后保存，但是不 yield， 这里的输出会在 `ai-service/app/api/endpoints/websocket.py` 被返回给前端
-                    # 使用 lookahead 保持标点与句子在同一 segment
-                    segments = re.split(r'(?<=[。！？])', existing_answer)
-                    current_chunk = ""
-                    for segment in segments:
-                        current_chunk += segment
-                        if segment and segment[-1] in '，。！？、；：\n' or len(current_chunk) >= 20:
-                            token_chunk_data = {
-                                "id": chat_id,
-                                "object": "chat.completion.chunk",
-                                "created": created,
-                                "model": request.model,
-                                "choices": [{
-                                    "index": 0,
-                                    "delta": {"content": current_chunk},
-                                    "finish_reason": None,
-                                }],
-                            }
-                            chunk_sequence += 1
-                            await asyncio.sleep(0.01)  # 等待10ms, 不然websocket有乱序的问题
-                            await save_stream_chunk(db, chat_id, chunk_sequence, session_id, 
-                                                    request.user_id, request.employee_id, "token", 
-                                                    token_chunk_data, final_state.get("conversation_id")
-                                                    )
-                            current_chunk = ""
-                    # 保存结束块
+                    revise_llm = await get_revise_llm()
+
+                    for char in existing_answer:
+                        segment = sentence_buffer.add(char)
+                        if segment:
+                            chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
+                                segment, revise_llm, chat_id, created, request.model,
+                                db, chunk_sequence, session_id, request.user_id,
+                                request.employee_id, final_state.get("conversation_id"),
+                                log_prefix="DirectMatch"
+                            )
+                            yield json.dumps(chunk_data)
+
+                    final_segment = await sentence_buffer.flush(is_final=True)
+                    if final_segment:
+                        chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
+                            final_segment.content, revise_llm, chat_id, created, request.model,
+                            db, chunk_sequence, session_id, request.user_id,
+                            request.employee_id, final_state.get("conversation_id"),
+                            log_prefix="DirectMatch FinalSegment"
+                        )
+                        yield json.dumps(chunk_data)
+
                     chunk_sequence += 1
                     await save_stream_chunk(
                         db, chat_id, chunk_sequence, session_id, request.user_id,
@@ -484,129 +606,21 @@ async def generate_openai_stream_v1(
                         final_state.get("conversation_id", "")
                     )
                     logger.info(f'save_stream_chunk finish_chunk_data is {finish_chunk_data}')
-                    
-                    # Update final_answer with revised version
+
+                    yield "[DONE]"
+
                     final_state["final_answer"] = existing_answer
-                    # Save conversation and exit
+
+                    finish_sent = True
+
                     await conversation_workflow.save_conversation(final_state)
-
-                    # 这里的输出会发生给语音合成服务
-                    # 优先使用 teaching_script_tts，如果为空或查询不到则走 LLM 转换逻辑
-                    chunk_id = direct_match.get("chunk_id")
-                    teaching_script_tts = None
-
-                    # 从 MongoDB 查询 teaching_script_tts
-                    if chunk_id:
-                        try:
-                            tts_chunk = await db.document_chunks.find_one(
-                                {"chunk_id": chunk_id},
-                                {"teaching_script_tts": 1}
-                            )
-                            if tts_chunk:
-                                teaching_script_tts = tts_chunk.get("teaching_script_tts")
-                                logger.info(f"Found teaching_script_tts for chunk_id={chunk_id}, length={len(teaching_script_tts) if teaching_script_tts else 0}")
-                                logger.info(f"teaching_script_tts content: {teaching_script_tts}")
-                        except Exception as e:
-                            logger.warning(f"Failed to query teaching_script_tts: {e}")
-
-                    # 如果 teaching_script_tts 存在且非空，直接流式输出；否则走 LLM 转换
-                    if teaching_script_tts and teaching_script_tts.strip():
-                        # 直接输出 teaching_script_tts
-                        # 智能断句：优先保持句子完整性，只在必要时断句
-                        logger.info(f"Using teaching_script_tts directly, length={len(teaching_script_tts)}")
-
-                        # 先按句子结束标点切分（保持句子完整）
-                        sentence_ends = list(re.finditer(r'[^。！？]*[。！？]', teaching_script_tts))
-
-                        # 处理没有句子结束标点的尾部内容
-                        remaining_after_sentences = teaching_script_tts
-                        if sentence_ends:
-                            last_end = sentence_ends[-1].end()
-                            remaining_after_sentences = teaching_script_tts[last_end:]
-
-                        tts_segments = []
-                        for sent_match in sentence_ends:
-                            sentence = sent_match.group()
-                            # 如果单句过长（>80字），在逗号等标点处适当断开
-                            if len(sentence) > 80:
-                                # 逐字符遍历，在标点后切分，保持标点在前一个片段末尾
-                                current_part = ""
-                                for char in sentence:
-                                    current_part += char
-                                    # 在标点处且累积足够长度时切分
-                                    if len(current_part) >= 30 and char in '，；、' and len(current_part) < len(sentence):
-                                        tts_segments.append(current_part)
-                                        current_part = ""
-                                # 添加剩余内容
-                                if current_part:
-                                    tts_segments.append(current_part)
-                            else:
-                                tts_segments.append(sentence)
-
-                        # 添加尾部内容（如果有）
-                        if remaining_after_sentences.strip():
-                            tts_segments.append(remaining_after_sentences)
-
-                        logger.info(f"tts_segments: {tts_segments}")
-                        for ts in tts_segments:
-                            ts = ts.strip()
-                            if not ts:
-                                continue
-                            token_chunk_data = {
-                                "id": chat_id,
-                                "object": "chat.completion.chunk",
-                                "created": created,
-                                "model": request.model,
-                                "choices": [{
-                                    "index": 0,
-                                    "delta": {"content": ts},
-                                    "finish_reason": None,
-                                }],
-                            }
-                            chunk_sequence += 1
-                            yield json.dumps(token_chunk_data)
-                        logger.info(f"teaching_script_tts output completed: {len(tts_segments)} segments")
-                    else:
-                        # teaching_script_tts 为空或查询不到，走 LLM 转换逻辑
-                        logger.info("teaching_script_tts not found, using LLM to revise for voice output")
-                        system_prompt = _load_revise_prompt()
-                        revise_llm = _get_revise_llm()
-                        revise_messages = [
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": existing_answer}
-                        ]
-                        revised_answer = ""
-                        async for chunk in revise_llm.astream(revise_messages):
-                            token = chunk.content
-                            if token:
-                                revised_answer += token
-                                token_chunk_data = {
-                                    "id": chat_id,
-                                    "object": "chat.completion.chunk",
-                                    "created": created,
-                                    "model": request.model,
-                                    "choices": [{
-                                        "index": 0,
-                                        "delta": {"content": token},
-                                        "finish_reason": None,
-                                    }],
-                                }
-                                chunk_sequence += 1
-                                yield json.dumps(token_chunk_data)
-
-                        logger.info("Answer revised for voice output: ")
-                        logger.info(f"original={existing_answer}")
-                        logger.info(f"revised_answer={revised_answer}")
-
-                    # Break out of workflow loop
                     break
-                
-                # 没有预生产答案，按 LLM 流式输出处理
-                logger.info('没有预生产答案，按 LLM 流式输出处理')
-                # Build messages for LLM
+
+                logger.info('No pre-generated answer, using LLM streaming')
                 messages = conversation_workflow.build_generation_messages(final_state)
-                # Get appropriate LLM for streaming
                 streaming_llm, model_name = conversation_workflow.get_streaming_llm(final_state)
+                revise_llm = await get_revise_llm()
+
                 logger.info(
                     f"Streaming with LLM: {model_name} | "
                     f"intent={final_state.get('intent')} | "
@@ -614,13 +628,6 @@ async def generate_openai_stream_v1(
                     f"web_search_used={final_state.get('web_search_used', False)}"
                 )
 
-                # 进入模型的流式推理
-                # TRUE token-level streaming from LLM
-                complexity_reason = final_state.get("complexity_reason", "")
-                logger.info(f"complexity_reason is {complexity_reason}")
-                math_problem = False
-                if "数学" in complexity_reason:
-                    math_problem = True
                 first_token_received = False
                 full_answer = ""
                 async for chunk in streaming_llm.astream(messages):
@@ -632,89 +639,43 @@ async def generate_openai_stream_v1(
                             final_state["ttfb_ms"] = ttfb_ms
                             logger.info(f"First token received | ttfb_ms={ttfb_ms}")
                         full_answer += token
-                        token_chunk_data = {
-                            "id": chat_id,
-                            "object": "chat.completion.chunk",
-                            "created": created,
-                            "model": request.model,
-                            "choices": [
-                                {
-                                    "index": 0,
-                                    "delta": {"content": token},
-                                    "finish_reason": None,
-                                }
-                            ],
-                        }
-                        chunk_sequence += 1
-                        await save_stream_chunk(
-                            db, chat_id, chunk_sequence, session_id, request.user_id,
-                            request.employee_id, "token", token_chunk_data,
-                            final_state.get("conversation_id")
-                        )
-                        if not math_problem:
-                            yield json.dumps(token_chunk_data)
-                # 保存结束块
-                chunk_sequence += 1
-                await save_stream_chunk(
-                    db, chat_id, chunk_sequence, session_id, request.user_id,
-                    request.employee_id, "done", finish_chunk_data,
-                    final_state.get("conversation_id", "")
-                )
-                logger.info(f'save_stream_chunk finish_chunk_data is {finish_chunk_data}')
-                # Send [DONE] marker
-                yield "[DONE]"
 
-                # 接下来是把
-                if math_problem:
-                    # 数学问题才要走转换模型否则不转换
-                    # 接下来把模型输出优化为适合语音的流式输出
-                    system_prompt = _load_revise_prompt()
-                    revise_llm = _get_revise_llm()
-                    revise_messagesv2 = [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": full_answer}
-                    ]
-                    revised_answer = ""
-                    revise_first_token_received = False
-                    revise_start_time = time.time()
-                    logger.info(f"start revised the answer, revise_messfull_answeragesv2 is {full_answer}")
+                        segment = sentence_buffer.add(token)
+                        logger.info(f"segment={segment!r}")
 
-                    try:
-                        # Pass timeout via config for streaming
-                        async for chunk in revise_llm.astream(revise_messagesv2):
-                            logger.info(f"Revise chunk received: {chunk}")
-                            token = chunk.content
-                            if token:
-                                if not revise_first_token_received:
-                                    revise_first_token_received = True
-                                    revise_ttfb_ms = int((time.time() - revise_start_time) * 1000)
-                                    logger.info(f"Revise LLM first token received | revise_ttfb_ms={revise_ttfb_ms}")
-                                revised_answer += token
-                                token_chunk_data = {
-                                    "id": chat_id,
-                                    "object": "chat.completion.chunk",
-                                    "created": created,
-                                    "model": request.model,
-                                    "choices": [{
-                                        "index": 0,
-                                        "delta": {"content": token},
-                                        "finish_reason": None,
-                                    }],
-                                }
-                                yield json.dumps(token_chunk_data)
-                    except Exception as e:
-                        logger.error(f"Revise LLM stream error: {e}", exc_info=True)
-                        raise
-                    logger.info(f"Revise stream completed, revised_answer length={len(revised_answer)}")
+                        token_len = len(token)
+                        buffer_len = sentence_buffer.get_buffer_length()
+                        if segment or ('$$' in token[:10]):
+                            logger.warning(
+                                f"[STREAMING] token_len={token_len}, buffer_len={buffer_len}, "
+                                f"has_segment={bool(segment)}, token_preview={repr(token[:50])}, "
+                                f"buffer_start={repr(sentence_buffer.buffer[:30])}, buffer_end={repr(sentence_buffer.buffer[-30:])}"
+                            )
 
-                # Log workflow completion time
+                        if segment:
+                            chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
+                                segment, revise_llm, chat_id, created, request.model,
+                                db, chunk_sequence, session_id, request.user_id,
+                                request.employee_id, final_state.get("conversation_id"),
+                                log_prefix=""
+                            )
+                            yield json.dumps(chunk_data)
+
+                final_segment = await sentence_buffer.flush(is_final=True)
+                if final_segment:
+                    chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
+                        final_segment.content, revise_llm, chat_id, created, request.model,
+                        db, chunk_sequence, session_id, request.user_id,
+                        request.employee_id, final_state.get("conversation_id"),
+                        log_prefix="FinalSegment"
+                    )
+                    yield json.dumps(chunk_data)
+
                 workflow_end_time = time.time()
                 total_time_ms = int((workflow_end_time - initial_state["workflow_start_time"]) * 1000)
                 logger.info(f"Workflow completed | total_time_ms={total_time_ms} | ttfb_ms={final_state.get('ttfb_ms')}")
-                # Update state with generated answer
                 final_state["final_answer"] = full_answer
-                
-                # 保存结束块
+
                 chunk_sequence += 1
                 await save_stream_chunk(
                     db, chat_id, chunk_sequence, session_id, request.user_id,
@@ -722,51 +683,23 @@ async def generate_openai_stream_v1(
                     final_state.get("conversation_id", "")
                 )
                 logger.info(f'save_stream_chunk finish_chunk_data is {finish_chunk_data}')
-                # Send [DONE] marker
                 yield "[DONE]"
-                
-                # Save conversation
+
+                finish_sent = True
+
                 await conversation_workflow.save_conversation(final_state)
-                # Break out of workflow loop
                 break
 
-        # If no final_state yet, use accumulated current_state
         if final_state is None:
             final_state = current_state
 
-        # Format source attribution
         sources = format_sources(
             retrieved_docs=final_state.get("retrieved_docs", []),
             web_search_results=final_state.get("web_search_results", []),
         )
 
-        # Send finish chunk
-        finish_chunk_data = {
-            "id": chat_id,
-            "object": "chat.completion.chunk",
-            "created": created,
-            "model": request.model,
-            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
-            "usage": {
-                "prompt_tokens": len(user_query),
-                "completion_tokens": len(final_state.get("final_answer", "")),
-                "total_tokens": len(user_query)
-                + len(final_state.get("final_answer", "")),
-            },
-            "metadata": {
-                "conversation_id": final_state.get("conversation_id", ""),
-                "confidence": final_state.get("confidence", 0.0),
-                "kb_used": final_state.get("kb_used", []),
-                "web_search_used": final_state.get("web_search_used", False),
-                "sources": sources,
-                "intent": final_state.get("intent", ""),
-                "is_realtime_query": final_state.get("is_realtime_query", False),
-                "realtime_category": final_state.get("realtime_category", ""),
-                "model": model_name,
-            },
-        }
+        _update_finish_chunk_metadata(finish_chunk_data, final_state, user_query, model_name, sources)
 
-        # Save finish chunk to DB
         chunk_sequence += 1
         await save_stream_chunk(
             db, chat_id, chunk_sequence, session_id, request.user_id,
@@ -774,14 +707,13 @@ async def generate_openai_stream_v1(
             final_state.get("conversation_id", "")
         )
 
-        yield json.dumps(finish_chunk_data)
-        # Send [DONE] marker
-        yield "[DONE]"
+        if not finish_sent:
+            yield json.dumps(finish_chunk_data)
+            yield "[DONE]"
 
     except Exception as e:
         logger.error(f"OpenAI stream v1 generation error | error={str(e)}", exc_info=True)
 
-        # Send error in OpenAI format
         error_chunk_data = {
             "error": {
                 "message": str(e),
@@ -790,7 +722,6 @@ async def generate_openai_stream_v1(
             }
         }
 
-        # Try to save error chunk to DB
         try:
             db = await get_database()
             chunk_sequence += 1

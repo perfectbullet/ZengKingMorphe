@@ -66,7 +66,6 @@ import time
 import requests
 from typing import Iterator, Optional
 
-
 def build_body(model: str, query: str, employee_id: Optional[str],
                user_id: Optional[str], session_id: Optional[str],
                channel_name: Optional[str] = None,
@@ -94,7 +93,6 @@ def build_body(model: str, query: str, employee_id: Optional[str],
 
     return body
 
-
 def iter_sse_payloads(resp: requests.Response) -> Iterator[str]:
     """
     从响应中迭代 SSE payload（剥离 'data:' 前缀）。
@@ -118,7 +116,6 @@ def iter_sse_payloads(resp: requests.Response) -> Iterator[str]:
             payload = line
         yield payload
 
-
 def handle_stream_payloads(payload_iter: Iterator[str], start_time: float) -> int:
     """
     处理 SSE payload 迭代器。
@@ -126,7 +123,7 @@ def handle_stream_payloads(payload_iter: Iterator[str], start_time: float) -> in
     """
     first_token_latency = None
     try:
-        for payload in payload_iter:
+        for idx, payload in enumerate(payload_iter):
             if payload == "[DONE]":
                 print("\n[DONE]")
                 return 0
@@ -158,11 +155,9 @@ def handle_stream_payloads(payload_iter: Iterator[str], start_time: float) -> in
                         if first_token_latency is None:
                             first_token_latency = time.perf_counter() - start_time
                             print(f"⏱️ First token latency: {first_token_latency*1000:.2f}ms\n", file=sys.stderr)
-                        # 不换行，直接 flush
-                        print(content)
-                        # sys.stdout.write(content)
-                        # sys.stdout.flush()
-                        # print('time:', time.time())
+                        
+                        print(f'# {idx}: {content!r}')
+
                     # 检查 finish_reason
                     finish = choice.get("finish_reason")
                     if finish == "stop":
@@ -181,7 +176,7 @@ def handle_stream_payloads(payload_iter: Iterator[str], start_time: float) -> in
                     message = first.get("message") or {}
                     content = message.get("content")
                     if content:
-                        print(content)
+                        print(repr(content))
                 # 打印元信息以便调试
                 try:
                     print("\n--- metadata ---")
@@ -202,7 +197,6 @@ def handle_stream_payloads(payload_iter: Iterator[str], start_time: float) -> in
         print("\nInterrupted by user", file=sys.stderr)
         return 130
     return 0
-
 
 def run_stream(host: str, body: dict, api_key: Optional[str], timeout: int = 60) -> int:
     url = host.rstrip("/") + "/api/chat/v1/chat/completions"
@@ -229,7 +223,6 @@ def run_stream(host: str, body: dict, api_key: Optional[str], timeout: int = 60)
     except requests.RequestException as e:
         print(f"Request error: url is {url}", str(e), file=sys.stderr)
         return 2
-
 
  
 
@@ -285,7 +278,6 @@ def main():
     rc = run_stream(args.host, body, api_key, timeout=args.timeout)
 
     sys.exit(rc)
-
 
 if __name__ == "__main__":
     main()
