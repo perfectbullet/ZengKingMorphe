@@ -18,6 +18,7 @@ from app.models.database import StreamChunkModel
 from app.core.logging import get_logger
 from app.core.database import get_database
 from app.services.conversation_service import conversation_workflow
+from app.utils.sentence_buffer import SentenceBuffer
 from langchain_openai import ChatOpenAI
 from langchain_community.chat_models import ChatOllama
 
@@ -480,8 +481,9 @@ async def generate_openai_stream_v2(
                         f"rerank_score={direct_match.get('rerank_score')} | "
                         f"length={len(existing_answer)} | ttfb_ms={ttfb_ms}"
                     )
-                    # 按中文标点符号切分流式返回答案
-                    segments = re.split(r'([。！？\n])', existing_answer)
+                    # 按中文标点符号切分流式返回答案，然后合并单独的标点 segment
+                    raw_segments = re.split(r'([。！？\n])', existing_answer)
+                    segments = SentenceBuffer._merge_punctuation_segments(raw_segments)
                     for segment in segments:
                         token_chunk_data = {
                             "id": chat_id,
@@ -532,9 +534,10 @@ async def generate_openai_stream_v2(
                             logger.warning(f"Failed to query teaching_script_tts: {e}")
                     # 如果 teaching_script_tts 存在且非空，直接流式输出；否则走 LLM 转换
                     if teaching_script_tts and teaching_script_tts.strip():
-                        # 直接输出 teaching_script_tts
+                        # 直接输出 teaching_script_tts，合并单独的标点 segment
                         logger.info(f"Using teaching_script_tts directly, length={len(teaching_script_tts)}")
-                        tst_ls = re.split(r'([。！？\n])', teaching_script_tts)
+                        raw_segments = re.split(r'([。！？\n])', teaching_script_tts)
+                        tst_ls = SentenceBuffer._merge_punctuation_segments(raw_segments)
                         for tst_token in tst_ls:
                             token_chunk_data = {
                                 "id": chat_id,
