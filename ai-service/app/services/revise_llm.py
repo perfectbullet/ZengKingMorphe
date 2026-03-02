@@ -1,8 +1,8 @@
 """
 LaTeX formula to voice conversion service.
 
-Supports SiliconFlow and Ollama LLM providers for converting mathematical
-formulas into voice-friendly Chinese explanations.
+Converts mathematical formulas into voice-friendly Chinese explanations
+using Ollama as LLM provider.
 
 Formula Extraction Strategy:
 - Extract complete formulas using regex
@@ -14,7 +14,6 @@ import re
 from typing import List, Tuple
 
 from langchain_community.chat_models import ChatOllama
-from langchain_openai import ChatOpenAI
 
 from app.core.logging import get_logger
 
@@ -32,27 +31,27 @@ LATEX_FORMULA_PATTERN = re.compile(
     , re.DOTALL
 )
 
+MARKDOWN_LIST_PATTERN = re.compile(r'^(\s*)([-*+])\s+', re.MULTILINE)
+
 # =============================================================================
 # Prompts
 # =============================================================================
 
 FORMULA_ONLY_PROMPT = r'''
-You are a professional math explanation assistant specializing in converting
-LaTeX mathematical formulas into fluent, accurate, Chinese colloquial
-descriptions for text-to-speech (TTS).
+你是一个专业的数学公式讲解助手，专门将 LaTeX 数学公式转换为流畅、准确的中文口语化描述，用于语音播报(TTS)。
 
-Translation rules:
-- Stay completely faithful to the mathematical meaning, do not modify or simplify formulas
-- Use colloquial expressions: "divided by", "square root", "sum", "plus", "minus", "times", etc.
-- Use "的" to connect modifiers (e.g., "x的平方" for "x squared")
-- Clarify structure: clearly indicate "numerator", "denominator", "subscript", "superscript", "integral limits", "summation range"
-- Smooth phrasing: output complete short sentences suitable for stable TTS reading
+转换规则：
+- 完全忠实于数学含义，不修改或简化公式
+- 使用口语化表达："除以"、"根号"、"求和"、"加"、"减"、"乘以"等
+- 用"的"连接修饰语（例如"x的平方"表示"x squared"）
+- 澄清结构：明确指出"分子"、"分母"、"下标"、"上标"、"积分限"、"求和范围"
+- 流畅表达：输出适合稳定TTS朗读的完整短句
 
-Symbol translation rules (strictly follow):
+符号转换规则（严格遵守）：
 - + → 加
 - - → 减
-- * or × → 乘以
-- / or ÷ → 除以
+- * 或 × → 乘以
+- / 或 ÷ → 除以
 - = → 等于
 - < → 小于
 - > → 大于
@@ -61,14 +60,14 @@ Symbol translation rules (strictly follow):
 - ≠ → 不等于
 - ≈ → 约等于
 
-Output requirements:
-- No LaTeX commands or backslash (\) symbols in output
-- No delimiter backslashes like \(...\) or $...$
-- Only natural language descriptions, all symbols must be converted to Chinese
+输出要求：
+- 不输出 LaTeX 命令或反斜杠 (\) 符号
+- 不输出定界符如 \(...\) 或 $...$
+- 只输出自然语言描述，所有符号必须转换为中文
 
-IMPORTANT: Output the final answer directly, no reasoning process, thinking steps, or intermediate analysis.
+重要说明：直接输出最终答案，不要任何推理过程、思考步骤或中间分析。
 
-Example comparisons (LaTeX → description):
+示例对比（LaTeX → 描述）：
 - $E = mc^2$ → E 等于 m 乘以 c 的平方
 - $\frac{a}{b}$ → a 除以 b
 - $\sqrt{x^2 + y^2}$ → 根号下 x 的平方 加 y 的平方
@@ -81,73 +80,45 @@ Example comparisons (LaTeX → description):
 - $a \times b$ → a 乘以 b
 - $a / b$ → a 除以 b
 - $(a + b)^n = \sum_{k=0}^{n} \binom{n}{k} a^{n-k} b^k$ → a 加 b 的 n 次方 等于 对 k 从 0 到 n 求和，组合数 n 选 k 乘以 a 的 n 减 k 次方 再乘以 b 的 k 次方
+- $$\n   \\cos \\alpha + \\cos 27^\\circ = 2 \\cos\\left(\\frac{\\alpha + 27^\\circ}{2}\right) \\cos\\left(\\frac{\\alpha - 27^\\circ}{2}\right)\n$$\n → 余弦 alpha 加上 余弦 27 度 等于 2 乘以 余弦括号 alpha 加 27 度 除以 2 括号 乘以 余弦括号 alpha 减 27 度 除以 2 括号\n
+- $$\n   \\sin \\alpha + \\sin \\beta = 2 \\sin\\left(\\frac{\\alpha + \\beta}{2}\\right) \\cos\\left(\\frac{\\alpha - \\beta}{2}\\right)\n$$\n → 正弦 alpha 加 正弦 beta 等于 2 乘以 正弦括号 alpha 加 beta 除以 2 括号 乘以 余弦括号 alpha 减 beta 除以 2 括号\n
+- $$\n   \\cos \\alpha - \\cos \\beta = -2 \\sin\\left(\\frac{\\alpha + \\beta}{2}\\right) \\sin\\left(\\frac{\\alpha - \\beta}{2}\\right)\n$$\n\n → 余弦 alpha 减去 余弦 beta 等于 负 2 乘以 正弦括号 alpha 加 beta 除以 2 括号 乘以 正弦括号 alpha 减 beta 除以 2 括号
 
-Please strictly follow the above style, output the conversion result directly,
-without any explanation, and do not include backslashes, $ symbols, or any LaTeX commands.
+请严格遵守以上风格，直接输出转换结果，不要任何解释，也不要包含反斜杠、$ 符号或任何 LaTeX 命令。
 '''
 
 # =============================================================================
 # LLM Provider Functions
 # =============================================================================
 
-async def get_revise_llm() -> ChatOllama | ChatOpenAI:
+async def get_revise_llm() -> ChatOllama:
     """
     Get LLM instance for text revision (voice-friendly output).
 
-    Supports:
-    - siliconflow: SiliconFlow API (recommended)
-    - ollama: Local Ollama
+    Uses Ollama as LLM provider.
 
     Environment Variables:
-    - REVISE_PROVIDER: Provider type (siliconflow or ollama), default siliconflow
-    - OPENAI_API_KEY: SiliconFlow API key
-    - OPENAI_API_BASE: SiliconFlow API base URL
-    - OPENAI_REVISE_MODEL: SiliconFlow model name
-    - OLLAMA_BASE_URL: Ollama base URL
-    - OLLAMA_REVISE_MODEL: Ollama model name
+    - OLLAMA_BASE_URL: Ollama base URL, default http://localhost:11434
+    - OLLAMA_REVISE_MODEL: Ollama model name, default qwen2.5:32b
 
     Returns:
-        ChatOpenAI or ChatOllama instance configured for formula conversion
+        ChatOllama instance configured for formula conversion
     """
-    provider = "ollama"
+    ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+    ollama_model = os.getenv(
+        "OLLAMA_REVISE_MODEL",
+        os.getenv("OLLAMA_MODEL", "qwen2.5:32b")
+    )
 
-    if provider == "siliconflow":
-        api_key = os.getenv("OPENAI_API_KEY")
-        api_base = os.getenv("OPENAI_API_BASE", "https://api.siliconflow.cn/v1")
-        model = os.getenv(
-            "OPENAI_REVISE_MODEL",
-            os.getenv("OPENAI_MODEL", "deepseek-ai/DeepSeek-V3")
-        )
+    logger.info(f"[Revise LLM] Ollama | BASE_URL={ollama_base_url} | MODEL={ollama_model}")
 
-        if not api_key:
-            logger.warning("OPENAI_API_KEY not set for SiliconFlow")
-            raise ValueError("OPENAI_API_KEY not set for SiliconFlow")
-
-        logger.info(f"[Revise LLM] SiliconFlow | API_BASE={api_base} | MODEL={model}")
-
-        return ChatOpenAI(
-            base_url=api_base,
-            api_key=api_key,
-            model=model,
-            temperature=0.7,
-            streaming=True,
-        )
-    else:
-        ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-        ollama_model = os.getenv(
-            "OLLAMA_REVISE_MODEL",
-            os.getenv("OLLAMA_MODEL", "qwen2.5:32b")
-        )
-
-        logger.info(f"[Revise LLM] Ollama | BASE_URL={ollama_base_url} | MODEL={ollama_model}")
-
-        return ChatOllama(
-            base_url=ollama_base_url,
-            model=ollama_model,
-            temperature=0.7,
-            streaming=True,
-            keep_alive=-1
-        )
+    return ChatOllama(
+        base_url=ollama_base_url,
+        model=ollama_model,
+        temperature=0.7,
+        streaming=True,
+        keep_alive=-1
+    )
 
 def _is_empty_or_delimiter_only(text: str) -> bool:
     """
@@ -183,6 +154,20 @@ def _has_any_formula_marker(text: str) -> bool:
     """
     return LATEX_FORMULA_PATTERN.search(text) is not None
 
+def _remove_list_markers(text: str) -> str:
+    """
+    Remove Markdown list markers (-, *, +) while preserving indentation.
+
+    Prevents these markers from being misread by TTS as "minus".
+
+    Args:
+        text: Original text
+
+    Returns:
+        Text with list markers removed
+    """
+    return MARKDOWN_LIST_PATTERN.sub(r'\1', text)
+
 # =============================================================================
 # Formula Extraction and Conversion Functions
 # =============================================================================
@@ -204,7 +189,7 @@ def _extract_latex_formulas(text: str) -> List[Tuple[str, int, int]]:
 
 async def _convert_single_formula(
     formula: str,
-    llm: ChatOllama | ChatOpenAI,
+    llm: ChatOllama,
 ) -> str:
     """
     Convert a single formula to voice-friendly text.
@@ -214,7 +199,7 @@ async def _convert_single_formula(
         llm: LLM instance for conversion
 
     Returns:
-        Voice-friendly conversion of the formula
+        Voice-friendly conversion of formula
     """
     messages = [
         {"role": "system", "content": FORMULA_ONLY_PROMPT},
@@ -239,7 +224,7 @@ async def _convert_single_formula(
 
 async def convert_formula_to_voice(
     text: str,
-    llm: ChatOllama | ChatOpenAI,
+    llm: ChatOllama,
 ) -> str:
     """
     Convert formula text to voice-friendly output using LLM.
@@ -247,8 +232,8 @@ async def convert_formula_to_voice(
     Extract formulas, convert only formulas, then replace back.
 
     Includes fast-path checks for common streaming scenarios:
-    - Empty or delimiter-only input → returns original text
-    - No formula markers detected → returns original text
+    - Empty or delimiter-only input returns original text
+    - No formula markers detected returns original text with list markers removed
 
     Args:
         text: Text containing formulas (may include regular text mixed with formulas)
@@ -265,6 +250,7 @@ async def convert_formula_to_voice(
         return text
 
     if not _has_any_formula_marker(text):
+        text = _remove_list_markers(text)
         logger.info(
             "[convert_formula_to_voice] No formula markers, returning original",
             text_preview=repr(text[:50])
@@ -292,22 +278,21 @@ async def convert_formula_to_voice(
 
     return result
 
-MATH_SENTENCE_PROMPT = r"""You are a professional math explanation assistant specializing in converting
-math textbook text into fluent, accurate, Chinese colloquial descriptions for text-to-speech (TTS).
+MATH_SENTENCE_PROMPT = r"""你是一个专业的数学讲解助手，专门将数学教材文本转换为流畅、准确的中文口语化描述，用于语音播报(TTS)。
 
-Your task: Convert sentences containing math symbols to colloquial expressions.
+你的任务：将包含数学符号的句子转换为口语化表达。
 
-Conversion rules:
-1. Stay completely faithful to the mathematical meaning, do not modify or simplify math content
-2. Use colloquial expressions: "divided by", "square root", "sum", "integral", etc.; use "的" to connect modifiers
-3. Clarify structure: clearly indicate "numerator", "denominator", "subscript", "superscript", etc.
-4. Smooth phrasing: output complete short sentences suitable for stable TTS reading
+转换规则：
+1. 完全忠实于数学含义，不修改或简化数学内容
+2. 使用口语化表达："除以"、"根号"、"求和"、"积分"等；用"的"连接修饰语
+3. 澄清结构：明确指出"分子"、"分母"、"下标"、"上标"等
+4. 流畅表达：输出适合稳定TTS朗读的完整短句
 
-Symbol translation rules (strictly follow):
+符号转换规则（严格遵守）：
 - + → 加
 - - → 减
-- * or × → 乘以
-- / or ÷ → 除以
+- * 或 × → 乘以
+- / 或 ÷ → 除以
 - = → 等于
 - < → 小于
 - > → 大于
@@ -334,14 +319,14 @@ Symbol translation rules (strictly follow):
 - ² → 的平方
 - ³ → 的立方
 
-Output requirements:
-- No LaTeX commands or backslash (\) symbols in output
-- No delimiter backslashes like \(...\) or $...$
-- Only natural language descriptions, all symbols must be converted to Chinese
+输出要求：
+- 不输出 LaTeX 命令或反斜杠 (\) 符号
+- 不输出定界符如 \(...\) 或 $...$
+- 只输出自然语言描述，所有符号必须转换为中文
 
-IMPORTANT: Output the converted colloquial expression directly, no reasoning process, thinking steps, or intermediate analysis.
+重要说明：直接输出转换后的口语化表达，不要任何推理过程、思考步骤或中间分析。
 
-Example comparisons:
+示例对比：
 - "通常写成{x∈A|P(x)}的形式，" → "通常写成 x 属于 A，使得 P(x) 的形式"
 - "比如方程x²-2=0的所有实数根组成的集合，" → "比如方程 x 的平方减 2 等于 0 的所有实数根组成的集合"
 - "那么x∈R或x∈Z这部分是可以省略的。" → "那么 x 属于 R 或 x 属于 Z 这部分是可以省略的"
@@ -350,12 +335,12 @@ Example comparisons:
 - "a大于等于b" → "a 大于等于 b"
 - "x的n次方" → "x 的 n 次方"
 
-Please convert the following math sentence to a colloquial expression:
+请将以下数学句子转换为口语化表达：
 """
 
 async def convert_math_sentence_to_voice(
     text: str,
-    llm: ChatOllama | ChatOpenAI,
+    llm: ChatOllama,
 ) -> str:
     """
     Convert sentences containing math symbols to voice-friendly expressions.
@@ -369,6 +354,8 @@ async def convert_math_sentence_to_voice(
     """
     if not text or not text.strip():
         return text
+
+    text = _remove_list_markers(text)
 
     messages = [
         {"role": "system", "content": MATH_SENTENCE_PROMPT},

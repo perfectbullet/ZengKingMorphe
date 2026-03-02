@@ -7,6 +7,9 @@ Tests cover:
 - Complex mathematical expressions
 - No-formula text (should return as-is)
 """
+import asyncio
+from pathlib import Path
+from typing import List
 from unittest.mock import MagicMock
 
 import pytest
@@ -630,3 +633,183 @@ class TestFormulaConversionWithOperators:
         assert "加" in result, "应包含 '加'"
         assert "求和" in result, "应包含 '求和'"
         assert "\\" not in result, "输出不应包含反斜杠"
+
+
+class TestStreamingIntegrationWithTestInput:
+    """Integration tests using test files from tests/test_input/ directory with streaming.
+
+    运行集成测试（需要真实 LLM）
+    """
+
+    # Test input files directory
+    TEST_INPUT_DIR = Path(__file__).parent / "test_input"
+    TEST_INPUT_FILES = [
+        "test_bracket_formula_issue_input1.txt",
+        "test_bracket_formula_issue_input2.txt",
+        "test_bracket_formula_issue_input3.txt",
+        "test_bracket_formula_issue_input4.txt",
+    ]
+
+    def _read_test_file(self, filename: str) -> str:
+        """Read test file content from test_input directory."""
+        file_path = self.TEST_INPUT_DIR / filename
+        if not file_path.exists():
+            pytest.skip(f"Test input file not found: {filename}")
+        return file_path.read_text(encoding="utf-8")
+
+    def _stream_text(self, text: str, chunk_size: int = 50) -> List[str]:
+        """
+        模拟流式读取文本，按固定大小分块。
+
+        Args:
+            text: 完整文本
+            chunk_size: 每块大小（字符数）
+
+        Returns:
+            文本块列表
+        """
+        chunks = []
+        for i in range(0, len(text), chunk_size):
+            chunk = text[i:i + chunk_size]
+            chunks.append(chunk)
+        return chunks
+
+    @pytest.mark.asyncio
+    async def test_streaming_input_file_1(self, real_llm):
+        """Test streaming conversion with input file 1."""
+        llm = await real_llm()
+        text = self._read_test_file("test_bracket_formula_issue_input1.txt")
+
+        print(f"\\n=== 测试: streaming 输入文件 1 (运行集成测试（需要真实 LLM）===")
+        print(f"文件长度: {len(text)} 字符")
+        print(f"文件内容预览: {text[:200]}...")
+
+        # 模拟流式读取
+        chunks = self._stream_text(text, chunk_size=100)
+        full_result = ""
+
+        for idx, chunk in enumerate(chunks):
+            print(f"\\n[Chunk {idx + 1}/{len(chunks)}] 长度: {len(chunk)}")
+            print(f"内容: {chunk}")
+
+            # 转换当前块
+            result = await convert_formula_to_voice(chunk, llm)
+            full_result += result
+
+            print(f"转换结果: {result}")
+
+        print(f"\\n=== 完整转换结果 ===")
+        print(f"总长度: {len(full_result)} 字符")
+        print(f"结果预览: {full_result[:300]}...")
+
+        # 验证公式被转换
+        assert "$" not in full_result, "不应包含 $ 符号"
+        assert "\\[" not in full_result, "不应包含 \\[ 符号"
+        assert "\\(" not in full_result, "不应包含 \\( 符号"
+
+    @pytest.mark.asyncio
+    async def test_streaming_input_file_2(self, real_llm):
+        """Test streaming conversion with input file 2 (trigonometric formulas)."""
+        llm = await real_llm()
+        text = self._read_test_file("test_bracket_formula_issue_input2.txt")
+
+        print(f"\\n=== 测试: streaming 输入文件 2 (运行集成测试（需要真实 LLM）===")
+        print(f"文件长度: {len(text)} 字符")
+        print(f"公式数量: {text.count('$')}")
+
+        # 模拟流式读取
+        chunks = self._stream_text(text, chunk_size=150)
+        full_result = ""
+
+        for idx, chunk in enumerate(chunks):
+            result = await convert_formula_to_voice(chunk, llm)
+            full_result += result
+
+        print(f"\\n转换结果长度: {len(full_result)} 字符")
+        print(f"结果预览: {full_result[:400]}...")
+
+        # 验证三角函数公式被转换
+        assert "sin" not in full_result or "正弦" in full_result, "sin 应被转换为 正弦"
+        assert "cos" not in full_result or "余弦" in full_result, "cos 应被转换为 余弦"
+
+    @pytest.mark.asyncio
+    async def test_streaming_input_file_3(self, real_llm):
+        """Test streaming conversion with input file 3."""
+        llm = await real_llm()
+        text = self._read_test_file("test_bracket_formula_issue_input3.txt")
+
+        print(f"\\n=== 测试: streaming 输入文件 3 (运行集成测试（需要真实 LLM）===")
+        print(f"文件长度: {len(text)} 字符")
+
+        chunks = self._stream_text(text, chunk_size=200)
+        full_result = ""
+
+        for idx, chunk in enumerate(chunks):
+            result = await convert_formula_to_voice(chunk, llm)
+            full_result += result
+
+        print(f"\\n完整转换结果长度: {len(full_result)} 字符")
+        print(f"结果: {full_result[:300]}...")
+
+        # 基本验证
+        assert "$$" not in full_result, "不应包含 $$ 符号"
+        assert len(full_result) > len(text) / 2, "结果应该有内容"
+
+    @pytest.mark.asyncio
+    async def test_streaming_input_file_4(self, real_llm):
+        """Test streaming conversion with input file 4 (basic trigonometric formulas)."""
+        llm = await real_llm()
+        text = self._read_test_file("test_bracket_formula_issue_input4.txt")
+
+        print(f"\\n=== 测试: streaming 输入文件 4 (运行集成测试（需要真实 LLM）===")
+        print(f"文件长度: {len(text)} 字符")
+
+        chunks = self._stream_text(text, chunk_size=100)
+        full_result = ""
+
+        for idx, chunk in enumerate(chunks):
+            result = await convert_formula_to_voice(chunk, llm)
+            full_result += result
+
+        print(f"\\n转换结果: {full_result[:400]}...")
+
+        # 验证基本公式转换
+        assert "\\\\" not in full_result, "不应包含反斜杠"
+        assert "$" not in full_result, "不应包含 $ 符号"
+
+    @pytest.mark.asyncio
+    async def test_streaming_all_files_sequential(self, real_llm):
+        """Test all input files sequentially with streaming."""
+        llm = await real_llm()
+
+        print(f"\\n=== 测试: 顺序处理所有输入文件 (运行集成测试（需要真实 LLM）===")
+
+        results = {}
+        for filename in self.TEST_INPUT_FILES:
+            file_path = self.TEST_INPUT_DIR / filename
+            if not file_path.exists():
+                continue
+
+            text = file_path.read_text(encoding="utf-8")
+            chunks = self._stream_text(text, chunk_size=100)
+            file_result = ""
+
+            for chunk in chunks:
+                result = await convert_formula_to_voice(chunk, llm)
+                file_result += result
+
+            results[filename] = {
+                "original_length": len(text),
+                "converted_length": len(file_result),
+                "preview": file_result[:200],
+            }
+
+        print(f"\\n=== 所有文件转换摘要 ===")
+        for filename, info in results.items():
+            print(f"\\n{filename}:")
+            print(f"  原始长度: {info['original_length']} 字符")
+            print(f"  转换长度: {info['converted_length']} 字符")
+            print(f"  预览: {info['preview']}...")
+
+        # 至少处理了一个文件
+        assert len(results) > 0, "应该至少处理了一个测试文件"
