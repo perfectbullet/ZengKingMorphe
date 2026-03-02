@@ -1143,7 +1143,7 @@ class DocumentProcessor:
                 "chunk_index": chunk.chunk_index,
                 "summary": chunk.metadata.get("summary", "") if chunk.metadata else "",
                 # MinerU结构化元数据
-                "page_idx": chunk.page_idx,
+                "page_idx": chunk.page_idx if chunk.page_idx else 0,
                 "has_images": len(chunk.image_references) > 0 if chunk.image_references else False,
                 "block_types": "|".join(chunk.block_types) if chunk.block_types else "",
                 "structure_level": chunk.structure_level if chunk.structure_level else 0,
