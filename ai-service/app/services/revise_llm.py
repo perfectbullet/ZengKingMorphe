@@ -355,7 +355,6 @@ async def convert_math_sentence_to_voice(
     if not text or not text.strip():
         return text
 
-    text = _remove_list_markers(text)
 
     messages = [
         {"role": "system", "content": MATH_SENTENCE_PROMPT},

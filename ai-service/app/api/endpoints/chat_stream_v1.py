@@ -28,6 +28,7 @@ from app.services.revise_llm import (
 )
 from app.utils.latex import normalize_latex_formulas
 from app.utils.sentence_buffer import SentenceBuffer, has_latex_formula
+from app.utils.tts_formatter import strip_markdown_for_tts
 
 logger = get_logger(__name__)
 
@@ -199,6 +200,11 @@ async def _process_segment_for_output(
     else:
         voice_content = display_content
 
+    # Strip markdown formatting from voice_content for TTS
+    # (display_content retains original markdown formatting for display)
+    voice_content = strip_markdown_for_tts(voice_content)
+    logger.info(f"[{log_prefix}markdown清理] , markdown清理={repr(voice_content)}")
+    
     return display_content, voice_content
 
 def _build_token_chunk_data(
@@ -580,6 +586,7 @@ async def generate_openai_stream_v1(
 
                     for char in existing_answer:
                         segment = sentence_buffer.add(char)
+                        logger.info(f"segment={segment!r}")
                         if segment:
                             chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
                                 segment, revise_llm, chat_id, created, request.model,
