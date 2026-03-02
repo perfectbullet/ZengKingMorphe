@@ -4,6 +4,8 @@ docs-history
 .env
 .env-local
 error.log
+error2.log
+test.log
 sftp_sync_config.yaml
 info.log
 数字员工知识库与AI接口.docx
@@ -41,6 +43,10 @@ response_*.json
 
 # 数据集不必上传
 Digital-Human-Disciplinary-Dataset
+
+# Test input directories
+ai-service/tests/test_input/
+demo_sentence_segment/
 error2.log
 1.json
 2.json
