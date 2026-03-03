@@ -15,7 +15,7 @@ from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.services.conversation.conversation_state import ConversationState, GREETING_KEYWORDS, INTERRUPTION_KEYWORDS
+from app.services.conversation.conversation_state import ConversationState, GREETING_KEYWORDS
 
 logger = get_logger(__name__)
 
@@ -325,67 +325,6 @@ def build_greeting_messages(
     return messages
 
 
-def build_interruption_messages(
-    state: ConversationState,
-    employee_config: Dict[str, Any]
-) -> List:
-    """
-    Build LLM messages for interruption scenario.
-
-    Characteristics:
-    - No RAG or web search needed
-    - Short, acknowledging response
-    - User wants to stop or pause current conversation
-
-    Args:
-        state: Current conversation state
-        employee_config: Employee configuration dict
-
-    Returns:
-        List of Message objects
-    """
-    personality = employee_config.get("personality", {})
-    name = employee_config.get('name', 'AI助手')
-
-    entities = state.get("entities", {})
-    interruption_type = entities.get("interruption_type", "stop")
-
-    tone_desc, _, _ = get_personality_description(personality)
-
-    response_hints = {
-        "stop": "简短回应，表示已收到用户停止的指令",
-        "done": "简短回应，表示确认",
-        "interrupt": "简短回应，表示等待用户继续",
-        "dismiss": "简短回应，表示已明白用户意思"
-    }
-    response_hint = response_hints.get(interruption_type, "简短回应，表示收到")
-
-    system_prompt = f"""你是 {name}。
-
-**当前场景**：用户发起了打断/停止的信号。
-
-回答要求：
-1. {response_hint}
-2. 回复极其简洁（不超过 10 字）
-3. 保持{tone_desc}的语气风格
-4. 不要说任何多余的话
-
-用户原话：
-{state['user_query']}
-
-请生成最简短的确认回应。"""
-
-    messages = [SystemMessage(content=system_prompt)]
-    messages.append(HumanMessage(content=state["user_query"]))
-
-    logger.debug(
-        "Interruption messages built",
-        interruption_type=interruption_type
-    )
-
-    return messages
-
-
 def build_generation_messages(state: ConversationState) -> List:
     """
     Build LLM messages for answer generation.
@@ -405,8 +344,6 @@ def build_generation_messages(state: ConversationState) -> List:
     employee_config = state.get("employee_config", {})
 
     intent = state.get("intent")
-    if intent == "interruption":
-        return build_interruption_messages(state, employee_config)
     if intent == "greeting":
         return build_greeting_messages(state, employee_config)
 

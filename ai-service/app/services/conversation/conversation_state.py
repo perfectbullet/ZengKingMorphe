@@ -29,20 +29,11 @@ GREETING_KEYWORDS = {
 
 
 # =============================================================================
-# Interruption Detection Keywords
-# Used for detecting user interruption intent during conversation
+# Interruption Detection Keywords (REMOVED)
+# Previously used for detecting user interruption intent during conversation.
+# This functionality has been removed to allow interruption keywords
+# to flow through the normal processing pipeline.
 # =============================================================================
-INTERRUPTION_KEYWORDS = {
-    # Direct stop commands
-    "stop": ["停", "停下", "别说了", "不说"],
-    # Completion indicators
-    "done": ["好了", "够了", "可以了", "就这样"],
-    # Interruption requests
-    "interrupt": ["打断一下", "等一下", "稍等", "暂停"],
-    # Dismissal
-    "dismiss": ["行了", "知道了", "明白", "不用说了"]
-}
-
 
 # =============================================================================
 # Conversation State Definition

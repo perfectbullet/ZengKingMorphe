@@ -29,7 +29,7 @@ from app.core.config import settings
 from app.core.database import get_database
 from app.core.logging import get_logger
 from app.models.database import ConversationModel, SessionModel
-from app.services.conversation.conversation_state import ConversationState, GREETING_KEYWORDS, INTERRUPTION_KEYWORDS
+from app.services.conversation.conversation_state import ConversationState, GREETING_KEYWORDS
 from app.services.conversation.conversation_helpers import (
     time_node, select_llm,
     heuristic_complexity
@@ -199,18 +199,7 @@ class ConversationNodes:
         async with time_node("classify_query_type", state):
             query = state["user_query"].strip().lower()
 
-            # 1. 检测打断意图 (优先级最高)
-            for category, keywords in INTERRUPTION_KEYWORDS.items():
-                if any(kw in query for kw in keywords):
-                    state["intent"] = "interruption"
-                    state["complexity_score"] = 0.0
-                    state["complexity_reason"] = "interruption"
-                    state["is_realtime_query"] = False
-                    state["entities"] = {"interruption_type": category}
-                    logger.info(f"Query classified: interruption: category={category}")
-                    return state
-
-            # 2. 检测问候语
+            # 1. 检测问候语
             for category, keywords in GREETING_KEYWORDS.items():
                 if any(kw in query for kw in keywords):
                     state["intent"] = "greeting"
@@ -255,8 +244,8 @@ class ConversationNodes:
             目标节点名称 (greeting/realtime/normal)
         """
         intent = state.get("intent")
-        # 打断和问候都直接跳到生成答案
-        if intent in ("greeting", "interruption"):
+        # 问候语直接跳到生成答案
+        if intent == "greeting":
             return "greeting"
         if state.get("is_realtime_query"):
             return "realtime"
@@ -1039,7 +1028,7 @@ class ConversationNodes:
 
             if state.get("faq_matched"):
                 confidence = 0.95
-            elif state.get("intent") in ("interruption", "greeting"):
+            elif state.get("intent") == "greeting":
                 # 快速响应意图，高置信度
                 confidence = 0.98
             elif state.get("web_search_used", False):
@@ -1093,7 +1082,7 @@ class ConversationNodes:
                 return state
 
             # Skip for FAQ, greeting, and interruption (already validated)
-            if state.get("faq_matched") or state.get("intent") in ("greeting", "interruption"):
+            if state.get("faq_matched") or state.get("intent") == "greeting":
                 logger.debug(f"Skipping verification for FAQ/greeting/interruption: intent={state.get('intent')}")
                 return state
 

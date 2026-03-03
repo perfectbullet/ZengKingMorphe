@@ -110,12 +110,25 @@ The core conversation engine is a **17-node StateGraph** ([ai-service/app/servic
 **Flow**: `load_employee_config → load_session_context → input_validation → classify_query_type → [conditional branches] → evaluate_complexity → rewrite_query → check_realtime_query → match_faq → recognize_intent → knowledge_retrieval → rerank_documents → compress_context → [conditional: low_relevance?] → web_search → generate_answer → verify_answer → save_conversation`
 
 **Key Routing Logic**:
-- **classify_query_type**: Detects greetings, sensitive words, or forbidden topics
+- **classify_query_type**: Detects greetings or forbidden topics
 - **Realtime queries** → bypass FAQ/RAG, direct to web search
 - **FAQ matched** → skip RAG, generate answer directly
 - **Greeting intent** → skip RAG, generate answer directly
 - **Low relevance score** (< `settings.relevance_threshold`, default 0.6) → trigger web search as fallback
 - **Otherwise** → RAG retrieval → reranking → context compression → LLM generation
+
+**Note - Interruption Detection Removed**:
+- Previously, keywords like "停"、"停下"、"别说了" would trigger a quick interruption response
+- This functionality has been removed (2026-03-03)
+- These keywords now flow through the normal RAG processing pipeline
+- Files affected: `conversation_nodes.py`, `conversation_helpers.py`, `conversation_state.py`
+
+**Summary Language Requirement**:
+- All document summaries (chunk/section/document level) are generated in Chinese
+- Implementation in `app/services/semantic_chunking.py`
+- Chunk summary: "请用简洁的中文总结以下文本的核心内容，不超过50字"
+- Section summary: "请用简洁的中文总结以下章节内容的主要观点，不超过100字"
+- Document summary: "请用简洁的中文总结以下文档的整体内容和主要要点，不超过200字"
 
 **State Management**: `ConversationState` TypedDict with 28 fields flows through all nodes, including:
 - Core: `user_query`, `user_id`, `session_id`, `employee_id`
