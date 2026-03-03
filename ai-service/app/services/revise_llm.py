@@ -79,6 +79,10 @@ FORMULA_ONLY_PROMPT = r'''
 - $a - b$ → a 减 b
 - $a \times b$ → a 乘以 b
 - $a / b$ → a 除以 b
+- $x = \pm 1$ → x 等于 正负一
+- $(-\infty, -1)$ → 负无穷到一的开区间
+- $(a, b)$ → b到b的开区间
+- $[a, b]$ → b到b的闭区间
 - $(a + b)^n = \sum_{k=0}^{n} \binom{n}{k} a^{n-k} b^k$ → a 加 b 的 n 次方 等于 对 k 从 0 到 n 求和，组合数 n 选 k 乘以 a 的 n 减 k 次方 再乘以 b 的 k 次方
 - $$\n   \\cos \\alpha + \\cos 27^\\circ = 2 \\cos\\left(\\frac{\\alpha + 27^\\circ}{2}\right) \\cos\\left(\\frac{\\alpha - 27^\\circ}{2}\right)\n$$\n → 余弦 alpha 加上 余弦 27 度 等于 2 乘以 余弦括号 alpha 加 27 度 除以 2 括号 乘以 余弦括号 alpha 减 27 度 除以 2 括号\n
 - $$\n   \\sin \\alpha + \\sin \\beta = 2 \\sin\\left(\\frac{\\alpha + \\beta}{2}\\right) \\cos\\left(\\frac{\\alpha - \\beta}{2}\\right)\n$$\n → 正弦 alpha 加 正弦 beta 等于 2 乘以 正弦括号 alpha 加 beta 除以 2 括号 乘以 余弦括号 alpha 减 beta 除以 2 括号\n

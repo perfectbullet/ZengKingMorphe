@@ -34,6 +34,7 @@ SplitReason = Literal[
     "sentence_end",
     "comma",
     "char_limit_space",
+    "char_limit_punctuation",
     "char_limit_forced",
     "char_limit_before_formula",
     "no_split",
@@ -56,9 +57,9 @@ class SentenceBuffer:
     6. Formula detection - automatic detection in sentences
     """
 
+    # Regex patterns
     SENTENCE_END_PATTERN = re.compile(r'([。！？.!?\n])')
     COMMA_PATTERN = re.compile(r'([，；、,;])')
-
     CLOSED_FORMULA_PATTERN = re.compile(
         r'\$\$[\s\S]+?\$\$|'
         r'\$[^$\n]+?\$|'
@@ -66,21 +67,27 @@ class SentenceBuffer:
         r'\\\[[\s\S]+?\\\]'
     )
     ESCAPED_DOLLAR_PATTERN = re.compile(r'\\\$')
+    NON_LETTER_DIGIT_PATTERN = re.compile(r'[a-zA-Z0-9]')
+    PUNCTUATION_ONLY_PATTERN = re.compile(r'^[\s\n\r。！？.,;:!?\-—\*\•]+$')
+    PUNCTUATION_ONLY_EXTENDED_PATTERN = re.compile(r'^[\s\n\r。！？.,;:!?\-—\*\•\'\"]+$')
+    SHORT_PREFIX_PATTERN = re.compile(r'^[0-9a-zA-Z]+[.：:：]$')
+    SHORT_PREFIX_WITH_NEWLINE_PATTERN = re.compile(r'^[0-9a-zA-Z]+[.：:：]\s*$')
 
-    DELIMITER_PATTERNS = {
-        'paren_open': re.compile(r'\\\('),
-        'paren_close': re.compile(r'\\\)'),
-        'bracket_open': re.compile(r'\\\['),
-        'bracket_close': re.compile(r'\\\]'),
-    }
-
+    # LaTeX delimiter pairs for formula detection
     DELIMITER_PAIRS = [
         ('$$', '$$', 2),
         (r'\(', r'\)', 2),
         (r'\[', r'\]', 2),
     ]
 
+    # Configuration constants
     SPACE_SEARCH_RANGE = 20
+
+    # Delimiter patterns for counting
+    _PAREN_OPEN_PATTERN = re.compile(r'\\\(')
+    _PAREN_CLOSE_PATTERN = re.compile(r'\\\)')
+    _BRACKET_OPEN_PATTERN = re.compile(r'\\\[')
+    _BRACKET_CLOSE_PATTERN = re.compile(r'\\\]')
 
     def __init__(
         self,
@@ -89,29 +96,25 @@ class SentenceBuffer:
         comma_split_threshold: int = 30,
     ):
         self.buffer = ""
-        self._pending_merge = ""  # 缓存待合并的短 segment
+        self._pending_merge = ""
         self.max_chars = max_chars
         self.max_wait_seconds = max_wait_seconds
         self.comma_split_threshold = comma_split_threshold
         self.last_flush_time = time.time()
         self.is_flushed = True
 
-    def _count_all_latex_delimiters(self, text: str) -> dict:
-        """Count all LaTeX formula delimiters in text.
-
-        Returns:
-            Dict with counts for each delimiter type.
-        """
+    def _count_latex_delimiters(self, text: str) -> dict:
+        """Count all LaTeX formula delimiters in text."""
         text_clean = self.ESCAPED_DOLLAR_PATTERN.sub('', text)
 
         display_dollar = text_clean.count('$$')
         remaining = text_clean.replace('$$', '')
         inline_dollar = remaining.count('$')
 
-        paren_open = len(self.DELIMITER_PATTERNS['paren_open'].findall(text))
-        paren_close = len(self.DELIMITER_PATTERNS['paren_close'].findall(text))
-        bracket_open = len(self.DELIMITER_PATTERNS['bracket_open'].findall(text))
-        bracket_close = len(self.DELIMITER_PATTERNS['bracket_close'].findall(text))
+        paren_open = len(self._PAREN_OPEN_PATTERN.findall(text))
+        paren_close = len(self._PAREN_CLOSE_PATTERN.findall(text))
+        bracket_open = len(self._BRACKET_OPEN_PATTERN.findall(text))
+        bracket_close = len(self._BRACKET_CLOSE_PATTERN.findall(text))
 
         return {
             "display_dollar": display_dollar,
@@ -122,35 +125,19 @@ class SentenceBuffer:
             "bracket_close": bracket_close,
         }
 
-    def _count_dollar_delimiters(self, text: str) -> Tuple[int, int]:
-        """Count LaTeX dollar delimiters in text.
-
-        Returns:
-            Tuple of (display_count, inline_count).
-        """
-        counts = self._count_all_latex_delimiters(text)
-        return counts["display_dollar"], counts["inline_dollar"]
-
     def _is_in_latex_formula(self, text: str, position: int) -> bool:
-        r"""Check if a position is within a LaTeX formula delimiter.
-
-        Supports: $$...$$, $...$, \(...\), \[...\]
-        """
-        counts = self._count_all_latex_delimiters(text[:position])
+        """Check if a position is within a LaTeX formula delimiter."""
+        counts = self._count_latex_delimiters(text[:position])
         return (
             counts["display_dollar"] % 2 == 1
             or counts["inline_dollar"] % 2 == 1
-            or (counts["paren_open"] > counts["paren_close"])
-            or (counts["bracket_open"] > counts["bracket_close"])
+            or counts["paren_open"] > counts["paren_close"]
+            or counts["bracket_open"] > counts["bracket_close"]
         )
 
     def _get_unclosed_delimiter_type(self, text: str) -> Optional[str]:
-        r"""Check if text has unclosed LaTeX formula delimiters.
-
-        Returns:
-            The unclosed delimiter type ("$", "$$", r"\(", r"\[") or None.
-        """
-        counts = self._count_all_latex_delimiters(text)
+        """Check if text has unclosed LaTeX formula delimiters."""
+        counts = self._count_latex_delimiters(text)
 
         if counts["display_dollar"] % 2 != 0:
             return '$$'
@@ -163,11 +150,7 @@ class SentenceBuffer:
         return None
 
     def _find_last_standalone_dollar(self, text: str) -> int:
-        """Find the last standalone $ delimiter (not part of $$).
-
-        Returns:
-            Position of the last standalone $, or -1 if not found.
-        """
+        """Find the last standalone $ delimiter (not part of $$)."""
         without_double = text.replace('$$', '')
         idx = without_double.rfind('$')
         if idx < 0:
@@ -176,33 +159,25 @@ class SentenceBuffer:
         # Map position back to original text, accounting for $$ pairs
         original_idx = 0
         remaining = idx
-        double_count = 0
         while remaining > 0:
-            next_slice = text[original_idx:original_idx + 2]
-            if next_slice == '$$':
+            if text[original_idx:original_idx + 2] == '$$':
                 original_idx += 2
                 remaining -= 2
-                double_count += 1
             else:
                 original_idx += 1
                 remaining -= 1
 
-        # Only return if not escaped and not part of $$
+        # Only return if not escaped
         if original_idx > 0 and text[original_idx - 1] != '\\':
             return original_idx
-
         return -1
 
     def _find_formula_boundary_split(self, text: str, delimiter: str) -> Tuple[int, str]:
-        """Find a safe split position when dealing with unclosed formulas.
-
-        Returns:
-            Tuple of (position, reason).
-        """
-        if delimiter == '$':
-            pos = self._find_last_standalone_dollar(text)
-        else:
-            pos = text.rfind(delimiter)
+        """Find a safe split position when dealing with unclosed formulas."""
+        pos = (
+            self._find_last_standalone_dollar(text) if delimiter == '$'
+            else text.rfind(delimiter)
+        )
 
         if pos > 0:
             return pos, "char_limit_before_formula"
@@ -211,32 +186,45 @@ class SentenceBuffer:
         return -1, "no_split"
 
     def _find_space_near_limit(self, text: str, limit: int) -> Tuple[int, str]:
-        """Find a whitespace position near a given limit.
-
-        Returns:
-            Tuple of (position, reason), or (-1, "no_split") if not found.
-        """
+        """Find a whitespace position near a given limit."""
         search_start = max(0, limit - self.SPACE_SEARCH_RANGE)
 
+        # First try to find whitespace
         for i in range(limit, search_start, -1):
             if i < len(text) and text[i] in ' \n\t':
+                if self._is_decimal_near_position(text, i):
+                    continue
                 if not self._is_in_latex_formula(text, i):
                     return i, "char_limit_space"
 
+        # Fallback: find punctuation as split point
+        for punct in '。！？：；，""")}]':
+            pos = text.rfind(punct, search_start, limit)
+            if pos >= 0:
+                split_pos = pos + 1
+                if self._is_decimal_near_position(text, pos):
+                    continue
+                if not self._is_in_latex_formula(text, split_pos - 1):
+                    return split_pos, "char_limit_punctuation"
+
         return -1, "no_split"
 
-    def _would_split_complete_formula(self, text: str, split_pos: int) -> bool:
-        """Check if splitting at a position would break a complete formula.
+    def _is_decimal_near_position(self, text: str, pos: int) -> bool:
+        """Check if position is adjacent to a decimal point."""
+        # Check if character before is a decimal point followed by digit
+        if pos > 0 and text[pos] == '.' and pos - 1 >= 0 and text[pos - 1].isdigit():
+            return True
+        # Check if character before position is a decimal point with digit before it
+        if pos > 1 and text[pos - 1] == '.' and text[pos - 2].isdigit():
+            return True
+        return False
 
-        Returns:
-            True if splitting would break a complete formula.
-        """
+    def _would_split_complete_formula(self, text: str, split_pos: int) -> bool:
+        """Check if splitting at a position would break a complete formula."""
         for opening, closing, _ in self.DELIMITER_PAIRS:
             last_opening = text.rfind(opening, 0, split_pos)
-            if last_opening >= 0:
-                next_closing = text.find(closing, split_pos)
-                if next_closing > split_pos:
-                    return True
+            if last_opening >= 0 and text.find(closing, split_pos) > split_pos:
+                return True
 
         # Handle inline $ (not $$)
         last_dollar = text.rfind('$', 0, split_pos)
@@ -248,12 +236,7 @@ class SentenceBuffer:
         return False
 
     def _find_latex_closing_delimiter(self, text: str, unclosed_type: str) -> Tuple[int, str]:
-        """Find closing delimiter for an unclosed LaTeX formula.
-
-        Returns:
-            Tuple of (position, reason), or (-1, "no_closing") if not found.
-            Position is index AFTER closing delimiter.
-        """
+        """Find closing delimiter for an unclosed LaTeX formula."""
         closing_map = {
             '$': ('$', 1),
             '$$': ('$$', 2),
@@ -281,18 +264,35 @@ class SentenceBuffer:
                 return pos + 2, "latex_closing"
             return -1, "no_closing"
 
-        opening = unclosed_type
-        if text.rfind(opening, 0, pos) >= 0:
+        if text.rfind(unclosed_type, 0, pos) >= 0:
             return pos + 2, "latex_closing"
 
         return -1, "no_closing"
 
-    def _find_safe_split_position(self, text: str) -> Tuple[int, SplitReason]:
-        """Find a safe position to split text, respecting LaTeX formula boundaries.
+    def _is_decimal_point(self, text: str, pos: int) -> bool:
+        """Check if position is a decimal point in a number.
+
+        Args:
+            text: The text to check
+            pos: Position after the potential decimal point (match.end())
 
         Returns:
-            Tuple of (split_position, split_reason).
+            True if the position follows a decimal point with digit before it
         """
+        # Check if surrounded by digits (e.g., "18.3")
+        if pos - 2 >= 0 and pos < len(text):
+            # pos is after the decimal point, so pos-2 is the digit before it
+            prev_is_digit = text[pos - 2].isdigit()
+            next_is_digit = text[pos].isdigit()
+            if prev_is_digit and next_is_digit:
+                return True
+        # Check if at end with digit before (e.g., "18.")
+        if pos == len(text) and pos - 2 >= 0 and text[pos - 2].isdigit():
+            return True
+        return False
+
+    def _find_safe_split_position(self, text: str) -> Tuple[int, SplitReason]:
+        """Find a safe position to split text, respecting LaTeX formula boundaries."""
         unclosed_delimiter = self._get_unclosed_delimiter_type(text)
         has_complete = self._has_complete_formula(text)
 
@@ -314,11 +314,17 @@ class SentenceBuffer:
             if len(text) < extended_limit:
                 return -1, "unclosed_formula"
 
+        # Try sentence end punctuation
         for match in reversed(list(self.SENTENCE_END_PATTERN.finditer(text))):
             pos = match.end()
             matched_char = match.group(1)
 
+            # Skip escaped parenthesis
             if matched_char == ')' and pos > 1 and text[pos - 2] == '\\':
+                continue
+
+            # Skip decimal points
+            if matched_char == '.' and self._is_decimal_point(text, pos):
                 continue
 
             if not self._is_in_latex_formula(text, pos - 1):
@@ -326,12 +332,14 @@ class SentenceBuffer:
                     continue
                 return pos, "sentence_end"
 
+        # Try comma splitting (lower priority)
         if not unclosed_delimiter and len(text) >= self.comma_split_threshold:
             for match in reversed(list(self.COMMA_PATTERN.finditer(text))):
                 pos = match.end()
                 if not self._is_in_latex_formula(text, pos - 1):
                     return pos, "comma"
 
+        # Character limit forced splitting
         if len(text) >= extended_limit:
             if has_complete and unclosed_delimiter is None:
                 potential_split = min(extended_limit, len(text))
@@ -351,7 +359,6 @@ class SentenceBuffer:
 
             return min(extended_limit, len(text)), "char_limit_forced"
 
-        # Debug logging: check if not splitting due to unclosed formula
         if unclosed_delimiter:
             logger.debug(
                 f"[SentenceBuffer] Not splitting due to unclosed formula: "
@@ -363,96 +370,62 @@ class SentenceBuffer:
 
     @staticmethod
     def _has_complete_formula(text: str) -> bool:
-        """Check if text contains at least one complete LaTeX formula.
-
-        A complete formula has properly matched delimiters with alphanumeric content.
-        """
+        """Check if text contains at least one complete LaTeX formula."""
         def has_letter_or_digit(content: str) -> bool:
-            return bool(re.search(r'[a-zA-Z0-9]', content))
+            return bool(SentenceBuffer.NON_LETTER_DIGIT_PATTERN.search(content))
 
         for opening, closing, skip in SentenceBuffer.DELIMITER_PAIRS:
             pos = text.find(opening)
             if pos >= 0:
                 closing_pos = text.find(closing, pos + skip)
-                if closing_pos >= 0:
-                    content = text[pos + skip:closing_pos]
-                    if has_letter_or_digit(content):
-                        return True
+                if closing_pos >= 0 and has_letter_or_digit(text[pos + skip:closing_pos]):
+                    return True
 
         if '$$' not in text:
             pos = text.find('$')
             if pos >= 0:
                 next_pos = text.find('$', pos + 1)
-                if next_pos >= 0:
-                    content = text[pos + 1:next_pos]
-                    if has_letter_or_digit(content):
-                        return True
+                if next_pos >= 0 and has_letter_or_digit(text[pos + 1:next_pos]):
+                    return True
 
         return False
 
     @staticmethod
     def _is_punctuation_only(text: str) -> bool:
         """Check if text contains only punctuation and whitespace characters."""
-        return bool(re.match(r'^[\s\n\r。！？.,;:!?\-—\*\•]+$', text))
+        return bool(SentenceBuffer.PUNCTUATION_ONLY_PATTERN.match(text))
 
     @staticmethod
     def _is_short_prefix_segment(text: str, min_length: int = 5) -> bool:
-        """Check if segment is a short prefix like '1.', '2.', 'a.'.
-
-        These segments should be merged with adjacent segments for TTS.
-        """
+        """Check if segment is a short prefix like '1.', '2.', 'a.'."""
         if len(text) >= min_length:
             return False
-        return bool(re.match(r'^[0-9a-zA-Z]+[.：:：]$', text))
+        return bool(SentenceBuffer.SHORT_PREFIX_PATTERN.match(text))
 
     @staticmethod
     def _is_meaningful_segment(text: str, min_length: int = 8) -> bool:
-        """检查 segment 是否有意义，值得独立输出。
-
-        有意义的 segment 满足以下任一条件：
-        1. 长度 >= min_length 且包含至少一个中文字符或英文字母
-        2. 包含完整的句子（有内容，不只是标点/空格）
-
-        无意义的 segment：
-        - 纯空白/换行
-        - 只包含标点符号
-        - 短前缀如 "1.", "2.", "a." 后面没有实际内容
-        - 省略号片段如 ".-" 等
-
-        Returns:
-            True 如果 segment 有意义，可以独立输出
-            False 如果 segment 太短或没有实际内容，应该继续积累
-        """
-        # 空字符串无意义
+        """Check if segment is meaningful and worth independent output."""
         if not text:
             return False
 
-        # 如果长度 >= min_length 且包含至少一个中文字符或英文字母，有意义
+        # Check if has letters/Chinese characters and meets minimum length
         if len(text) >= min_length:
             has_letter = bool(re.search(r'[a-zA-Z\u4e00-\u9fff]', text))
             return has_letter
 
-        # 检查是否是短前缀（如 "1.", "2."）后跟空白
-        if re.match(r'^[0-9a-zA-Z]+[.：:：]\s*$', text):
+        # Check if is short prefix followed by whitespace only
+        if SentenceBuffer.PUNCTUATION_ONLY_EXTENDED_PATTERN.match(text):
             return False
 
-        # 检查是否只是标点和空白（包括省略号片段）
-        if re.match(r'^[\s\n\r。！？.,;:!?\-—\*\•\'\"]+$', text):
+        # Check if is short prefix pattern like "1." followed by whitespace
+        if SentenceBuffer.SHORT_PREFIX_WITH_NEWLINE_PATTERN.match(text):
             return False
 
-        # 其他短内容视为无意义
         return False
 
     @staticmethod
     def _merge_punctuation_segments(segments: list[str]) -> list[str]:
-        """Merge punctuation-only and short prefix segments into adjacent segments.
-
-        Rules:
-        1. Punctuation-only segments merge into the previous segment
-        2. Short prefix segments (like '1.', '2.') followed by '\n' merge into the next
-        3. If first segment needs merging, merge into the next
-        4. Multiple consecutive segments are handled together
-        """
+        """Merge punctuation-only and short prefix segments into adjacent segments."""
         if not segments:
             return []
 
@@ -467,9 +440,8 @@ class SentenceBuffer:
             if is_punct[i]:
                 if result:
                     result[-1] += segments[i]
-                    i += 1
                 else:
-                    # Collect consecutive punctuation segments at start
+                    # Collect consecutive punctuation at start
                     j = i
                     while j < n and is_punct[j]:
                         j += 1
@@ -479,25 +451,7 @@ class SentenceBuffer:
                         result.extend(segments[i:j])
                     i = j
             elif is_prefix[i]:
-                if i + 1 < n:
-                    prefix = segments[i]
-                    j = i + 1
-                    # Include following newline if present
-                    if j < n and segments[j] == '\n':
-                        prefix += '\n'
-                        j += 1
-                    # Include consecutive prefix segments
-                    while j < n and is_prefix[j]:
-                        prefix += segments[j]
-                        j += 1
-                    if j < n:
-                        result.append(prefix + segments[j])
-                    else:
-                        result.append(prefix)
-                    i = j + 1
-                else:
-                    result.append(segments[i])
-                    i += 1
+                i = SentenceBuffer._handle_prefix_segment(segments, result, i, is_prefix)
             else:
                 result.append(segments[i])
                 i += 1
@@ -505,11 +459,33 @@ class SentenceBuffer:
         return result
 
     @staticmethod
-    def _has_latex_formula(text: str) -> bool:
-        r"""Detect if text contains LaTeX formulas (closed or unclosed).
+    def _handle_prefix_segment(segments: list[str], result: list[str], i: int, is_prefix: list[bool]) -> int:
+        """Handle a short prefix segment and return next index."""
+        n = len(segments)
+        if i + 1 < n:
+            prefix = segments[i]
+            j = i + 1
+            # Include following newline if present
+            if j < n and segments[j] == '\n':
+                prefix += '\n'
+                j += 1
+            # Include consecutive prefix segments
+            while j < n and is_prefix[j]:
+                prefix += segments[j]
+                j += 1
+            if j < n:
+                result.append(prefix + segments[j])
+                return j + 1
+            else:
+                result.append(prefix)
+                return j
+        else:
+            result.append(segments[i])
+            return i + 1
 
-        Supports: $...$, $$...$$, \(...\), \[...\]
-        """
+    @staticmethod
+    def _has_latex_formula(text: str) -> bool:
+        """Detect if text contains LaTeX formulas (closed or unclosed)."""
         if SentenceBuffer.CLOSED_FORMULA_PATTERN.search(text):
             return True
 
@@ -536,12 +512,15 @@ class SentenceBuffer:
         self.is_flushed = True
         return content
 
-    def add(self, token: str) -> Optional[str]:
-        """Add a token to the buffer and return a segment if ready to flush.
+    def _apply_pending_merge(self, content: str) -> str:
+        """Apply pending merge to content and reset."""
+        if self._pending_merge:
+            content = self._pending_merge + content
+            self._pending_merge = ""
+        return content
 
-        Returns:
-            Segment string if ready to flush, None otherwise.
-        """
+    def add(self, token: str) -> Optional[str]:
+        """Add a token to the buffer and return a segment if ready to flush."""
         if not self.buffer:
             self.last_flush_time = time.time()
 
@@ -556,11 +535,12 @@ class SentenceBuffer:
                 f"split_pos={split_pos}, reason={split_reason}"
             )
 
-        if split_pos > 0 and self._get_unclosed_delimiter_type(self.buffer):
+        unclosed = self._get_unclosed_delimiter_type(self.buffer)
+        if split_pos > 0 and unclosed:
             logger.debug(
                 f"[SentenceBuffer] Splitting with unclosed delimiter: "
                 f"buffer_len={len(self.buffer)}, split_pos={split_pos}, "
-                f"reason={split_reason}, unclosed={self._get_unclosed_delimiter_type(self.buffer)!r}"
+                f"reason={split_reason}, unclosed={unclosed!r}"
             )
 
         if split_pos > 0:
@@ -569,55 +549,32 @@ class SentenceBuffer:
             self.last_flush_time = time.time()
             self.is_flushed = True
 
-            # 检查 segment 是否有意义
             if not self._is_meaningful_segment(segment):
                 self._pending_merge += segment
-                return None  # 不立即返回，等待更多内容
+                return None
 
-            # 如果有待合并的短 segment，先合并
-            if self._pending_merge:
-                segment = self._pending_merge + segment
-                self._pending_merge = ""
-
-            return segment
+            return self._apply_pending_merge(segment)
 
         elapsed = time.time() - self.last_flush_time
 
-        # 如果有未闭合的公式，不应用超时逻辑，继续等待
-        unclosed_delimiter = self._get_unclosed_delimiter_type(self.buffer)
-        if self.buffer and elapsed > self.max_wait_seconds and not unclosed_delimiter:
-            # 超时也需要合并待缓存的内容
-            content = self._flush_buffer()
-            if self._pending_merge:
-                content = self._pending_merge + content
-                self._pending_merge = ""
+        if self.buffer and elapsed > self.max_wait_seconds and not unclosed:
+            content = self._apply_pending_merge(self._flush_buffer())
             return content
 
-        # 添加调试日志：超时但未闭合公式的情况
-        if self.buffer and elapsed > self.max_wait_seconds and unclosed_delimiter:
+        if self.buffer and elapsed > self.max_wait_seconds and unclosed:
             logger.debug(
                 f"[SentenceBuffer] Timeout bypassed: elapsed={elapsed:.2f}s, "
-                f"unclosed_delimiter={unclosed_delimiter!r}, buffer_len={len(self.buffer)}"
+                f"unclosed_delimiter={unclosed!r}, buffer_len={len(self.buffer)}"
             )
 
         return None
 
     async def flush(self, is_final: bool = False) -> Optional[SentenceSegment]:
-        """Flush remaining buffer content.
-
-        Returns:
-            SentenceSegment if buffer has content, None otherwise.
-        """
+        """Flush remaining buffer content."""
         if not self.buffer and not self._pending_merge:
             return None
 
-        content = self._flush_buffer()
-
-        # 合并 pending_merge 和 buffer（即使 pending_merge 只有 '\n' 或 '1.' 也要返回）
-        if self._pending_merge:
-            content = self._pending_merge + content
-            self._pending_merge = ""
-
+        content = self._apply_pending_merge(self._flush_buffer())
         has_formula = self._has_latex_formula(content)
 
         return SentenceSegment(
@@ -636,8 +593,5 @@ class SentenceBuffer:
 
 
 def has_latex_formula(text: str) -> bool:
-    """Detect if text contains LaTeX formulas (closed or unclosed).
-
-    Convenience function for external use.
-    """
+    """Detect if text contains LaTeX formulas (closed or unclosed)."""
     return SentenceBuffer._has_latex_formula(text)

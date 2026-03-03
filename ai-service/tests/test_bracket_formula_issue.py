@@ -16,9 +16,7 @@ from app.utils.sentence_buffer import SentenceBuffer
 
 # 测试输入文件路径
 TEST_INPUT_DIR = Path(__file__).parent / "test_input"
-TEST_INPUT_FILES = [
-    "test_bracket_formula_issue_input3.txt",
-]
+TEST_INPUT_FILES = sorted([f.name for f in TEST_INPUT_DIR.glob("*.txt")])
 
 
 def load_test_input(filename: str) -> str:

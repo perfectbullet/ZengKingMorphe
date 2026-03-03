@@ -306,11 +306,11 @@ def build_greeting_messages(
 3. 保持{tone_desc}的语气风格
 4. 不要提及"我是AI"或"我是机器人"
 5. 不要提供任何具体信息（除非用户主动询问）
+6. 如果用户用英文你也用英文
 
 用户原话：
 {state['user_query']}
-
-请生成自然、友好的问候回应。"""
+"""
 
     messages = [SystemMessage(content=system_prompt)]
     messages.extend(_build_conversation_history(state, max_turns=3))
@@ -437,15 +437,66 @@ def build_generation_messages(state: ConversationState) -> List:
 
     # Add scenario-specific instructions
     if state.get("web_search_used", False) and state.get("is_realtime_query", False):
-        requirements = f"""**重要提示**：用户询问的是实时信息（如{state.get('realtime_category', '最新动态')}），系统已通过网络搜索获取了最新数据。
+        realtime_category = state.get("realtime_category", "")
+        if realtime_category == "weather":
+            requirements = f"""**重要提示**：用户询问的是天气信息，系统已通过网络搜索获取了最新数据。
+
+回答要求：
+1. **必须基于下方提供的网络资料回答**
+2. 字数严格限制在 60 字以内
+3. 格式：一句话，不用列表、减号、复杂格式
+4. 直接提取天气数据（温度、风力等）
+5. 保持{tone_desc}的语气风格
+6. **禁止：信息来源、网站链接、"信息来源"字样**
+7. 简单直接地提供天气信息。
+上下文信息{source_indicator}：
+{context_text}
+
+用户问题：
+{state['user_query']}
+"""
+        elif realtime_category == "news":
+            requirements = f"""**重要提示**：用户询问的是新闻信息，系统已通过网络搜索获取了最新数据。
+
+回答要求：
+1. **必须基于下方提供的网络资料回答**
+2. 字数严格限制在 100 字以内
+3. 格式：直接说要点，不用列表、减号、复杂格式
+4. 保持{tone_desc}的语气风格
+5. **禁止：信息来源、网站链接、"信息来源"字样**
+6. 简单直接地提供新闻要点。
+上下文信息{source_indicator}：
+{context_text}
+
+用户问题：
+{state['user_query']}
+"""
+        elif realtime_category == "market":
+            requirements = f"""**重要提示**：用户询问的是价格/市场信息，系统已通过网络搜索获取了最新数据。
+
+回答要求：
+1. **必须基于下方提供的网络资料回答**
+2. 字数严格限制在 50 字以内
+3. 格式：直接报数字，不用列表、减号、复杂格式
+4. 保持{tone_desc}的语气风格
+5. **禁止：信息来源、网站链接、"信息来源"字样**
+6. 简单直接地提供价格信息。
+上下文信息{source_indicator}：
+{context_text}
+
+用户问题：
+{state['user_query']}
+
+"""
+        else:
+            requirements = f"""**重要提示**：用户询问的是实时信息，系统已通过网络搜索获取了最新数据。
 
 回答要求：
 1. **必须基于下方提供的网络资料回答**
 2. 直接提取网络资料中的关键信息
 3. 保持{tone_desc}的语气风格
-4. 回答简洁明了，重点突出具体数据
-5. 可在回答末尾简要注明信息来源
-6. **不要说"无法提供实时数据"**
+4. 回答简洁明了，重点突出数据
+5. **禁止：信息来源、网站链接、"信息来源"字样**
 
 上下文信息{source_indicator}：
 {context_text}
@@ -461,6 +512,7 @@ def build_generation_messages(state: ConversationState) -> List:
 3. 保持{tone_desc}的语气风格
 4. 回答简洁明了，重点突出
 5. 如有多个信息源，优先使用最相关的内容
+6. **禁止：信息来源、网站链接、"信息来源"字样**
 
 上下文信息{source_indicator}：
 {context_text}
@@ -468,7 +520,7 @@ def build_generation_messages(state: ConversationState) -> List:
 用户问题：
 {state['user_query']}
 
-请提供专业、准确的回答。"""
+"""
 
     system_prompt = base_prompt + "\n" + requirements
 
