@@ -39,6 +39,7 @@ ENV/
 
 # Logs
 *.log
+*log
 logs/
 
 # Databases
