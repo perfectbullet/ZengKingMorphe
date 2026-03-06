@@ -1,16 +1,17 @@
 """
 WebSocket API endpoints for real-time stream chunks updates (Frontend View Version).
 
-This version is specifically designed for frontend clients (Vue, etc.) with improved
-exception handling to prevent "Task exception was never retrieved" warnings when
-clients disconnect unexpectedly (e.g., page refresh, network issues).
+This version is designed for frontend clients with improved exception handling
+to prevent "Task exception was never retrieved" warnings when clients
+disconnect unexpectedly (e.g., page refresh, network issues).
 """
 
 from typing import Optional, Set
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
-from uvicorn.protocols.utils import ClientDisconnected
 import asyncio
+
 from datetime import datetime
+from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
+from uvicorn.protocols.utils import ClientDisconnected
 
 from app.core.database import get_database
 from app.core.logging import get_logger
@@ -34,8 +35,6 @@ async def websocket_stream_chunks(
     """
     WebSocket endpoint for real-time stream chunks updates (new chunks only, no history).
 
-    This version is optimized for frontend clients with improved disconnect handling.
-
     Connection parameters:
     - user_id: User ID (required)
     - employee_id: Digital employee ID (required)
@@ -54,36 +53,21 @@ async def websocket_stream_chunks(
     Note: Use REST API /api/chat/stream/chunks to query historical chunks.
     """
     await websocket.accept()
-    logger.info(
-        "WebSocket View connected",
-        user_id=user_id,
-        employee_id=employee_id,
-        session_id=session_id
-    )
+    logger.info(f"WebSocket View connected: user_id={user_id}, employee_id={employee_id}, session_id={session_id}")
 
-    db = None
     last_timestamp: Optional[datetime] = None
     sent_chunk_ids: Set[str] = set()
 
     try:
         db = await get_database()
-
-        # Build query filter
         query_filter = {
             "user_id": user_id,
             "employee_id": employee_id,
             "session_id": session_id,
         }
 
-        # Start monitoring from current time (no history sent)
-        logger.info(
-            "WebSocket View connected, starting real-time monitoring from now",
-            user_id=user_id,
-            employee_id=employee_id,
-            session_id=session_id
-        )
+        logger.info(f"WebSocket View starting real-time monitoring: user_id={user_id}, employee_id={employee_id}, session_id={session_id}")
 
-        # Use TaskGroup for better task coordination (Python 3.11+)
         async with asyncio.TaskGroup() as tg:
             tg.create_task(send_heartbeat(websocket))
             tg.create_task(
@@ -91,31 +75,15 @@ async def websocket_stream_chunks(
             )
 
     except WebSocketDisconnect:
-        # Note: except* is for ExceptionGroup in Python 3.11+
-        logger.info(
-            "WebSocket View disconnected normally",
-            user_id=user_id,
-            session_id=session_id
-        )
+        logger.info(f"WebSocket View disconnected normally: user_id={user_id}, session_id={session_id}")
     except Exception as e:
-        logger.error(
-            "WebSocket View error",
-            error=str(e),
-            user_id=user_id,
-            session_id=session_id,
-            exc_info=True
-        )
+        logger.error(f"WebSocket View error: user_id={user_id}, session_id={session_id}, error={str(e)}", exc_info=True)
         try:
             await websocket.close(code=1011, reason=str(e))
         except Exception:
             pass
     finally:
-        logger.debug(
-            "WebSocket View connection cleanup",
-            user_id=user_id,
-            session_id=session_id,
-            sent_chunks_count=len(sent_chunk_ids)
-        )
+        logger.info(f"WebSocket View connection cleanup: user_id={user_id}, session_id={session_id}, sent_chunks_count={len(sent_chunk_ids)}")
 
 
 async def send_chunk(websocket: WebSocket, chunk: dict) -> None:
@@ -126,10 +94,7 @@ async def send_chunk(websocket: WebSocket, chunk: dict) -> None:
         websocket: WebSocket connection
         chunk: Chunk document from MongoDB
     """
-    # Create a copy to avoid modifying the original
     chunk_copy = chunk.copy()
-
-    # Remove MongoDB _id field
     chunk_copy.pop("_id", None)
 
     # Convert datetime fields to ISO format strings
@@ -137,7 +102,7 @@ async def send_chunk(websocket: WebSocket, chunk: dict) -> None:
         chunk_copy["timestamp"] = chunk_copy["timestamp"].isoformat() + "Z"
     if "created_at" in chunk_copy and isinstance(chunk_copy["created_at"], datetime):
         chunk_copy["created_at"] = chunk_copy["created_at"].isoformat() + "Z"
-    # logger.info(f'chunk_copy is {chunk_copy}')
+
     await websocket.send_json(chunk_copy)
 
 
@@ -145,8 +110,8 @@ async def send_heartbeat(websocket: WebSocket) -> None:
     """
     Send periodic heartbeat messages to keep the connection alive.
 
-    This version has improved exception handling - it does not re-raise exceptions
-    to prevent "Task exception was never retrieved" warnings.
+    This version has improved exception handling to prevent "Task exception
+    was never retrieved" warnings when clients disconnect unexpectedly.
 
     Args:
         websocket: WebSocket connection
@@ -158,24 +123,16 @@ async def send_heartbeat(websocket: WebSocket) -> None:
                 "type": "heartbeat",
                 "timestamp": datetime.utcnow().isoformat() + "Z"
             })
-            logger.debug("Heartbeat sent")
+            logger.info("Heartbeat sent")
     except (WebSocketDisconnect, asyncio.CancelledError, ClientDisconnected) as e:
-        # Handle different disconnect scenarios with appropriate logging
         if isinstance(e, asyncio.CancelledError):
-            logger.debug("Heartbeat task cancelled (normal shutdown)")
+            logger.info("Heartbeat task cancelled (normal shutdown)")
         elif isinstance(e, ClientDisconnected):
-            logger.debug("Heartbeat task: client disconnected (expected)")
+            logger.info("Heartbeat task: client disconnected (expected)")
         else:
-            logger.debug("Heartbeat task: WebSocket disconnected")
-        # Do NOT re-raise - let the task end gracefully
+            logger.info("Heartbeat task: WebSocket disconnected")
     except Exception as e:
-        # Catch any other unexpected exceptions
-        logger.warning(
-            "Heartbeat task unexpected error",
-            error=str(e),
-            exc_info=True
-        )
-        # Do NOT re-raise
+        logger.warning(f"Heartbeat task unexpected error: error={str(e)}", exc_info=True)
 
 
 async def poll_new_chunks(
@@ -188,8 +145,8 @@ async def poll_new_chunks(
     """
     Poll for new chunks and send them to the client.
 
-    This version has improved exception handling - it does not re-raise exceptions
-    to prevent "Task exception was never retrieved" warnings.
+    This version has improved exception handling to prevent "Task exception
+    was never retrieved" warnings when clients disconnect unexpectedly.
 
     Args:
         websocket: WebSocket connection
@@ -198,7 +155,6 @@ async def poll_new_chunks(
         last_timestamp: Timestamp of the last sent chunk
         sent_chunk_ids: Set of chunk_ids that have already been sent
     """
-    # Use a mutable container to track state across iterations
     state = {
         "last_timestamp": last_timestamp,
         "sent_chunk_ids": sent_chunk_ids
@@ -208,27 +164,22 @@ async def poll_new_chunks(
         while True:
             await asyncio.sleep(POLL_INTERVAL)
 
-            # Build query for new data
             new_query = query_filter.copy()
-
             current_last = state["last_timestamp"]
             current_sent = state["sent_chunk_ids"]
 
             if current_last:
-                # Query for chunks created at or after last_timestamp, excluding already sent ones
                 new_query["created_at"] = {"$gte": current_last}
                 if current_sent:
                     new_query["chunk_id"] = {"$nin": list(current_sent)}
             else:
-                # First poll: set current time as starting point (no history sent)
                 state["last_timestamp"] = datetime.utcnow()
                 logger.info("WebSocket View: First poll, starting real-time monitoring from now")
                 continue
 
-            # Query new chunks (ascending by created_at)
             cursor = db.stream_chunks.find(new_query).sort("created_at", 1)
             new_chunks = await cursor.to_list(length=MAX_CHUNKS_PER_POLL)
-            # Send each new chunk
+
             for chunk in new_chunks:
                 chunk_id = chunk.get("chunk_id")
                 if chunk_id and chunk_id not in current_sent:
@@ -237,19 +188,11 @@ async def poll_new_chunks(
                     state["last_timestamp"] = chunk.get("created_at")
 
     except (WebSocketDisconnect, asyncio.CancelledError, ClientDisconnected) as e:
-        # Handle different disconnect scenarios with appropriate logging
         if isinstance(e, asyncio.CancelledError):
-            logger.debug("Poll task cancelled (normal shutdown)")
+            logger.info("Poll task cancelled (normal shutdown)")
         elif isinstance(e, ClientDisconnected):
             logger.info("Poll task: client disconnected (expected)")
         else:
-            logger.debug("Poll task: WebSocket disconnected")
-        # Do NOT re-raise - let the task end gracefully
+            logger.info("Poll task: WebSocket disconnected")
     except Exception as e:
-        # Catch any other unexpected exceptions
-        logger.error(
-            "Poll task unexpected error",
-            error=str(e),
-            exc_info=True
-        )
-        # Do NOT re-raise
+        logger.error(f"Poll task unexpected error: error={str(e)}", exc_info=True)
