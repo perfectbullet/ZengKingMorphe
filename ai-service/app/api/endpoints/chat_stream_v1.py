@@ -10,8 +10,8 @@ import random
 import re
 import time
 from datetime import datetime
-from pathlib import Path
-from typing import AsyncGenerator, Optional, Any, Callable
+
+from typing import AsyncGenerator, Optional, Any
 
 from langchain_community.chat_models import ChatOllama
 from langchain_openai import ChatOpenAI
