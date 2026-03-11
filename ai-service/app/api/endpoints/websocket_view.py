@@ -20,7 +20,7 @@ logger = get_logger(__name__)
 router = APIRouter()
 
 # Configuration constants
-POLL_INTERVAL = 0.5  # Polling interval in seconds
+POLL_INTERVAL = 0.1  # Polling interval in seconds
 HEARTBEAT_INTERVAL = 30  # Heartbeat interval in seconds
 MAX_CHUNKS_PER_POLL = 100  # Maximum chunks to fetch per poll
 

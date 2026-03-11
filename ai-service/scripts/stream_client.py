@@ -243,14 +243,14 @@ def main():
         """
     )
     parser.add_argument("--host", default="http://192.168.8.233:8100", help="Base host (including port), 默认: http://192.168.8.233:8100")
-    parser.add_argument("--employee_id", default="33", help="Employee ID, 默认: 33")
+    parser.add_argument("--employee_id", default="29", help="Employee ID, 默认: 33")
     parser.add_argument("--user_id", default="3", help="User ID, 默认: 3")
-    parser.add_argument("--session_id", default="sess_4_3_33", help="Session ID, 默认: sess_4_3_33")
+    parser.add_argument("--session_id", default="sess_4_3_29", help="Session ID, 默认: sess_4_3_29")
     parser.add_argument("--model", default="qwen2.5:7b", help="Model name, 默认: qwen2.5:7b")
 
     # 新增参数
     parser.add_argument("--channel_name", default=None, help="Channel name (格式: employee_<team_id>_<user_id>_<employee_id>)")
-    parser.add_argument("--team_id", default=None, help="Team ID")
+    parser.add_argument("--team_id", default="4", help="Team ID")
     parser.add_argument("--extra-body", default=None, help="Extra body parameters as JSON string, e.g., '{\"team_id\": \"4\"}'")
 
     parser.add_argument("--query", required=True, help="User query text（必填）")
