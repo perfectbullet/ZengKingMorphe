@@ -111,7 +111,7 @@ async def get_revise_llm() -> ChatOllama:
     ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
     ollama_model = os.getenv(
         "OLLAMA_REVISE_MODEL",
-        os.getenv("OLLAMA_MODEL", "qwen2.5:32b")
+        os.getenv("OLLAMA_MODEL", "qwen2.5:14b")
     )
 
     logger.info(f"[Revise LLM] Ollama | BASE_URL={ollama_base_url} | MODEL={ollama_model}")
