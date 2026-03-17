@@ -18,7 +18,6 @@ graph TD;
 	compress_context(compress_context)
 	web_search(web_search)
 	generate_answer(generate_answer)
-	verify_answer(verify_answer)
 	save_conversation(save_conversation)
 	__end__([<p>__end__</p>]):::last
 	__start__ --> load_employee_config;
@@ -28,9 +27,9 @@ graph TD;
 	compress_context -.-> generate_answer;
 	compress_context -.-> web_search;
 	evaluate_complexity --> rewrite_query;
-	generate_answer --> verify_answer;
+	generate_answer --> save_conversation;
 	grade_documents -.-> compress_context;
-	grade_documents -.-> verify_answer;
+	grade_documents -.-> save_conversation;
 	input_validation --> classify_query_type;
 	intent_recognition --> knowledge_retrieval;
 	knowledge_retrieval --> grade_documents;
@@ -39,7 +38,6 @@ graph TD;
 	match_faq -.-> generate_answer;
 	match_faq -.-> intent_recognition;
 	rewrite_query --> match_faq;
-	verify_answer --> save_conversation;
 	web_search --> generate_answer;
 	save_conversation --> __end__;
 	classDef default fill:#f2f0ff,line-height:1.2

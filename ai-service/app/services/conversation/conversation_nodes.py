@@ -401,12 +401,10 @@ class ConversationNodes:
 重写后的查询:"""
 
                 # Get appropriate LLM for current state (hybrid routing)
-                llm, _, model_name = select_llm(
+                llm, model_name = select_llm(
                     state,
                     self.workflow.local_llm,
-                    self.workflow.local_grader_llm,
-                    self.workflow.remote_llm,
-                    self.workflow.remote_grader_llm
+                    self.workflow.remote_llm
                 )
                 response = await llm.ainvoke(rewrite_prompt)
                 rewritten = response.content.strip()
@@ -844,12 +842,10 @@ class ConversationNodes:
 压缩后的内容:"""
 
                 # Get appropriate LLM for current state (hybrid routing)
-                llm, _, model_name = select_llm(
+                llm, model_name = select_llm(
                     state,
                     self.workflow.local_llm,
-                    self.workflow.local_grader_llm,
-                    self.workflow.remote_llm,
-                    self.workflow.remote_grader_llm
+                    self.workflow.remote_llm
                 )
                 response = await llm.ainvoke(compress_prompt)
                 compressed = response.content.strip()
@@ -1055,110 +1051,6 @@ class ConversationNodes:
     # -------------------------------------------------------------------------
     # Workflow Nodes - Answer Verification
     # -------------------------------------------------------------------------
-    async def verify_answer(self, state: ConversationState) -> ConversationState:
-        """
-        Answer Verification - Check consistency with source documents.
-
-        Uses Grader LLM to verify:
-        1. Key information is from source documents
-        2. No hallucination or fabricated content
-        3. No contradictions with source material
-
-        Configuration: ANSWER_VERIFICATION_ENABLED (default: False)
-
-        Args:
-            state: Current conversation state
-
-        Returns:
-            Updated state with verification_result populated
-        """
-        async with time_node("verify_answer", state):
-            state["answer_verified"] = False
-            state["verification_result"] = None
-
-            verification_enabled = getattr(settings, 'answer_verification_enabled', False)
-            if not verification_enabled:
-                logger.debug("Answer verification disabled")
-                return state
-
-            # Skip for FAQ, greeting, and interruption (already validated)
-            if state.get("faq_matched") or state.get("intent") == "greeting":
-                logger.debug(f"Skipping verification for FAQ/greeting/interruption: intent={state.get('intent')}")
-                return state
-
-            answer = state.get("final_answer", "")
-            docs = state.get("retrieved_docs", [])
-
-            if not answer or len(answer) < 20 or not docs:
-                logger.debug("Insufficient data for verification")
-                return state
-
-            try:
-                docs_text = "\n\n".join([
-                    f"[源文档{i+1}] {doc.get('content', '')[:400]}"
-                    for i, doc in enumerate(docs[:3])
-                ])
-
-                verify_prompt = f"""请检查以下生成的答案是否与源文档一致。
-
-用户问题: {state["user_query"]}
-
-源文档:
-{docs_text}
-
-生成的答案:
-{answer}
-
-验证要求:
-1. 检查答案中的关键信息是否在源文档中
-2. 检查是否有幻觉或编造的内容
-3. 检查是否有与源文档矛盾的陈述
-
-请以JSON格式返回验证结果:
-{{
-    "is_consistent": true/false,
-    "confidence": 0.0-1.0,
-    "issues": ["不一致点1", "不一致点2"],
-    "summary": "验证总结"
-}}
-
-只返回JSON,不要有其他内容:"""
-
-                # Get appropriate Grader LLM for current state (hybrid routing)
-                _, grader_llm, model_name = select_llm(
-                    state,
-                    self.workflow.local_llm,
-                    self.workflow.local_grader_llm,
-                    self.workflow.remote_llm,
-                    self.workflow.remote_grader_llm
-                )
-                response = await grader_llm.ainvoke(verify_prompt)
-                response_text = response.content.strip()
-
-                try:
-                    result = json.loads(response_text)
-                    state["answer_verified"] = True
-                    state["verification_result"] = result
-
-                    if not result.get("is_consistent", True):
-                        logger.warning(
-                            "Answer inconsistency detected",
-                            confidence=result.get("confidence", 0.8),
-                            issues=result.get("issues", [])[:3]
-                        )
-                    else:
-                        logger.info(
-                            "Answer verification passed",
-                            confidence=result.get("confidence", 0.8)
-                        )
-
-                except json.JSONDecodeError as e:
-                    logger.warning(f"Failed to parse verification JSON: {e}")
-
-            except Exception as e:
-                logger.error(f"Answer verification failed: {str(e)}", exc_info=True)
-
-        return state
 
     # -------------------------------------------------------------------------
     # Workflow Nodes - Save Conversation

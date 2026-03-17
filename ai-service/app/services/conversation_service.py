@@ -16,7 +16,7 @@ Workflow Graph (16 nodes):
         → [conditional: FAQ matched?] → generate_answer OR intent_recognition
         → knowledge_retrieval → rerank_documents → compress_context
         → [conditional: low relevance?] → web_search OR generate_answer
-        → generate_answer → verify_answer → save_conversation → END
+        → generate_answer → save_conversation → END
 """
 import os
 from pathlib import Path
@@ -66,25 +66,10 @@ class ConversationWorkflow:
             streaming=True,
             keep_alive=-1
         )
-        self.local_grader_llm = ChatOllama(
-            base_url=settings.ollama_base_url,
-            model=settings.ollama_grader_model,
-            temperature=0,
-            format="json",
-            keep_alive=-1
-        )
-
         # 打印 local_llm 配置
         logger.info(
             f"Local LLM configured | base_url={self.local_llm.base_url} | model={self.local_llm.model} | "
             f"temperature={self.local_llm.temperature} | keep_alive={self.local_llm.keep_alive}"
-        )
-
-        # 打印 local_grader_llm 配置
-        logger.info(
-            f"Local Grader LLM configured | base_url={self.local_grader_llm.base_url} | model={self.local_grader_llm.model} | "
-            f"temperature={self.local_grader_llm.temperature} | format={getattr(self.local_grader_llm, 'format', None)} | "
-            f"keep_alive={self.local_grader_llm.keep_alive}"
         )
 
         # Initialize remote LLM (OpenAI-style API) - for complex, accurate responses
@@ -100,27 +85,17 @@ class ConversationWorkflow:
             temperature=settings.openai_temperature,
             streaming=True,
         )
-        self.remote_grader_llm = ChatOpenAI(
-            base_url=settings.openai_api_base,
-            api_key=settings.siliconflow_api_key,
-            model=settings.openai_grader_model,
-            temperature=0,
-            model_kwargs={"response_format": {"type": "json_object"}},
-        )
 
         # Set default LLM based on routing mode
         routing_mode = getattr(settings, 'llm_routing_mode', 'local_only')
         if routing_mode == 'local_only':
             self.llm = self.local_llm
-            self.grader_llm = self.local_grader_llm
             logger.info("LLM routing mode: local_only - using Ollama only")
         elif routing_mode == 'remote_only':
             self.llm = self.remote_llm
-            self.grader_llm = self.remote_grader_llm
             logger.info("LLM routing mode: remote_only - using remote API only")
         else:  # hybrid mode - will select dynamically per request
             self.llm = self.local_llm  # default to local
-            self.grader_llm = self.local_grader_llm
             logger.info("LLM routing mode: hybrid - will select dynamically")
 
         # Initialize nodes container
@@ -143,15 +118,13 @@ class ConversationWorkflow:
             state: Current conversation state
 
         Returns:
-            Tuple of (llm, grader_llm, model_name)
+            Tuple of (llm, model_name)
         """
         from app.services.conversation.conversation_helpers import select_llm
         return select_llm(
             state,
             self.local_llm,
-            self.local_grader_llm,
-            self.remote_llm,
-            self.remote_grader_llm
+            self.remote_llm
         )
 
     def get_streaming_llm(self, state: ConversationState):
@@ -174,7 +147,7 @@ class ConversationWorkflow:
         Returns:
             Tuple of (llm, model_name) for streaming
         """
-        llm, _, model_name = self.get_active_llm(state)
+        llm, model_name = self.get_active_llm(state)
 
         # Check if custom LLM parameters are provided in the state
         temperature = state.get("llm_temperature")
@@ -190,7 +163,7 @@ class ConversationWorkflow:
             # Determine which LLM type to use based on the current llm instance
             if isinstance(llm, ChatOllama):
                 # Create new Ollama LLM with custom parameters
-                base_url = getattr(llm, 'base_url', None)
+                base_url = getattr(llm, 'base_url', 'http://localhost:11434')
                 model_name = getattr(llm, 'model_name', None) or getattr(llm, 'model', '')
                 llm = ChatOllama(
                     base_url=base_url,
@@ -198,7 +171,6 @@ class ConversationWorkflow:
                     temperature=temperature if temperature is not None else getattr(llm, 'temperature', 0.7),
                     top_p=top_p if top_p is not None else getattr(llm, 'top_p', None),
                     num_predict=max_tokens if max_tokens is not None else getattr(llm, 'num_predict', None),
-                    streaming=True,
                 )
                 logger.info(
                     "Created custom Ollama LLM for streaming",
@@ -209,8 +181,8 @@ class ConversationWorkflow:
             elif isinstance(llm, ChatOpenAI):
                 # Create new OpenAI LLM with custom parameters
                 # ChatOpenAI uses openai_api_base for base URL in some versions
-                base_url = getattr(llm, 'openai_api_base', None) or getattr(llm, 'base_url', None)
-                api_key = getattr(llm, 'openai_api_key', None) or getattr(llm, 'api_key', None)
+                base_url = getattr(llm, 'openai_api_base', 'https://api.openai.com/v1') or getattr(llm, 'base_url', 'https://api.openai.com/v1')
+                api_key = getattr(llm, 'openai_api_key', '') or getattr(llm, 'api_key', '')
                 model_name = getattr(llm, 'model_name', None) or getattr(llm, 'model', '')
                 llm = ChatOpenAI(
                     base_url=base_url,
@@ -218,7 +190,6 @@ class ConversationWorkflow:
                     model=model_name,
                     temperature=temperature if temperature is not None else getattr(llm, 'temperature', 0.7),
                     max_tokens=max_tokens if max_tokens is not None else getattr(llm, 'max_tokens', None),
-                    streaming=True,
                 )
                 logger.info(
                     "Created custom OpenAI LLM for streaming",
@@ -287,7 +258,6 @@ class ConversationWorkflow:
         graph.add_node("compress_context", self.nodes.compress_context)
         graph.add_node("web_search", self.nodes.web_search)
         graph.add_node("generate_answer", self.nodes.generate_answer)
-        graph.add_node("verify_answer", self.nodes.verify_answer)
         graph.add_node("save_conversation", self.nodes.save_conversation)
 
         # Set entry point
@@ -332,9 +302,9 @@ class ConversationWorkflow:
         # Conditional routing after grade_documents: QA 直接匹配时跳过 compress_context
         graph.add_conditional_edges(
             "grade_documents",
-            lambda state: "verify_answer" if state.get("final_answer") else "compress_context",
+            lambda state: "save_conversation" if state.get("final_answer") else "compress_context",
             {
-                "verify_answer": "verify_answer",
+                "save_conversation": "save_conversation",
                 "compress_context": "compress_context"
             }
         )
@@ -351,8 +321,7 @@ class ConversationWorkflow:
 
         # Final sequence
         graph.add_edge("web_search", "generate_answer")
-        graph.add_edge("generate_answer", "verify_answer")
-        graph.add_edge("verify_answer", "save_conversation")
+        graph.add_edge("generate_answer", "save_conversation")
         graph.add_edge("save_conversation", END)
 
         # Compile and export graph for debugging

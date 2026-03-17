@@ -59,10 +59,8 @@ async def time_node(node_name: str, state: ConversationState, llm_instance=None)
 def select_llm(
     state: ConversationState,
     local_llm,
-    local_grader_llm,
-    remote_llm,
-    remote_grader_llm
-) -> Tuple[Any, Any, str]:
+    remote_llm
+) -> Tuple[Any, str]:
     """
     Select appropriate LLM based on query context (hybrid mode only).
 
@@ -76,20 +74,18 @@ def select_llm(
     Args:
         state: Current conversation state
         local_llm: Local Ollama LLM instance
-        local_grader_llm: Local grader LLM instance
         remote_llm: Remote OpenAI-style LLM instance
-        remote_grader_llm: Remote grader LLM instance
 
     Returns:
-        Tuple of (llm, grader_llm, model_name)
+        Tuple of (llm, model_name)
     """
     routing_mode = getattr(settings, 'llm_routing_mode', 'local_only')
 
     # Non-hybrid modes: return pre-configured LLM
     if routing_mode == 'local_only':
-        return local_llm, local_grader_llm, settings.ollama_model
+        return local_llm, settings.ollama_model
     elif routing_mode == 'remote_only':
-        return remote_llm, remote_grader_llm, settings.openai_model
+        return remote_llm, settings.openai_model
 
     # Hybrid mode: dynamic selection based on complexity score
     complexity_score = state.get("complexity_score", 3.0)
@@ -128,8 +124,8 @@ def select_llm(
     )
 
     if use_remote:
-        return remote_llm, remote_grader_llm, settings.openai_model
-    return local_llm, local_grader_llm, settings.ollama_model
+        return remote_llm, settings.openai_model
+    return local_llm, settings.ollama_model
 
 
 # =============================================================================

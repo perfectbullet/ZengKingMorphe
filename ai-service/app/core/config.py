@@ -376,10 +376,6 @@ class Settings(BaseSettings):
         default=False,
         description="Enable context compression to reduce token usage"
     )
-    answer_verification_enabled: bool = Field(
-        default=False,
-        description="Enable answer consistency checking with source documents"
-    )
 
     # JWT Configuration
     jwt_secret_key: str = Field(..., description="JWT secret key for token signing")
