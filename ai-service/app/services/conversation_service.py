@@ -59,11 +59,6 @@ class ConversationWorkflow:
     def __init__(self):
         """Initialize workflow with dual LLM instances for hybrid routing."""
         # Initialize local LLM (Ollama) - for fast, simple responses
-        logger.info(
-            "Initializing local Ollama LLM",
-            model=settings.ollama_model,
-            base_url=settings.ollama_base_url
-        )
         self.local_llm = ChatOllama(
             base_url=settings.ollama_base_url,
             model=settings.ollama_model,
