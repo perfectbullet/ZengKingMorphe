@@ -2,7 +2,7 @@
 使用 LlamaIndex + vLLM Embedding API 测试真实文本
 
 使用 LlamaIndex 官方 OpenAIEmbedding 类连接 BGE-M3 vLLM API
-参考: ~/bge-reranker-v2-m3-deployment/client/test_embedding.py
+参考: bge-athenaeum/client/test_embedding.py
 vLLM 服务地址: http://192.168.8.233:8092
 """
 # 标准库导入

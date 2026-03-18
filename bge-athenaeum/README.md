@@ -1,13 +1,14 @@
 # BGE 模型服务部署
 
-本项目提供 **BGE-Reranker-V2-M3**（文档重排序）和 **BGE-M3**（文本嵌入）两个模型的 vLLM 部署服务，支持 OpenAI 兼容 API。
+本项目提供 **BGE-Reranker-V2-M3**（文档重排序）、**BGE-M3**（多语言文本嵌入）和 **BGE-Large**（中文文本嵌入）三个模型的 vLLM 部署服务，支持 OpenAI 兼容 API。
 
 ## 服务概览
 
 | 服务 | 模型 | 端口 | 用途 |
 |------|------|------|------|
 | bge-reranker | BAAI/bge-reranker-v2-m3 | 8091 | 文档重排序（Rerank API） |
-| bge-m3 | BAAI/bge-m3 | 8092 | 文本嵌入生成（Embedding API） |
+| bge-m3 | BAAI/bge-m3 | 8092 | 多语言文本嵌入生成（Embedding API） |
+| bge-large | BAAI/bge-large-zh-v1.5 | 8093 | 中文文本嵌入生成（Embedding API） |
 
 ## 快速启动
 
@@ -26,7 +27,8 @@ docker run --rm --gpus all nvidia/cuda:11.8.0-base-ubuntu22.04 nvidia-smi
 ```bash
 # 使用脚本下载模型 (推荐)
 ./download_models.sh bge-reranker-v2-m3    # 下载 reranker 模型
-./download_models.sh bge-m3                # 下载 embedding 模型
+./download_models.sh bge-m3                # 下载 m3 embedding 模型
+./download_models.sh bge-large             # 下载 large embedding 模型
 ./download_models.sh all                   # 下载所有模型
 
 # 或指定数据源
@@ -42,6 +44,7 @@ docker-compose up -d
 # 只启动指定服务
 docker-compose up -d bge-reranker
 docker-compose up -d bge-m3
+docker-compose up -d bge-large
 
 # 查看日志
 docker-compose logs -f
@@ -57,9 +60,13 @@ docker-compose ps
 curl http://192.168.8.233:8091/health
 curl http://192.168.8.233:8091/v1/models
 
-# Embedding 服务
+# BGE-M3 Embedding 服务
 curl http://192.168.8.233:8092/health
 curl http://192.168.8.233:8092/v1/models
+
+# BGE-Large Embedding 服务
+curl http://192.168.8.233:8093/health
+curl http://192.168.8.233:8093/v1/models
 ```
 
 ## Reranker 服务 (端口 8091)
@@ -89,7 +96,7 @@ curl -X POST http://192.168.8.233:8091/v1/rerank \
 
 ```bash
 cd examples
-pip install requests numpy
+pip install openai requests numpy
 python test_reranker.py
 ```
 
@@ -163,6 +170,57 @@ for idx, doc, score in results:
     print(f"[{score:.4f}] {doc}")
 ```
 
+## BGE-Large Embedding 服务 (端口 8093)
+
+### API 端点
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/health` | GET | 健康检查 |
+| `/v1/models` | GET | 模型信息 |
+| `/v1/embeddings` | POST | 生成文本嵌入 |
+
+### 使用示例
+
+```bash
+curl -X POST http://192.168.8.233:8093/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "/model",
+    "input": ["你好世界", "Hello World"],
+    "encoding_format": "float"
+  }'
+```
+
+### Python 客户端
+
+```bash
+cd examples
+pip install openai requests numpy
+```
+
+```python
+from examples.test_embedding import BGEEmbeddingClient
+
+client = BGEEmbeddingClient("http://192.168.8.233:8093")
+
+# 生成嵌入
+text = "人工智能是计算机科学的一个分支"
+embedding = client.embed(text)
+print(f"嵌入维度: {len(embedding)}")
+
+# 相似度检索
+query = "什么是机器学习？"
+documents = [
+    "机器学习是人工智能的一个重要领域。",
+    "今天我去了公园散步。",
+]
+results = client.similarity(query, documents, top_k=2)
+
+for idx, doc, score in results:
+    print(f"[{score:.4f}] {doc}")
+```
+
 ## RAG 完整示例
 
 ```python
@@ -198,19 +256,20 @@ for idx, doc, score in final_results:
 
 ### 服务配置
 
-| 配置项 | Reranker | Embedding |
-|--------|----------|-----------|
-| 端口 | 8091 | 8092 |
-| GPU 显存 | 0.2 | 0.3 |
-| 最大上下文 | 8192 tokens | 8192 tokens |
-| 精度 | float16 | float16 |
+| 配置项 | Reranker | BGE-M3 | BGE-Large |
+|--------|----------|--------|-----------|
+| 端口 | 8091 | 8092 | 8093 |
+| GPU 显存 | 0.2 | 0.3 | 0.2 |
+| 最大上下文 | 8192 tokens | 8192 tokens | 512 tokens |
+| 精度 | float16 | float16 | float16 |
 
 ### 模型规格
 
 | 模型 | 参数量 | 嵌入维度 | 用途 |
 |------|--------|----------|------|
 | bge-reranker-v2-m3 | ~278M | - | 文档重排序 |
-| bge-m3 | ~567M | 1024 | 文本嵌入 |
+| bge-m3 | ~567M | 1024 | 多语言文本嵌入 |
+| bge-large-zh-v1.5 | ~326M | 1024 | 中文文本嵌入 |
 
 ## 模型存储
 
@@ -218,10 +277,12 @@ for idx, doc, score in final_results:
 
 ```
 项目目录/
-├── models/                 ← Reranker 模型 (~2.2G)
-├── models/BAAI/           ← BAAI 模型目录
-│   └── bge-m3/           ← Embedding 模型 (~2.2G)
-└── docker-compose.yml
+├── models/                      ← Reranker 模型 (~2.2G)
+├── models/BAAI/                 ← BAAI 模型目录
+│   ├── bge-m3/                 ← M3 Embedding 模型 (~2.2G)
+│   └── BGE-large/              ← Large Embedding 模型 (~1.2G)
+├── docker-compose.yml
+└── download_models.sh          ← 模型下载脚本
 ```
 
 ### 清理缓存
@@ -231,17 +292,18 @@ for idx, doc, score in final_results:
 ```bash
 rm -rf models/blobs models/snapshots models/refs models/.cache models/assets
 rm -rf models/BAAI/bge-m3/blobs models/BAAI/bge-m3/snapshots models/BAAI/bge-m3/refs models/BAAI/bge-m3/.cache models/BAAI/bge-m3/assets
+rm -rf models/BAAI/BGE-large/blobs models/BAAI/BGE-large/snapshots models/BAAI/BGE-large/refs models/BAAI/BGE-large/.cache models/BAAI/BGE-large/assets
 ```
 
 ## 服务迁移
 
 ```bash
 # 在当前机器打包整个项目
-tar czf bge-deployment.tar.gz /path/to/bge-reranker-v2-m3-deployment/
+tar czf bge-deployment.tar.gz /path/to/bge-athenaeum/
 
 # 传输到新机器后解压
 tar xzf bge-deployment.tar.gz
-cd bge-reranker-v2-m3-deployment
+cd bge-athenaeum
 
 # 启动服务
 docker-compose up -d
@@ -275,11 +337,13 @@ client.test_long_text_embedding([1000, 2000, 4000, 8000])
 
 ## 常见问题
 
-### Q: 如何同时运行两个服务？
+### Q: 如何同时运行多个服务？
 
-两个服务共享同一块 GPU，通过 `gpu-memory-utilization` 控制显存使用：
+多个服务共享同一块 GPU，通过 `gpu-memory-utilization` 控制显存使用：
 - Reranker: 0.2 (约 1.6GB)
-- Embedding: 0.3 (约 2.4GB)
+- BGE-M3: 0.3 (约 2.4GB)
+- BGE-Large: 0.2 (约 1.6GB)
+- 总计: 0.7 (约 5.6GB)
 
 可根据 GPU 显存大小调整此参数。
 
@@ -323,6 +387,7 @@ docker-compose up -d
 |------|-------------|------------|
 | bge-reranker-v2-m3 | `BAAI/bge-reranker-v2-m3` | `AI-ModelScope/bge-reranker-v2-m3` |
 | bge-m3 | `BAAI/bge-m3` | `AI-ModelScope/bge-m3` |
+| bge-large-zh-v1.5 | `BAAI/bge-large-zh-v1.5` | `AI-ModelScope/bge-large-zh-v1.5` |
 
 ## 硬件要求
 

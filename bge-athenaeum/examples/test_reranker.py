@@ -1,39 +1,47 @@
 """
 BGE Reranker V2-M3 服务客户端
-使用 requests 调用 vLLM Rerank API (OpenAI SDK 不支持 rerank 端点)
+使用 OpenAI SDK 风格的 API 调用 vLLM Rerank API
 
 服务地址: http://192.168.8.233:8091
 
 运行测试: python test_reranker.py
 
-依赖: pip install requests
+依赖: pip install openai requests
 """
-import requests
+from openai import OpenAI
 from typing import List, Tuple, Union
+import requests
 
 
 class BGERerankerClient:
-    """BGE-Reranker-V2-M3 客户端"""
+    """BGE-Reranker-V2-M3 客户端 (OpenAI SDK 风格)"""
 
     def __init__(
         self,
         base_url: str = "http://192.168.8.233:8091",
+        api_key: str = "not-needed",
         timeout: int = 120,
     ):
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self.model_name = "bge-reranker-m3"
+        # 初始化 OpenAI 客户端（用于统一风格）
+        self.client = OpenAI(
+            api_key=api_key,
+            base_url=f"{self.base_url}/v1",
+            timeout=timeout,
+        )
         self._check_health()
 
     def _check_health(self):
         """检查服务健康状态"""
         try:
-            # 使用 v1/health 端点
+            # 使用 /health 端点
             resp = requests.get(f"{self.base_url}/health", timeout=5)
             if resp.status_code == 200:
                 print("服务连接成功")
             else:
-                # 尝试 v1/models 端点
+                # 尝试 /v1/models 端点
                 resp = requests.get(f"{self.base_url}/v1/models", timeout=5)
                 resp.raise_for_status()
                 print(f"服务连接成功: {resp.json().get('data', [{}])[0].get('id', 'unknown')}")
@@ -118,12 +126,32 @@ class BGERerankerClient:
 
         return all_results
 
+    def compute_relevance(
+        self,
+        query: str,
+        document: str,
+    ) -> float:
+        """
+        计算单个查询和文档的相关性分数
+
+        Args:
+            query: 查询文本
+            document: 文档文本
+
+        Returns:
+            相关性分数 (-10 到 +10)
+        """
+        results = self.rerank(query, [document], top_k=1)
+        if results:
+            return results[0][2]
+        return -10.0
+
 
 # ============ 使用示例 ============
 
 if __name__ == "__main__":
     print("\n" + "=" * 60)
-    print("BGE Reranker V2-M3 服务测试")
+    print("BGE Reranker V2-M3 服务测试 (OpenAI SDK 风格)")
     print("=" * 60)
 
     # 初始化客户端
@@ -225,6 +253,21 @@ if __name__ == "__main__":
     for i, (idx, doc, score) in enumerate(results, 1):
         status = "✓ 相关" if score > 0 else "✗ 不相关"
         print(f"    {i}. [{score:.4f}] {doc} ({status})")
+
+    # 示例 6: 模型信息
+    print("\n[示例 6] 模型信息")
+    model_info = client.get_model_info()
+    print(f"  模型: {model_info.get('data', [{}])[0].get('id', 'unknown')}")
+    print(f"  类型: {model_info.get('object', 'unknown')}")
+
+    # 示例 7: 单个文档相关性计算
+    print("\n[示例 7] 单个文档相关性计算")
+    query = "机器学习"
+    doc = "机器学习是人工智能的一个重要分支，研究如何使计算机系统从数据中学习。"
+    score = client.compute_relevance(query, doc)
+    print(f"  查询: {query}")
+    print(f"  文档: {doc}")
+    print(f"  相关性分数: {score:.4f}")
 
     print("\n" + "=" * 60)
     print("所有测试完成！")
