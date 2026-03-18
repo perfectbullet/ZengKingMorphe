@@ -5,8 +5,9 @@
 import pytest
 
 from src.retrieval.base import RetrievedDocument
-from src.retrieval.strategies import VectorRetrieval, HybridRetrieval, RerankRetrieval
+from src.retrieval.strategies import HybridRerankRetrieval
 from src.retrieval.retriever import Retriever
+from src.retrieval.reranker import BGERerankerClient, BGERerankerClientError
 from src.document_indexer.storage import VectorStore
 
 
@@ -45,161 +46,152 @@ def sample_retrieved_documents():
     ]
 
 
-class TestVectorRetrieval:
-    """向量检索测试"""
+class TestHybridRerankRetrieval:
+    """混合检索 + Rerank 测试"""
 
-    def test_vector_retrieval_initialization(self, vector_store):
-        """测试向量检索初始化"""
-        retrieval = VectorRetrieval(vector_store=vector_store)
+    def test_hybrid_rerank_initialization(self, vector_store):
+        """测试混合检索 + Rerank 初始化"""
+        # 创建禁用的 reranker 客户端（仅用于测试，实际使用时会报错）
+        class MockReranker:
+            pass
+
+        retrieval = HybridRerankRetrieval(
+            vector_store=vector_store,
+            rerank_client=MockReranker()
+        )
 
         assert retrieval.vector_store == vector_store
+        assert retrieval.rerank_client is not None
+        assert retrieval.candidate_multiplier == 4  # 默认值
+
+    def test_hybrid_rerank_with_custom_multiplier(self, vector_store):
+        """测试自定义倍数的混合检索"""
+        class MockReranker:
+            pass
+
+        retrieval = HybridRerankRetrieval(
+            vector_store=vector_store,
+            rerank_client=MockReranker(),
+            candidate_multiplier=6
+        )
+
+        assert retrieval.candidate_multiplier == 6
+
+    def test_hybrid_rerank_without_reranker_raises_error(self, vector_store):
+        """测试没有 Reranker 时抛出 ValueError"""
+        with pytest.raises(ValueError, match="rerank_client 是必需参数"):
+            HybridRerankRetrieval(vector_store=vector_store, rerank_client=None)
 
     @pytest.mark.asyncio
-    async def test_retrieve(self, vector_store):
-        """测试向量检索"""
+    async def test_hybrid_rerank_with_empty_candidates(self, vector_store):
+        """测试空候选列表"""
+        class MockReranker:
+            pass
+
+        retrieval = HybridRerankRetrieval(
+            vector_store=vector_store,
+            rerank_client=MockReranker()
+        )
+
+        # 应该返回空列表
+        result = await retrieval._rerank_documents("查询", [])
+        assert result == []
+
+    @pytest.mark.skip(reason="需要 Ollama 和 ChromaDB 服务运行")
+    def test_retrieve_with_services(self, vector_store):
+        """测试完整检索流程"""
         pytest.skip("需要 Ollama 和 ChromaDB 服务运行")
 
-        retrieval = VectorRetrieval(vector_store=vector_store)
 
-        documents = await retrieval.retrieve(
-            query="测试查询",
-            top_k=5
+class TestBGERerankerClient:
+    """BGE Reranker 客户端测试"""
+
+    def test_reranker_initialization_disabled(self):
+        """测试 Reranker 客户端初始化（禁用状态不应存在）"""
+        # 修改后的 BGERerankerClient 不再接受 enable 参数
+        # 如果服务不可用，初始化时会直接抛出异常
+        pass
+
+    def test_reranker_initialization_fails_on_invalid_url(self):
+        """测试无效 URL 初始化失败"""
+        with pytest.raises(BGERerankerClientError, match="服务连接失败"):
+            BGERerankerClient(
+                base_url="http://invalid-host-99999:9999",
+                timeout=1
+            )
+
+    def test_rerank_with_empty_documents(self):
+        """测试空文档列表的 rerank"""
+        # 由于初始化时会检查服务，无法创建禁用状态的客户端
+        # 此测试需要模拟服务或使用实际服务
+        pytest.skip("需要 BGE Reranker 服务运行")
+
+    @pytest.mark.skip(reason="需要 BGE Reranker 服务运行")
+    def test_real_rerank_call(self):
+        """测试真实的 Rerank API 调用"""
+        client = BGERerankerClient(
+            base_url="http://192.168.8.233:8091"
         )
 
-        assert isinstance(documents, list)
-        assert all(isinstance(doc, RetrievedDocument) for doc in documents)
+        documents = [
+            "人工智能是指由人制造出来的机器所表现出来的智能。",
+            "今天天气很好，适合出去散步。",
+            "机器学习是人工智能的一个分支。"
+        ]
 
+        results = client.rerank("什么是人工智能？", documents, top_n=2)
 
-class TestHybridRetrieval:
-    """混合检索测试"""
+        assert len(results) <= 2
+        # AI 相关的文档应该排在前面
+        assert results[0][2] > results[1][2]
 
-    def test_hybrid_retrieval_initialization(self, vector_store):
-        """测试混合检索初始化"""
-        vector_retrieval = VectorRetrieval(vector_store=vector_store)
-        retrieval = HybridRetrieval(vector_retrieval=vector_retrieval)
-
-        assert retrieval.vector_retrieval == vector_retrieval
-        assert retrieval.alpha == 0.7
-
-    def test_hybrid_retrieval_with_custom_alpha(self, vector_store):
-        """测试自定义 alpha 的混合检索"""
-        vector_retrieval = VectorRetrieval(vector_store=vector_store)
-        retrieval = HybridRetrieval(
-            vector_retrieval=vector_retrieval,
-            alpha=0.5
-        )
-
-        assert retrieval.alpha == 0.5
-
-    @pytest.mark.asyncio
-    async def test_retrieve(self, vector_store):
-        """测试混合检索"""
-        pytest.skip("需要 Ollama 和 ChromaDB 服务运行")
-
-        vector_retrieval = VectorRetrieval(vector_store=vector_store)
-        retrieval = HybridRetrieval(vector_retrieval=vector_retrieval)
-
-        documents = await retrieval.retrieve(
-            query="测试查询",
-            top_k=5
-        )
-
-        assert isinstance(documents, list)
-        assert all(isinstance(doc, RetrievedDocument) for doc in documents)
-
-
-class TestRerankRetrieval:
-    """重排序检索测试"""
-
-    def test_rerank_initialization(self, vector_store):
-        """测试重排序初始化"""
-        vector_retrieval = VectorRetrieval(vector_store=vector_store)
-        retrieval = RerankRetrieval(base_retrieval=vector_retrieval)
-
-        assert retrieval.base_retrieval == vector_retrieval
-
-    @pytest.mark.asyncio
-    async def test_rerank_sorts_by_score(self, sample_retrieved_documents, vector_store):
-        """测试重排序按分数排序"""
-        # 创建一个模拟的基础检索器
-        class MockRetrieval:
-            async def retrieve(self, query, top_k, filters=None):
-                # 返回乱序的结果
-                return [
-                    sample_retrieved_documents[2],
-                    sample_retrieved_documents[0],
-                    sample_retrieved_documents[1]
-                ]
-
-        base_retrieval = MockRetrieval()
-        retrieval = RerankRetrieval(base_retrieval=base_retrieval)
-
-        results = await retrieval.retrieve(
-            query="测试查询",
-            top_k=3
-        )
-
-        # 应该按分数降序排列
-        assert results[0].score >= results[1].score >= results[2].score
+    def test_get_model_info_with_invalid_url(self):
+        """测试无效 URL 的模型信息获取"""
+        with pytest.raises(BGERerankerClientError, match="获取模型信息失败|服务连接失败"):
+            client = BGERerankerClient(
+                base_url="http://invalid-host-99999:9999",
+                timeout=1
+            )
+            # 初始化时就会检查服务，所以这里会直接失败
+            # 不需要额外调用 get_model_info
 
 
 class TestRetriever:
     """检索器测试"""
 
     def test_retriever_initialization(self, vector_store):
-        """测试检索器初始化"""
-        retriever = Retriever(vector_store=vector_store)
+        """测试检索器初始化（需要有效的 Reranker 服务）"""
+        # 由于初始化需要连接 BGE Reranker 服务
+        # 如果服务不可用会抛出 RuntimeError
+        pytest.skip("需要 BGE Reranker 服务运行")
 
-        assert retriever.vector_store == vector_store
-        assert retriever.strategy is not None
+    def test_retriever_fails_without_reranker_service(self, vector_store):
+        """测试没有 Reranker 服务时初始化失败"""
+        from src.config import settings
+        original_url = settings.rerank_base_url
 
-    def test_retriever_with_hybrid(self, vector_store):
-        """测试混合检索模式"""
-        retriever = Retriever(
-            vector_store=vector_store,
-            use_hybrid=True
-        )
+        try:
+            # 临时修改 settings 的 base_url
+            settings.rerank_base_url = "http://invalid-host-99999:9999"
 
-        assert retriever.use_hybrid is True
+            with pytest.raises(RuntimeError, match="无法连接到 BGE Reranker 服务"):
+                Retriever(
+                    vector_store=vector_store,
+                    use_rerank=True
+                )
+        finally:
+            # 恢复原始值
+            settings.rerank_base_url = original_url
 
-    def test_retriever_with_rerank(self, vector_store):
-        """测试重排序模式"""
-        retriever = Retriever(
-            vector_store=vector_store,
-            use_rerank=True
-        )
-
-        assert retriever.use_rerank is True
-
-    @pytest.mark.asyncio
-    async def test_retrieve(self, vector_store):
+    @pytest.mark.skip(reason="需要 Ollama 和 ChromaDB 服务运行")
+    def test_retrieve(self, vector_store):
         """测试检索"""
         pytest.skip("需要 Ollama 和 ChromaDB 服务运行")
 
-        retriever = Retriever(vector_store=vector_store)
-
-        documents = await retriever.retrieve(
-            query="测试查询",
-            top_k=5
-        )
-
-        assert isinstance(documents, list)
-
-    @pytest.mark.asyncio
-    async def test_retrieve_multiple(self, vector_store):
+    @pytest.mark.skip(reason="需要 Ollama 和 ChromaDB 服务运行")
+    def test_retrieve_multiple(self, vector_store):
         """测试多次检索"""
         pytest.skip("需要 Ollama 和 ChromaDB 服务运行")
-
-        retriever = Retriever(vector_store=vector_store)
-
-        queries = ["查询1", "查询2", "查询3"]
-        documents = await retriever.retrieve_multiple(
-            queries=queries,
-            top_k=3,
-            deduplicate=True
-        )
-
-        assert isinstance(documents, list)
 
 
 class TestRetrievedDocument:

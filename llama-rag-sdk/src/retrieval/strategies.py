@@ -1,38 +1,62 @@
 """
 检索策略实现
+
+统一的混合检索 + Rerank 流水线
 """
 
 from typing import List, Dict, Any, Optional
 from loguru import logger
 
 from src.retrieval.base import RetrievalStrategy, RetrievedDocument
+from src.retrieval.reranker import BGERerankerClientError
 from src.document_indexer.storage import VectorStore
 from src.config import settings
 
 try:
-    from llama_index.embeddings.ollama import OllamaEmbedding
+    from llama_index.embeddings.openai import OpenAIEmbedding
 except ImportError:
-    logger.warning("llama-index-embeddings-ollama 未安装")
-    OllamaEmbedding = None
+    logger.warning("llama-index-embeddings-openai 未安装")
+    OpenAIEmbedding = None
 
 
-class VectorRetrieval(RetrievalStrategy):
-    """纯向量检索策略"""
+class HybridRerankRetrieval(RetrievalStrategy):
+    """
+    混合检索 + Rerank 流水线
+
+    流程: 查询文本 → 向量检索获取候选 → BGE Rerank 重排序 → 返回结果
+    """
 
     def __init__(
         self,
         vector_store: VectorStore,
-        embedding_model: Optional[Any] = None
+        embedding_model: Optional[Any] = None,
+        rerank_client: Optional[Any] = None,
+        candidate_multiplier: int = None,
     ):
         """
-        初始化向量检索
+        初始化混合检索 + Rerank 策略
 
         Args:
             vector_store: 向量存储实例
             embedding_model: Embedding 模型
+            rerank_client: BGE Reranker 客户端（必需）
+            candidate_multiplier: 候选数量倍数（候选 = top_k * multiplier）
+
+        Raises:
+            ValueError: rerank_client 为 None 时抛出
         """
         self.vector_store = vector_store
         self.embedding_model = embedding_model
+        self.rerank_client = rerank_client
+        self.candidate_multiplier = candidate_multiplier or settings.rerank_candidate_multiplier
+
+        if self.rerank_client is None:
+            raise ValueError("rerank_client 是必需参数，不能为 None")
+
+        logger.info(
+            f"初始化混合检索 + Rerank 策略: "
+            f"candidate_multiplier={self.candidate_multiplier}"
+        )
 
     def _create_embedding(self, text: str) -> List[float]:
         """
@@ -45,12 +69,15 @@ class VectorRetrieval(RetrievalStrategy):
             嵌入向量
         """
         if self.embedding_model is None:
-            if OllamaEmbedding is None:
+            if OpenAIEmbedding is None:
                 raise RuntimeError("Embedding 模型不可用")
 
-            self.embedding_model = OllamaEmbedding(
-                model_name=settings.ollama_embedding_model,
-                base_url=settings.ollama_base_url
+            self.embedding_model = OpenAIEmbedding(
+                model_name=settings.vllm_embedding_model,
+                api_base=settings.vllm_embedding_api_base,
+                api_key=settings.vllm_api_key,
+                embed_batch_size=32,
+                timeout=300,
             )
 
         try:
@@ -59,11 +86,11 @@ class VectorRetrieval(RetrievalStrategy):
             logger.error(f"生成查询嵌入向量失败: {e}")
             raise
 
-    async def retrieve(
+    async def _vector_search(
         self,
         query: str,
-        top_k: int = 5,
-        filters: Optional[Dict[str, Any]] = None
+        top_k: int,
+        filters: Optional[Dict[str, Any]] = None,
     ) -> List[RetrievedDocument]:
         """
         执行向量检索
@@ -76,7 +103,7 @@ class VectorRetrieval(RetrievalStrategy):
         Returns:
             检索到的文档列表
         """
-        logger.info(f"执行向量检索: query='{query}', top_k={top_k}")
+        logger.debug(f"执行向量检索: query='{query}', top_k={top_k}")
 
         # 生成查询嵌入
         query_embedding = self._create_embedding(query)
@@ -99,134 +126,103 @@ class VectorRetrieval(RetrievalStrategy):
             if i < len(texts):
                 score = 1.0 - distances[i] if i < len(distances) else 0.0
 
-                # 应用相似度阈值
-                if score >= settings.similarity_threshold:
-                    doc = RetrievedDocument(
-                        text=texts[i],
-                        metadata=metadatas[i] if i < len(metadatas) else {},
-                        score=score,
-                        source=metadatas[i].get('source', '') if i < len(metadatas) else '',
-                        chunk_id=metadatas[i].get('chunk_id', '') if i < len(metadatas) else ''
-                    )
-                    documents.append(doc)
-
-        logger.info(f"检索完成: 返回 {len(documents)} 个结果")
-        return documents
-
-
-class HybridRetrieval(RetrievalStrategy):
-    """
-    混合检索策略（向量 + 关键词）
-
-    注意：完整实现需要 BM25 索引支持
-    这里提供简化版本，仅使用向量检索
-    """
-
-    def __init__(
-        self,
-        vector_retrieval: VectorRetrieval,
-        alpha: float = 0.7
-    ):
-        """
-        初始化混合检索
-
-        Args:
-            vector_retrieval: 向量检索实例
-            alpha: 向量检索权重（0-1）
-        """
-        self.vector_retrieval = vector_retrieval
-        self.alpha = alpha
-
-    async def retrieve(
-        self,
-        query: str,
-        top_k: int = 5,
-        filters: Optional[Dict[str, Any]] = None
-    ) -> List[RetrievedDocument]:
-        """
-        执行混合检索
-
-        Args:
-            query: 查询文本
-            top_k: 返回结果数量
-            filters: 过滤条件
-
-        Returns:
-            检索到的文档列表
-        """
-        logger.info(f"执行混合检索: query='{query}', alpha={self.alpha}")
-
-        # 当前实现仅使用向量检索
-        # 完整实现需要 BM25 索引
-        documents = await self.vector_retrieval.retrieve(query, top_k, filters)
-
-        # 这里可以添加关键词匹配逻辑
-        # 例如：基于简单的文本匹配
+                doc = RetrievedDocument(
+                    text=texts[i],
+                    metadata=metadatas[i] if i < len(metadatas) else {},
+                    score=score,
+                    source=metadatas[i].get('source', '') if i < len(metadatas) else '',
+                    chunk_id=metadatas[i].get('chunk_id', '') if i < len(metadatas) else ''
+                )
+                documents.append(doc)
 
         return documents
 
-
-class RerankRetrieval(RetrievalStrategy):
-    """
-    重排序检索策略
-
-    对检索结果进行重排序，提高相关性
-    """
-
-    def __init__(
-        self,
-        base_retrieval: RetrievalStrategy,
-        rerank_model: Optional[str] = None
-    ):
-        """
-        初始化重排序检索
-
-        Args:
-            base_retrieval: 基础检索策略
-            rerank_model: 重排序模型名称
-        """
-        self.base_retrieval = base_retrieval
-        self.rerank_model = rerank_model or settings.rerank_model
-
-    async def retrieve(
+    async def _rerank_documents(
         self,
         query: str,
-        top_k: int = 5,
-        filters: Optional[Dict[str, Any]] = None
+        candidates: List[RetrievedDocument],
     ) -> List[RetrievedDocument]:
         """
-        执行重排序检索
+        使用 BGE Rerank 重排序候选文档
 
         Args:
             query: 查询文本
-            top_k: 返回结果数量
-            filters: 过滤条件
+            candidates: 候选文档列表
 
         Returns:
-            检索到的文档列表
+            重排序后的文档列表
+
+        Raises:
+            BGERerankerClientError: Rerank 请求失败时抛出异常
         """
-        logger.info(f"执行重排序检索: query='{query}', top_k={top_k}")
-
-        # 先获取更多候选结果
-        candidates = await self.base_retrieval.retrieve(
-            query,
-            top_k=top_k * 2,  # 获取更多候选
-            filters=filters
-        )
-
         if not candidates:
             return []
 
-        # 如果有重排序模型，使用它进行重排序
-        # 这里提供简化的基于分数的重排序
-        # 完整实现需要集成 BGE-Reranker 等模型
+        # 提取文档文本
+        documents = [doc.text for doc in candidates]
 
-        # 按分数排序
-        reranked = sorted(
-            candidates,
-            key=lambda x: x.score,
-            reverse=True
+        # 调用 Reranker API
+        try:
+            ranked_results = self.rerank_client.rerank(query, documents, top_n=len(documents))
+        except BGERerankerClientError as e:
+            logger.error(f"Rerank 调用失败: {e}")
+            raise
+
+        # 按重排序结果重新组织文档
+        reranked = []
+        for idx, _, score in ranked_results:
+            if 0 <= idx < len(candidates):
+                # 更新分数为 Reranker 分数
+                doc = candidates[idx]
+                # 归一化分数到 0-1 范围 (BGE 分数约为 -10 到 10)
+                normalized_score = (score + 10) / 20 if score is not None else doc.score
+                doc.score = max(0.0, min(1.0, normalized_score))
+                reranked.append(doc)
+
+        logger.debug(
+            f"Rerank 完成: 原始数量={len(candidates)}, "
+            f"重排序后={len(reranked)}"
         )
 
-        # 返回 top_k 结果
-        return reranked[:top_k]
+        return reranked
+
+    async def retrieve(
+        self,
+        query: str,
+        top_k: int = 5,
+        filters: Optional[Dict[str, Any]] = None
+    ) -> List[RetrievedDocument]:
+        """
+        执行混合检索 + Rerank
+
+        Args:
+            query: 查询文本
+            top_k: 返回结果数量
+            filters: 过滤条件
+
+        Returns:
+            检索到的文档列表
+        """
+        logger.info(f"执行混合检索 + Rerank: query='{query}', top_k={top_k}")
+
+        # 1. 向量检索获取更多候选（top_k * multiplier）
+        candidate_count = top_k * self.candidate_multiplier
+        candidates = await self._vector_search(query, candidate_count, filters)
+
+        if not candidates:
+            logger.info("未检索到候选文档")
+            return []
+
+        # 2. BGE Rerank 重排序
+        reranked = await self._rerank_documents(query, candidates)
+
+        # 3. 返回前 top_k 结果
+        results = reranked[:top_k]
+
+        logger.info(
+            f"检索完成: 候选={len(candidates)}, "
+            f"重排序后={len(reranked)}, "
+            f"返回={len(results)}"
+        )
+
+        return results

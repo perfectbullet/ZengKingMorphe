@@ -25,11 +25,14 @@ classifiers = [
 dependencies = [
     # 核心依赖
     "llama-index-core>=0.10.0",
-    "llama-index-embeddings-ollama>=0.1.0",
+    "llama-index-embeddings-openai>=0.1.0",
     "llama-index-vector-stores-chroma>=0.1.0",
     "llama-index-postprocessor-cohere-rerank>=0.1.0",
 
-    # Ollama 集成
+    # vLLM 集成（OpenAI 兼容 API）
+    "openai>=1.0.0",
+
+    # Ollama 集成（暂用于 Qwen2-VL 图片描述）
     "ollama>=0.1.0",
 
     # 存储和工具
@@ -39,6 +42,7 @@ dependencies = [
     # HTTP 客户端
     "httpx>=0.25.0",
     "aiohttp>=3.9.0",
+    "requests>=2.31.0",
 
     # 数据处理
     "pydantic>=2.0.0",

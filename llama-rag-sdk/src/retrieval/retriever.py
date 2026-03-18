@@ -1,36 +1,33 @@
 """
 检索器
 
-提供统一的检索接口
+提供统一的检索接口，使用混合检索 + Rerank 流水线
 """
 
 from typing import List, Dict, Any, Optional
 from loguru import logger
 
 from src.retrieval.base import RetrievedDocument
-from src.retrieval.strategies import (
-    VectorRetrieval,
-    HybridRetrieval,
-    RerankRetrieval
-)
+from src.retrieval.strategies import HybridRerankRetrieval
+from src.retrieval.reranker import BGERerankerClientError
 from src.document_indexer.storage import VectorStore
 from src.config import settings
 
 try:
-    from llama_index.embeddings.ollama import OllamaEmbedding
+    from llama_index.embeddings.openai import OpenAIEmbedding
 except ImportError:
-    logger.warning("llama-index-embeddings-ollama 未安装")
-    OllamaEmbedding = None
+    logger.warning("llama-index-embeddings-openai 未安装")
+    OpenAIEmbedding = None
 
 
 class Retriever:
-    """统一检索器"""
+    """统一检索器（混合检索 + Rerank）"""
 
     def __init__(
         self,
         vector_store: VectorStore,
-        use_hybrid: bool = False,
-        use_rerank: bool = False,
+        use_rerank: Optional[bool] = None,
+        candidate_multiplier: Optional[int] = None,
         embedding_model: Optional[Any] = None
     ):
         """
@@ -38,64 +35,84 @@ class Retriever:
 
         Args:
             vector_store: 向量存储实例
-            use_hybrid: 是否使用混合检索
-            use_rerank: 是否使用重排序
+            use_rerank: 是否使用重排序（默认从配置读取）
+            candidate_multiplier: 候选数量倍数（默认从配置读取）
             embedding_model: Embedding 模型
+
+        Raises:
+            RuntimeError: 当 Reranker 服务不可用时抛出异常
         """
         self.vector_store = vector_store
-        self.use_hybrid = use_hybrid or settings.use_hybrid_retrieval
-        self.use_rerank = use_rerank or settings.use_rerank
         self.embedding_model = embedding_model
 
+        # 从参数或配置读取设置
+        self.use_rerank = use_rerank if use_rerank is not None else settings.use_rerank
+
         # 创建检索策略
-        self.strategy = self._create_strategy()
+        self.strategy = self._create_strategy(candidate_multiplier)
 
     def _create_embedding_model(self) -> Optional[Any]:
         """创建 Embedding 模型"""
         if self.embedding_model is not None:
             return self.embedding_model
 
-        if OllamaEmbedding is None:
-            logger.warning("OllamaEmbedding 不可用")
+        if OpenAIEmbedding is None:
+            logger.warning("OpenAIEmbedding 不可用")
             return None
 
         try:
-            return OllamaEmbedding(
-                model_name=settings.ollama_embedding_model,
-                base_url=settings.ollama_base_url
+            return OpenAIEmbedding(
+                model_name=settings.vllm_embedding_model,
+                api_base=settings.vllm_embedding_api_base,
+                api_key=settings.vllm_api_key,
+                embed_batch_size=32,
+                timeout=300,
             )
         except Exception as e:
             logger.error(f"初始化 Embedding 模型失败: {e}")
             return None
 
-    def _create_strategy(self):
-        """创建检索策略"""
+    def _create_strategy(self, candidate_multiplier: Optional[int] = None) -> HybridRerankRetrieval:
+        """
+        创建检索策略 - 统一使用混合+Rerank
+
+        Args:
+            candidate_multiplier: 候选数量倍数
+
+        Returns:
+            检索策略实例
+
+        Raises:
+            RuntimeError: 当 Reranker 服务不可用时抛出异常
+        """
         embed_model = self._create_embedding_model()
 
-        # 基础向量检索
-        vector_retrieval = VectorRetrieval(
+        # 创建 Reranker 客户端
+        from src.retrieval.reranker import BGERerankerClient
+
+        try:
+            rerank_client = BGERerankerClient(
+                base_url=settings.rerank_base_url,
+                api_key=settings.vllm_api_key,
+                model=settings.rerank_model,
+                timeout=settings.rerank_timeout,
+            )
+            logger.info(f"BGE Reranker 客户端已创建: {settings.rerank_base_url}")
+        except BGERerankerClientError as e:
+            raise RuntimeError(
+                f"无法连接到 BGE Reranker 服务: {e}\n"
+                f"请确认服务已启动: {settings.rerank_base_url}"
+            )
+
+        # 统一使用混合+Rerank策略
+        strategy = HybridRerankRetrieval(
             vector_store=self.vector_store,
-            embedding_model=embed_model
+            embedding_model=embed_model,
+            rerank_client=rerank_client,
+            candidate_multiplier=candidate_multiplier or settings.rerank_candidate_multiplier,
         )
 
-        # 根据配置选择策略
-        if self.use_rerank:
-            # 重排序检索
-            strategy = RerankRetrieval(
-                base_retrieval=vector_retrieval
-            )
-            logger.info("使用重排序检索策略")
-        elif self.use_hybrid:
-            # 混合检索
-            strategy = HybridRetrieval(
-                vector_retrieval=vector_retrieval
-            )
-            logger.info("使用混合检索策略")
-        else:
-            # 纯向量检索
-            strategy = vector_retrieval
-            logger.info("使用向量检索策略")
-
+        logger.info("使用混合检索 + Rerank 策略")
         return strategy
 
     async def retrieve(
@@ -114,6 +131,9 @@ class Retriever:
 
         Returns:
             检索到的文档列表
+
+        Raises:
+            BGERerankerClientError: Rerank 请求失败时抛出异常
         """
         if top_k is None:
             top_k = settings.top_k
@@ -147,6 +167,9 @@ class Retriever:
 
         Returns:
             检索到的文档列表
+
+        Raises:
+            BGERerankerClientError: Rerank 请求失败时抛出异常
         """
         if top_k is None:
             top_k = settings.top_k

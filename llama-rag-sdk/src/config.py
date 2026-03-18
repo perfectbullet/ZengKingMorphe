@@ -34,28 +34,46 @@ class Settings(BaseSettings):
         description="MinerU 输出目录"
     )
 
-    # ========== Ollama 配置 ==========
-    ollama_base_url: str = Field(
-        default="http://192.168.8.233:11434",
-        description="Ollama 服务地址"
+    # ========== vLLM Embedding 配置 ==========
+    vllm_embedding_base_url: str = Field(
+        default="http://192.168.8.233:8092",
+        description="vLLM Embedding 服务地址"
     )
-    ollama_embedding_model: str = Field(
-        default="bge-m3",
+    vllm_embedding_api_base: str = Field(
+        default="http://192.168.8.233:8092/v1",
+        description="vLLM Embedding API Base 地址"
+    )
+    vllm_embedding_model: str = Field(
+        default="BAAI/bge-m3",
         description="Embedding 模型名称"
     )
-    ollama_chat_model: str = Field(
+    vllm_api_key: str = Field(
+        default="not-needed",
+        description="vLLM API Key（不需要真实 key）"
+    )
+
+    # ========== vLLM Chat 配置 ==========
+    vllm_chat_base_url: str = Field(
+        default="http://192.168.8.233:8092",
+        description="vLLM Chat 服务地址"
+    )
+    vllm_chat_api_base: str = Field(
+        default="http://192.168.8.233:8092/v1",
+        description="vLLM Chat API Base 地址"
+    )
+    vllm_chat_model: str = Field(
         default="deepseek-coder:instruct",
         description="问答模型名称"
     )
 
-    # ========== 图片描述模型配置 ==========
+    # ========== 多模态模型配置（Qwen2-VL）==========
     qwen_vl_model: str = Field(
         default="qwen2-vl:latest",
         description="Qwen2-VL 模型名称"
     )
-    qwen_vl_base_url: Optional[str] = Field(
-        default=None,
-        description="Qwen2-VL 服务地址（如使用 Ollama）"
+    qwen_vl_base_url: str = Field(
+        default="http://192.168.8.233:11434",
+        description="Qwen2-VL 服务地址（使用 Ollama）"
     )
     enable_image_description: bool = Field(
         default=True,
@@ -108,12 +126,30 @@ class Settings(BaseSettings):
         description="是否使用混合检索（向量 + 关键词）"
     )
     use_rerank: bool = Field(
-        default=False,
+        default=True,
         description="是否使用重排序"
     )
     rerank_model: str = Field(
         default="bge-reranker-v2-m3",
         description="重排序模型名称"
+    )
+
+    # ========== BGE Reranker 配置 ==========
+    rerank_base_url: str = Field(
+        default="http://192.168.8.233:8091",
+        description="BGE Reranker 服务地址"
+    )
+    rerank_api_base: str = Field(
+        default="http://192.168.8.233:8091/v1",
+        description="BGE Reranker API Base 地址"
+    )
+    rerank_timeout: int = Field(
+        default=120,
+        description="Rerank 请求超时时间（秒）"
+    )
+    rerank_candidate_multiplier: int = Field(
+        default=4,
+        description="候选数量倍数（候选数量 = top_k * multiplier）"
     )
 
     # ========== 日志配置 ==========
