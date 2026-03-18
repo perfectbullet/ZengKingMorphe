@@ -6,7 +6,6 @@
 
 from typing import List
 from abc import ABC, abstractmethod
-import re
 from loguru import logger
 
 from src.document_indexer.base import ChunkStrategy
@@ -85,7 +84,7 @@ class SemanticChunker(BaseChunker):
         Returns:
             分块后的文本列表
         """
-        chunks = []
+        chunks: List[str] = []
         current_chunk = ""
         min_size = self.strategy.min_chunk_size
         max_size = self.strategy.max_chunk_size
@@ -95,25 +94,14 @@ class SemanticChunker(BaseChunker):
 
         for line in lines:
             line_stripped = line.strip()
-
-            # 检查是否是标题（以 # 开头）
             is_heading = line_stripped.startswith('#')
 
-            # 如果当前块不为空且遇到标题，保存当前块
             if is_heading and current_chunk:
-                # 确保当前块满足最小大小要求
-                if len(current_chunk) >= min_size or not chunks:
-                    chunks.append(current_chunk.strip())
-                    current_chunk = line + "\n"
-                else:
-                    # 合并到前一块
-                    if chunks:
-                        chunks[-1] += "\n" + current_chunk
-                    current_chunk = line + "\n"
+                self._handle_heading(chunks, current_chunk, min_size)
+                current_chunk = line + "\n"
             else:
                 current_chunk += line + "\n"
 
-                # 检查是否超过最大大小
                 if len(current_chunk) >= max_size:
                     chunks.append(current_chunk.strip())
                     current_chunk = ""
@@ -124,6 +112,13 @@ class SemanticChunker(BaseChunker):
 
         logger.debug(f"语义分块: 共 {len(chunks)} 块")
         return chunks
+
+    def _handle_heading(self, chunks: List[str], current_chunk: str, min_size: int) -> None:
+        """处理遇到标题时的块逻辑"""
+        if len(current_chunk) >= min_size or not chunks:
+            chunks.append(current_chunk.strip())
+        elif chunks:
+            chunks[-1] += "\n" + current_chunk
 
 
 class HybridChunker(BaseChunker):
@@ -146,18 +141,13 @@ class HybridChunker(BaseChunker):
         Returns:
             分块后的文本列表
         """
-        # 先按语义分块
         semantic_chunks = self.semantic_chunker.chunk(text)
-
-        # 对过长的块再分块
-        final_chunks = []
-        max_size = self.strategy.max_size
+        final_chunks: List[str] = []
+        max_size = self.strategy.max_chunk_size
 
         for chunk in semantic_chunks:
             if len(chunk) > max_size:
-                # 使用固定大小分块
-                sub_chunks = self.fixed_size_chunker.chunk(chunk)
-                final_chunks.extend(sub_chunks)
+                final_chunks.extend(self.fixed_size_chunker.chunk(chunk))
             else:
                 final_chunks.append(chunk)
 

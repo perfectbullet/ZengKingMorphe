@@ -27,7 +27,7 @@ async def example_basic_parse():
     """示例 1: 基本解析"""
     print("\n=== 示例 1: 基本解析 ===")
     async with MinerUParser() as parser:
-        pdf_path = "data/sample_pdf/example.pdf"
+        pdf_path = "/home/zj/ZengKingMorphe/Digital-Human-Disciplinary-Dataset/math_file_part/01高中数学必修第一册-16pages-part8-page113-128.pdf"
 
         if Path(pdf_path).exists():
             document = await parser.parse(pdf_path)
@@ -50,7 +50,7 @@ async def example_with_options():
     """示例 2: 使用自定义解析选项"""
     print("\n=== 示例 2: 使用自定义解析选项 ===")
     async with MinerUParser() as parser:
-        pdf_path = "data/sample_pdf/example.pdf"
+        pdf_path = "/home/ZengKingMorphe/Digital-Human-Disciplinary-Dataset/math_file_part/01高中数学必修第一册-16pages-part8-page113-128.pdf"
 
         if Path(pdf_path).exists():
             # 自定义解析选项
@@ -95,7 +95,7 @@ async def example_with_progress():
         print(f"  [{percent:5.1f}%] {name}")
 
     async with MinerUParser() as parser:
-        pdf_path = "data/sample_pdf/example.pdf"
+        pdf_path = "/home/ZengKingMorphe/Digital-Human-Disciplinary-Dataset/math_file_part/01高中数学必修第一册-16pages-part8-page113-128.pdf"
 
         if Path(pdf_path).exists():
             print("开始解析，进度:")
@@ -207,11 +207,11 @@ async def main():
 
     # 运行示例
     await example_basic_parse()
-    await example_with_options()
-    await example_with_progress()
-    await example_batch_parse()
-    await example_image_description()
-    await example_to_memory()
+    # await example_with_options()
+    # await example_with_progress()
+    # await example_batch_parse()
+    # await example_image_description()
+    # await example_to_memory()
 
 
 if __name__ == "__main__":

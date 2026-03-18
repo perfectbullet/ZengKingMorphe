@@ -1,211 +1,322 @@
 """
-RAG 系统集成示例
+RAG 系统性能评估示例
 
-展示如何使用 RAGSystem 类进行完整的 RAG 流程
+专注于文档解析到最后召回的文档，用于评估 RAGSystem 性能好坏。
+核心流程：文档解析 → 文本分块 → 向量化 → 存储 → 检索 → 评估
 """
 
 import asyncio
+import time
 from pathlib import Path
+from typing import List, Dict, Any, Optional
 
 from src.rag_system import RAGSystem
+from src.document_parser import ParseOptions, ReturnOptions
+from src.retrieval.base import RetrievedDocument
 from src.utils import setup_logger
 
 
+class RAGEvaluator:
+    """RAG 系统评估器"""
+
+    def __init__(self):
+        self.metrics: Dict[str, Any] = {
+            "parse_time": 0,
+            "index_time": 0,
+            "retrieve_time": 0,
+            "total_chunks": 0,
+            "total_images": 0,
+            "queries": [],
+        }
+
+    def record_parse_time(self, duration: float, chunks: int, images: int):
+        """记录解析时间"""
+        self.metrics["parse_time"] = duration
+        self.metrics["total_chunks"] = chunks
+        self.metrics["total_images"] = images
+
+    def record_index_time(self, duration: float):
+        """记录索引时间"""
+        self.metrics["index_time"] = duration
+
+    def record_retrieve(
+        self,
+        query: str,
+        duration: float,
+        results: List[RetrievedDocument]
+    ):
+        """记录检索结果"""
+        self.metrics["queries"].append({
+            "query": query,
+            "duration": duration,
+            "result_count": len(results),
+            "avg_score": sum(r.score for r in results) / len(results) if results else 0,
+            "max_score": max((r.score for r in results), default=0),
+            "min_score": min((r.score for r in results), default=0),
+        })
+
+    def print_report(self):
+        """打印评估报告"""
+        print("\n" + "=" * 60)
+        print("RAG 系统性能评估报告")
+        print("=" * 60)
+
+        print(f"\n【文档解析】")
+        print(f"  解析耗时: {self.metrics['parse_time']:.2f}s")
+        print(f"  文本块数: {self.metrics['total_chunks']}")
+        print(f"  图片数量: {self.metrics['total_images']}")
+        print(f"  平均块大小: {self.metrics['parse_time'] / max(self.metrics['total_chunks'], 1) * 1000:.2f}ms/块")
+
+        print(f"\n【文档索引】")
+        print(f"  索引耗时: {self.metrics['index_time']:.2f}s")
+        print(f"  平均索引时间: {self.metrics['index_time'] / max(self.metrics['total_chunks'], 1) * 1000:.2f}ms/块")
+
+        print(f"\n【文档检索】")
+        if self.metrics["queries"]:
+            total_retrieve_time = sum(q["duration"] for q in self.metrics["queries"])
+            avg_retrieve_time = total_retrieve_time / len(self.metrics["queries"])
+            avg_score = sum(q["avg_score"] for q in self.metrics["queries"]) / len(self.metrics["queries"])
+
+            print(f"  查询次数: {len(self.metrics['queries'])}")
+            print(f"  总检索耗时: {total_retrieve_time:.2f}s")
+            print(f"  平均检索耗时: {avg_retrieve_time:.2f}s/查询")
+            print(f"  平均相似度得分: {avg_score:.4f}")
+            print(f"  最高相似度得分: {max(q['max_score'] for q in self.metrics['queries']):.4f}")
+            print(f"  最低相似度得分: {min(q['min_score'] for q in self.metrics['queries']):.4f}")
+        else:
+            print("  无查询数据")
+
+        print(f"\n【整体性能】")
+        total_time = (
+            self.metrics["parse_time"] +
+            self.metrics["index_time"] +
+            sum(q["duration"] for q in self.metrics["queries"])
+        )
+        print(f"  总耗时: {total_time:.2f}s")
+        print("=" * 60 + "\n")
+
+
+async def parse_and_evaluate_pdf(
+    rag: RAGSystem,
+    pdf_path: str,
+    evaluator: RAGEvaluator,
+    collection_name: str
+) -> None:
+    """解析 PDF 并评估解析性能"""
+    print(f"\n{'=' * 60}")
+    print(f"步骤 1: 文档解析 - {Path(pdf_path).name}")
+    print(f"{'=' * 60}")
+
+    if not Path(pdf_path).exists():
+        print(f"✗ PDF 文件不存在: {pdf_path}")
+        return
+
+    start_time = time.time()
+
+    try:
+        # 配置解析选项
+        parse_options = ParseOptions(
+            backend="pipeline",
+            lang="ch",
+            formula_enable=True,
+            table_enable=True,
+        )
+        return_options = ReturnOptions(
+            return_md=True,
+            return_content_list=True,
+            return_images=True,
+        )
+
+        # 解析文档
+        document = await rag.parser.parse(
+            file_path=pdf_path,
+            parse_options=parse_options,
+            return_options=return_options,
+        )
+
+        parse_duration = time.time() - start_time
+
+        print(f"✓ 文档解析完成 (耗时: {parse_duration:.2f}s)")
+        print(f"  标题: {document.title}")
+        print(f"  文本块: {len(document.chunks)}")
+        print(f"  图片: {len(document.images)}")
+        print(f"  内容长度: {len(document.content)} 字符")
+
+        # 记录解析指标
+        evaluator.record_parse_time(parse_duration, len(document.chunks), len(document.images))
+
+        # 步骤 2: 文档索引
+        print(f"\n{'=' * 60}")
+        print(f"步骤 2: 文档索引")
+        print(f"{'=' * 60}")
+
+        # 清空旧集合以避免干扰
+        try:
+            await rag.clear_collection()
+        except Exception as e:
+            print(f"  注意: 清空集合时出错（可能是首次运行）: {e}")
+
+        index_start = time.time()
+
+        # 准备文本块和元数据
+        chunks = [chunk.text for chunk in document.chunks]
+        metadata_list = [
+            {
+                "source": pdf_path,
+                "title": document.title,
+                "page": chunk.page,
+                "section": chunk.section,
+                "chunk_index": chunk.index,
+                **chunk.metadata
+            }
+            for chunk in document.chunks
+        ]
+
+        # 添加到索引
+        doc_ids = await rag.indexer.add_documents(
+            documents=chunks,
+            collection_name=collection_name,
+            metadata_list=metadata_list
+        )
+
+        index_duration = time.time() - index_start
+
+        print(f"✓ 文档索引完成 (耗时: {index_duration:.2f}s)")
+        print(f"  索引块数: {len(doc_ids)}")
+
+        # 记录索引指标
+        evaluator.record_index_time(index_duration)
+
+    except Exception as e:
+        print(f"✗ 解析或索引失败: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+async def retrieve_and_evaluate(
+    rag: RAGSystem,
+    queries: List[str],
+    evaluator: RAGEvaluator
+) -> None:
+    """执行检索并评估检索性能"""
+    print(f"\n{'=' * 60}")
+    print(f"步骤 3: 文档检索与评估")
+    print(f"{'=' * 60}")
+
+    for i, query in enumerate(queries, 1):
+        print(f"\n查询 {i}/{len(queries)}: {query}")
+
+        retrieve_start = time.time()
+
+        try:
+            results = await rag.retrieve(query, top_k=5)
+
+            retrieve_duration = time.time() - retrieve_start
+
+            print(f"  检索耗时: {retrieve_duration:.2f}s")
+            print(f"  结果数量: {len(results)}")
+
+            if results:
+                for j, doc in enumerate(results[:3], 1):
+                    preview = doc.text[:80].replace('\n', ' ')
+                    print(f"    [{j}] 得分={doc.score:.4f} | {preview}...")
+
+                    # 显示元数据
+                    if doc.metadata:
+                        page = doc.metadata.get("page")
+                        section = doc.metadata.get("section")
+                        if page is not None or section:
+                            meta_parts = []
+                            if page is not None:
+                                meta_parts.append(f"页码={page}")
+                            if section:
+                                meta_parts.append(f"章节={section[:20]}")
+                            print(f"         元数据: {', '.join(meta_parts)}")
+            else:
+                print("    未找到相关结果")
+
+            # 记录检索指标
+            evaluator.record_retrieve(query, retrieve_duration, results)
+
+        except Exception as e:
+            print(f"  检索失败: {e}")
+            import traceback
+            traceback.print_exc()
+
+
 async def main():
-    """主函数"""
+    """主函数 - RAG 系统性能评估"""
     # 配置日志
     logger = setup_logger(
         log_level="INFO",
-        log_file="./logs/rag_demo.log"
+        log_file="./logs/rag_eval.log"
     )
-    logger.info("RAG 系统集成示例")
+    logger.info("RAG 系统性能评估示例")
+
+    # 创建评估器
+    evaluator = RAGEvaluator()
+
+    # PDF 文档路径（可配置）
+    pdf_paths = [
+        "/home/zj/ZengKingMorphe/Digital-Human-Disciplinary-Dataset/math_file_part/01高中数学必修第一册-40pages-part1-page1-40.pdf",
+    ]
+
+    # 测试查询
+    test_queries = [
+        "什么是集合",
+        "集合的基本关系有哪些",
+        "什么是充分条件与必要条件",
+        "函数的定义域和值域是什么",
+        "导数的几何意义",
+    ]
+
+    # 集合名称
+    collection_name = "rag_eval_collection"
 
     # 创建 RAG 系统
     async with RAGSystem(
-        collection_name="demo_collection",
-        use_hybrid_retrieval=False,
-        use_rerank=True
+        collection_name=collection_name,
+        use_hybrid_retrieval=False,  # 纯向量检索
+        use_rerank=True  # 启用 Rerank
     ) as rag:
-        # 1. 添加示例文档
-        print("\n=== 步骤 1: 添加文档 ===")
+        print(f"\nRAG 系统配置:")
+        print(f"  集合名称: {collection_name}")
+        print(f"  混合检索: {rag.use_hybrid_retrieval}")
+        print(f"  Rerank: {rag.use_rerank}")
 
-        sample_documents = [
-            {
-                "text": """
-# 数学：函数
+        # 步骤 1-2: 解析和索引 PDF
+        for pdf_path in pdf_paths:
+            await parse_and_evaluate_pdf(rag, pdf_path, evaluator, collection_name)
 
-函数是数学中的基本概念。一个函数 f: A → B 表示从集合 A 到集合 B 的映射。
-对于集合 A 中的每一个元素 a，在集合 B 中都有唯一的一个元素 b 与之对应。
+        # 步骤 3: 检索和评估
+        if evaluator.metrics["total_chunks"] > 0:
+            await retrieve_and_evaluate(rag, test_queries, evaluator)
 
-函数的定义包含三个要素：定义域、值域和对应法则。
-常见的函数类型包括：一次函数、二次函数、指数函数、对数函数等。
-""",
-                "metadata": {
-                    "subject": "数学",
-                    "chapter": "函数",
-                    "level": "高中"
-                }
-            },
-            {
-                "text": """
-# 数学：导数
+        # 打印评估报告
+        evaluator.print_report()
 
-导数是函数在某一点的变化率。如果函数 f 在点 x 处可导，则其导数为：
-f'(x) = lim(h→0) [f(x+h) - f(x)] / h
+        # 保存评估结果到文件
+        results_file = Path("./logs/rag_eval_results.txt")
+        results_file.parent.mkdir(parents=True, exist_ok=True)
 
-导数的几何意义是函数图像在某一点的切线斜率。
-常见的导数公式包括：
-- (x^n)' = nx^(n-1)
-- (sin x)' = cos x
-- (e^x)' = e^x
-""",
-                "metadata": {
-                    "subject": "数学",
-                    "chapter": "导数",
-                    "level": "高中"
-                }
-            },
-            {
-                "text": """
-# 物理：牛顿定律
+        with open(results_file, "w", encoding="utf-8") as f:
+            f.write("RAG 系统性能评估结果\n")
+            f.write("=" * 60 + "\n\n")
+            f.write(f"集合名称: {collection_name}\n")
+            f.write(f"混合检索: {rag.use_hybrid_retrieval}\n")
+            f.write(f"Rerank: {rag.use_rerank}\n\n")
+            f.write(f"解析耗时: {evaluator.metrics['parse_time']:.2f}s\n")
+            f.write(f"文本块数: {evaluator.metrics['total_chunks']}\n")
+            f.write(f"索引耗时: {evaluator.metrics['index_time']:.2f}s\n")
+            f.write(f"查询次数: {len(evaluator.metrics['queries'])}\n\n")
+            f.write("详细查询结果:\n")
+            for i, q in enumerate(evaluator.metrics['queries'], 1):
+                f.write(f"\n  查询 {i}: {q['query']}\n")
+                f.write(f"    耗时: {q['duration']:.2f}s\n")
+                f.write(f"    结果数: {q['result_count']}\n")
+                f.write(f"    平均得分: {q['avg_score']:.4f}\n")
 
-牛顿第一定律（惯性定律）：物体在没有外力作用时保持静止或匀速直线运动。
-
-牛顿第二定律：物体的加速度与作用力成正比，与质量成反比。
-F = ma
-
-牛顿第三定律：作用力与反作用力大小相等、方向相反。
-""",
-                "metadata": {
-                    "subject": "物理",
-                    "chapter": "牛顿定律",
-                    "level": "高中"
-                }
-            },
-            {
-                "text": """
-# 物理：能量
-
-能量是描述物体状态的物理量。常见的能量形式包括：
-- 动能：Ek = 1/2 mv²
-- 势能：重力势能 Ep = mgh
-- 机械能守恒：Ek + Ep = 常数
-
-能量守恒定律是物理学的基本定律之一。
-""",
-                "metadata": {
-                    "subject": "物理",
-                    "chapter": "能量",
-                    "level": "高中"
-                }
-            }
-        ]
-
-        try:
-            # 添加文本文档
-            texts = [doc["text"] for doc in sample_documents]
-            metadatas = [doc["metadata"] for doc in sample_documents]
-
-            doc_ids = await rag.add_text_documents(texts, metadatas)
-            print(f"✓ 成功添加 {len(doc_ids)} 个文档块")
-
-        except Exception as e:
-            print(f"✗ 添加文档失败: {e}")
-            print("  请确保 Ollama 和 ChromaDB 服务正在运行")
-            return
-
-        # 2. 索引 PDF 文档（如果有）
-        print("\n=== 步骤 2: 索引 PDF 文档 ===")
-        pdf_path = "data/sample_pdf/example.pdf"
-
-        if Path(pdf_path).exists():
-            try:
-                doc_ids = await rag.index_document(pdf_path)
-                print(f"✓ 成功索引 PDF 文档: {len(doc_ids)} 个块")
-            except Exception as e:
-                print(f"✗ 索引 PDF 失败: {e}")
-        else:
-            print(f"  未找到 PDF 文件: {pdf_path}")
-
-        # 3. 检索文档
-        print("\n=== 步骤 3: 检索文档 ===")
-
-        queries = [
-            "什么是导数？",
-            "牛顿第二定律的内容是什么？",
-            "动能的计算公式",
-            "函数的定义包含哪些要素？"
-        ]
-
-        for query in queries:
-            print(f"\n查询: {query}")
-            try:
-                results = await rag.retrieve(query, top_k=2)
-
-                if results:
-                    for i, doc in enumerate(results, 1):
-                        print(f"  结果 {i} (得分: {doc.score:.3f}):")
-                        print(f"    {doc.text[:100]}...")
-
-                        # 显示元数据
-                        if doc.metadata:
-                            subject = doc.metadata.get("subject", "未知")
-                            chapter = doc.metadata.get("chapter", "未知")
-                            print(f"    [科目: {subject}, 章节: {chapter}]")
-                else:
-                    print("  未找到相关结果")
-
-            except Exception as e:
-                print(f"  检索失败: {e}")
-
-        # 4. 多查询检索
-        print("\n=== 步骤 4: 多查询检索 ===")
-
-        try:
-            all_results = await rag.retrieve_multiple(
-                queries=queries[:3],
-                top_k=2,
-                deduplicate=True
-            )
-            print(f"从 3 个查询中检索到 {len(all_results)} 个唯一结果")
-
-            for i, doc in enumerate(all_results[:5], 1):
-                print(f"  {i}. {doc.text[:60]}... (得分: {doc.score:.3f})")
-
-        except Exception as e:
-            print(f"✗ 多查询检索失败: {e}")
-
-        # 5. 使用过滤器检索
-        print("\n=== 步骤 5: 使用过滤器检索 ===")
-
-        try:
-            # 只检索数学相关文档
-            results = await rag.retrieve(
-                query="导数的定义",
-                top_k=3,
-                filters={"subject": "数学"}
-            )
-
-            print(f"数学相关结果: {len(results)} 个")
-            for i, doc in enumerate(results, 1):
-                print(f"  {i}. {doc.text[:80]}... (得分: {doc.score:.3f})")
-
-        except Exception as e:
-            print(f"✗ 过滤检索失败: {e}")
-
-        # 6. 获取统计信息
-        print("\n=== 步骤 6: 系统统计 ===")
-
-        try:
-            stats = await rag.get_stats()
-            print(f"集合名称: {stats.get('collection_name')}")
-            print(f"文档数量: {stats.get('count')}")
-            print(f"缓存文档数: {stats.get('document_cache_size')}")
-
-        except Exception as e:
-            print(f"✗ 获取统计信息失败: {e}")
-
-        print("\n=== 示例完成 ===")
+        print(f"评估结果已保存到: {results_file}")
 
 
 if __name__ == "__main__":

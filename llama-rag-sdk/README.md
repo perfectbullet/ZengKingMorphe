@@ -4,11 +4,12 @@
 
 ## 功能特性
 
-- **文档解析**: 集成 MinerU API 服务，将 PDF 解析为 Markdown
+- **文档解析**: 基于 mineru-client SDK 集成 MinerU API 服务，将 PDF 解析为 Markdown
   - 支持结构化内容解析（content_list.json）
   - 支持分页解析、公式解析、表格解析
   - 进度回调支持
   - 直接返回 JSON 或下载 ZIP
+  - 支持批量并发解析
 - **图片描述**: 使用 Qwen2-VL 多模态模型生成图片描述
 - **智能分块**: 支持固定大小、语义分块和混合分块策略
 - **向量索引**: 基于 LlamaIndex 和 ChromaDB 的高效向量存储
@@ -336,7 +337,7 @@ pytest --cov=src tests/
 
 ### MinerUParser
 
-MinerU API 客户端，用于解析 PDF 文档。
+基于 `mineru-client` SDK 的 MinerU API 客户端，用于解析 PDF 文档。
 
 #### 初始化
 
@@ -408,7 +409,12 @@ class ReturnOptions:
 
 ### MinerU API
 
+本 SDK 通过 `mineru-client` 包与 MinerU API 服务交互。
+
 ```bash
+# 安装 mineru-client SDK（已包含在 requirements.txt 中）
+pip install mineru-client>=0.1.0
+
 # 使用 Docker 启动 MinerU API 服务
 docker run -d -p 8000:8000 mineru/mineru-api
 
@@ -476,6 +482,17 @@ docker run -d -p 6006:6006 wkao/bge-reranker-v2-m3:latest
 | `TOP_K` | 检索返回数 | 5 |
 | `USE_RERANK` | 是否使用重排序 | true |
 | `RERANK_BASE_URL` | BGE Reranker 服务地址 | http://192.168.8.233:8091 |
+
+## MinerU Client SDK 集成
+
+MinerUParser 已迁移至 `mineru-client` SDK，带来以下改进：
+
+- **代码精简**: 从 820+ 行减少到约 625 行（~24% 代码减少）
+- **关注点分离**: SDK 处理 HTTP 请求、ZIP 下载、文件解压等底层逻辑
+- **易于维护**: 更新 SDK 即可获得最新功能和 bug 修复
+- **完全兼容**: 保持原有 API 不变，无需修改现有代码
+
+SDK 源码: `/home/zj/MinerU/mineru-client`
 
 ## vLLM 迁移说明
 

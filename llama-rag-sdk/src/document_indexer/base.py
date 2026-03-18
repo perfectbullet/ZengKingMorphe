@@ -4,18 +4,27 @@
 
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional
+from enum import Enum
 from pydantic import BaseModel, Field
+
+
+class ChunkStrategyType(str, Enum):
+    """分块策略类型枚举"""
+
+    FIXED = "fixed"
+    SEMANTIC = "semantic"
+    HYBRID = "hybrid"
 
 
 class ChunkStrategy(BaseModel):
     """分块策略配置"""
 
-    type: str = Field(..., description="策略类型: fixed, semantic, hybrid")
-    chunk_size: int = Field(512, description="分块大小")
-    chunk_overlap: int = Field(50, description="重叠大小")
-    min_chunk_size: int = Field(100, description="最小分块大小")
-    max_chunk_size: int = Field(1024, description="最大分块大小")
-    separator: str = Field("\n\n", description="分隔符")
+    type: ChunkStrategyType = Field(default=ChunkStrategyType.FIXED, description="策略类型")
+    chunk_size: int = Field(default=512, description="分块大小")
+    chunk_overlap: int = Field(default=50, description="重叠大小")
+    min_chunk_size: int = Field(default=100, description="最小分块大小")
+    max_chunk_size: int = Field(default=1024, description="最大分块大小")
+    separator: str = Field(default="\n\n", description="分隔符")
 
 
 class Indexer(ABC):

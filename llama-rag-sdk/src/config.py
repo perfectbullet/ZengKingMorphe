@@ -22,11 +22,11 @@ class Settings(BaseSettings):
 
     # ========== MinerU API 配置 ==========
     mineru_api_url: str = Field(
-        default="http://192.168.8.231:8000",
+        default="http://192.168.8.233:8000",
         description="MinerU API 服务器地址"
     )
     mineru_mcp_url: str = Field(
-        default="http://192.168.8.231:8000",
+        default="http://192.168.8.233:8000",
         description="MinerU API 服务地址（向后兼容）"
     )
     mineru_output_dir: str = Field(

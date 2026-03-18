@@ -9,7 +9,6 @@ from src.document_parser.mineru_client import (
     MinerUParser,
     ParseOptions,
     ReturnOptions,
-    ParseProgress,
     STAGE_NAMES,
     MinerUError,
     FileNotFoundError as MinerUFileNotFoundError,
@@ -31,7 +30,6 @@ __all__ = [
     "MinerUParser",
     "ParseOptions",
     "ReturnOptions",
-    "ParseProgress",
     "STAGE_NAMES",
     # MinerU 异常
     "MinerUError",

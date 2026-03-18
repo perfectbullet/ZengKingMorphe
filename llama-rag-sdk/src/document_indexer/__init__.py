@@ -5,7 +5,11 @@
 """
 
 from src.document_indexer.base import ChunkStrategy, Indexer
-from src.document_indexer.chunker import FixedSizeChunker, SemanticChunker
+from src.document_indexer.chunker import (
+    FixedSizeChunker,
+    SemanticChunker,
+    HybridChunker,
+)
 from src.document_indexer.storage import VectorStore
 from src.document_indexer.indexer import DocumentIndexer
 
@@ -14,6 +18,7 @@ __all__ = [
     "Indexer",
     "FixedSizeChunker",
     "SemanticChunker",
+    "HybridChunker",
     "VectorStore",
     "DocumentIndexer",
 ]

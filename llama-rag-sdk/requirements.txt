@@ -4,6 +4,9 @@ llama-index-embeddings-openai>=0.1.0
 llama-index-vector-stores-chroma>=0.1.0
 llama-index-postprocessor-cohere-rerank>=0.1.0
 
+# MinerU Client SDK（PDF 解析）
+mineru-client>=0.1.0
+
 # vLLM 集成（OpenAI 兼容 API）
 openai>=1.0.0
 

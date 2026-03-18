@@ -22,7 +22,7 @@ class VectorStore:
         port: Optional[int] = None,
         persist_dir: Optional[str] = None,
         use_remote: Optional[bool] = None
-    ):
+    ) -> None:
         """
         初始化向量存储
 
@@ -45,25 +45,19 @@ class VectorStore:
     def _create_client(self) -> chromadb.Client:
         """创建 ChromaDB 客户端"""
         if self.use_remote:
-            # 使用远程服务
             logger.info(f"连接到远程 ChromaDB: {self.host}:{self.port}")
-            client = chromadb.HttpClient(
-                host=self.host,
-                port=self.port
-            )
-        else:
-            # 使用本地存储
-            logger.info(f"使用本地 ChromaDB: {self.persist_dir}")
-            client = chromadb.PersistentClient(
-                path=self.persist_dir,
-                settings=ChromaSettings(
-                    anonymized_telemetry=False,
-                    allow_reset=True
-                )
-            )
-        return client
+            return chromadb.HttpClient(host=self.host, port=self.port)
 
-    def _get_or_create_collection(self):
+        logger.info(f"使用本地 ChromaDB: {self.persist_dir}")
+        return chromadb.PersistentClient(
+            path=self.persist_dir,
+            settings=ChromaSettings(
+                anonymized_telemetry=False,
+                allow_reset=True
+            )
+        )
+
+    def _get_or_create_collection(self) -> chromadb.Collection:
         """获取或创建集合"""
         try:
             collection = self.client.get_collection(name=self.collection_name)
@@ -91,6 +85,9 @@ class VectorStore:
             embeddings: 嵌入向量列表
             documents: 文档内容列表
             metadatas: 元数据列表
+
+        Raises:
+            chromadb.errors.ChromaError: 添加文档失败时抛出
         """
         if metadatas is None:
             metadatas = [{}] * len(ids)
@@ -104,7 +101,7 @@ class VectorStore:
             )
             logger.info(f"添加 {len(ids)} 个文档到集合 {self.collection_name}")
         except Exception as e:
-            logger.error(f"添加文档失败: {e}")
+            logger.error(f"添加文档失败: {e}", exc_info=True)
             raise
 
     def query(
@@ -124,7 +121,10 @@ class VectorStore:
             where_document: 文档内容过滤条件
 
         Returns:
-            查询结果
+            查询结果字典，包含 ids、documents、metadatas、distances 等
+
+        Raises:
+            chromadb.errors.ChromaError: 查询失败时抛出
         """
         try:
             results = self.collection.query(
@@ -133,10 +133,11 @@ class VectorStore:
                 where=where,
                 where_document=where_document
             )
-            logger.debug(f"查询返回 {len(results.get('ids', [[]])[0])} 个结果")
+            result_count = len(results.get('ids', [[]])[0])
+            logger.debug(f"查询返回 {result_count} 个结果")
             return results
         except Exception as e:
-            logger.error(f"查询失败: {e}")
+            logger.error(f"查询失败: {e}", exc_info=True)
             raise
 
     def delete(
@@ -150,12 +151,15 @@ class VectorStore:
         Args:
             ids: 文档 ID 列表
             where: 元数据过滤条件
+
+        Raises:
+            chromadb.errors.ChromaError: 删除文档失败时抛出
         """
         try:
             self.collection.delete(ids=ids, where=where)
             logger.info(f"删除 {len(ids)} 个文档")
         except Exception as e:
-            logger.error(f"删除文档失败: {e}")
+            logger.error(f"删除文档失败: {e}", exc_info=True)
             raise
 
     def get_stats(self) -> Dict[str, Any]:
@@ -163,7 +167,10 @@ class VectorStore:
         获取集合统计信息
 
         Returns:
-            统计信息字典
+            统计信息字典，包含 collection_name、count、metadata
+
+        Raises:
+            chromadb.errors.ChromaError: 获取统计信息失败时抛出
         """
         try:
             count = self.collection.count()
@@ -174,15 +181,20 @@ class VectorStore:
                 "metadata": self.collection.metadata
             }
         except Exception as e:
-            logger.error(f"获取统计信息失败: {e}")
+            logger.error(f"获取统计信息失败: {e}", exc_info=True)
             raise
 
     def reset_collection(self) -> None:
-        """重置集合（删除所有数据）"""
+        """
+        重置集合（删除所有数据）
+
+        Raises:
+            chromadb.errors.ChromaError: 重置集合失败时抛出
+        """
         try:
             self.client.delete_collection(name=self.collection_name)
             self.collection = self._get_or_create_collection()
             logger.info(f"集合 {self.collection_name} 已重置")
         except Exception as e:
-            logger.error(f"重置集合失败: {e}")
+            logger.error(f"重置集合失败: {e}", exc_info=True)
             raise

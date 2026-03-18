@@ -5,27 +5,43 @@
 """
 
 import uuid
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, TYPE_CHECKING
 from loguru import logger
 
-from src.document_indexer.base import Indexer, ChunkStrategy
+from src.document_indexer.base import Indexer, ChunkStrategy, ChunkStrategyType
 from src.document_indexer.chunker import (
     FixedSizeChunker,
     SemanticChunker,
-    HybridChunker
+    HybridChunker,
+    BaseChunker,
 )
 from src.document_indexer.storage import VectorStore
 from src.config import settings
 
-try:
-    from llama_index.embeddings.openai import OpenAIEmbedding
-except ImportError:
-    logger.warning("llama-index-embeddings-openai 未安装，embedding 功能不可用")
-    OpenAIEmbedding = None
+if TYPE_CHECKING:
+    try:
+        from llama_index.embeddings.openai import OpenAIEmbedding
+    except ImportError:
+        OpenAIEmbedding = None
+else:
+    try:
+        from llama_index.embeddings.openai import OpenAIEmbedding
+    except ImportError:
+        logger.warning("llama-index-embeddings-openai 未安装，embedding 功能不可用")
+        OpenAIEmbedding = None
+
+
+class EmbeddingModelNotAvailableError(RuntimeError):
+    """Embedding 模型不可用错误"""
+
+    pass
 
 
 class DocumentIndexer(Indexer):
     """文档索引器"""
+
+    DEFAULT_EMBEDDING_DIMENSION = 1024  # bge-m3 默认维度
+    MIN_TEXT_LENGTH = 3
 
     def __init__(
         self,
@@ -33,7 +49,7 @@ class DocumentIndexer(Indexer):
         embedding_model: Optional[str] = None,
         api_base: Optional[str] = None,
         collection_name: Optional[str] = None
-    ):
+    ) -> None:
         """
         初始化文档索引器
 
@@ -44,7 +60,7 @@ class DocumentIndexer(Indexer):
             collection_name: ChromaDB 集合名称
         """
         self.chunk_strategy = chunk_strategy or ChunkStrategy(
-            type="fixed",
+            type=ChunkStrategyType.FIXED,
             chunk_size=settings.chunk_size,
             chunk_overlap=settings.chunk_overlap
         )
@@ -52,34 +68,45 @@ class DocumentIndexer(Indexer):
         self.embedding_model = embedding_model or settings.vllm_embedding_model
         self.api_base = api_base or settings.vllm_embedding_api_base
 
-        # 初始化分块器
         self.chunker = self._create_chunker()
-
-        # 初始化向量存储
         self.vector_store = VectorStore(collection_name=collection_name)
-
-        # 初始化 Embedding 模型
         self.embed_model = self._create_embedding_model()
 
-    def _create_chunker(self) -> Any:
-        """创建分块器"""
+    def _create_chunker(self) -> BaseChunker:
+        """
+        创建分块器
+
+        Returns:
+            分块器实例
+        """
         strategy_type = self.chunk_strategy.type
 
-        if strategy_type == "fixed":
-            return FixedSizeChunker(self.chunk_strategy)
-        elif strategy_type == "semantic":
-            return SemanticChunker(self.chunk_strategy)
-        elif strategy_type == "hybrid":
-            return HybridChunker(self.chunk_strategy)
-        else:
-            logger.warning(f"未知的分块策略: {strategy_type}，使用固定大小分块")
-            return FixedSizeChunker(self.chunk_strategy)
+        chunker_map = {
+            ChunkStrategyType.FIXED: FixedSizeChunker,
+            ChunkStrategyType.SEMANTIC: SemanticChunker,
+            ChunkStrategyType.HYBRID: HybridChunker,
+        }
 
-    def _create_embedding_model(self) -> Optional[Any]:
-        """创建 Embedding 模型"""
+        chunker_class = chunker_map.get(strategy_type, FixedSizeChunker)
+        if strategy_type not in chunker_map:
+            logger.warning(f"未知的分块策略: {strategy_type}，使用固定大小分块")
+
+        return chunker_class(self.chunk_strategy)
+
+    def _create_embedding_model(self) -> Optional["OpenAIEmbedding"]:
+        """
+        创建 Embedding 模型
+
+        Returns:
+            Embedding 模型实例，如果不可用则返回 None
+
+        Raises:
+            EmbeddingModelNotAvailableError: 当 OpenAIEmbedding 不可用时
+        """
         if OpenAIEmbedding is None:
-            logger.error("OpenAIEmbedding 不可用，请安装 llama-index-embeddings-openai")
-            return None
+            error_msg = "OpenAIEmbedding 不可用，请安装 llama-index-embeddings-openai"
+            logger.error(error_msg)
+            raise EmbeddingModelNotAvailableError(error_msg)
 
         try:
             embed_model = OpenAIEmbedding(
@@ -92,8 +119,9 @@ class DocumentIndexer(Indexer):
             logger.info(f"Embedding 模型初始化成功: {self.embedding_model} @ {self.api_base}")
             return embed_model
         except Exception as e:
-            logger.error(f"初始化 Embedding 模型失败: {e}")
-            return None
+            error_msg = f"初始化 Embedding 模型失败: {e}"
+            logger.error(error_msg, exc_info=True)
+            raise
 
     def _chunk_documents(
         self,
@@ -110,19 +138,17 @@ class DocumentIndexer(Indexer):
         Returns:
             (分块后的文档列表, 元数据列表)
         """
-        chunks = []
-        metadatas = []
+        chunks: List[str] = []
+        metadatas: List[Dict[str, Any]] = []
 
         for i, doc in enumerate(documents):
             base_metadata = metadata_list[i] if metadata_list else {}
 
-            # 分块
             doc_chunks = self.chunker.chunk(doc)
 
             for j, chunk in enumerate(doc_chunks):
                 chunks.append(chunk)
 
-                # 合并元数据
                 chunk_metadata = base_metadata.copy()
                 chunk_metadata.update({
                     "chunk_id": f"{uuid.uuid4()}",
@@ -143,57 +169,75 @@ class DocumentIndexer(Indexer):
 
         Returns:
             嵌入向量列表
+
+        Raises:
+            RuntimeError: Embedding 模型未初始化时抛出
         """
         if self.embed_model is None:
             raise RuntimeError("Embedding 模型未初始化")
 
         try:
-            # 批量调用 vLLM API
             embeddings = self.embed_model.get_text_embedding_batch(texts)
             logger.debug(f"批量生成 {len(embeddings)} 个嵌入向量")
             return embeddings
         except Exception as e:
             logger.warning(f"批量 embedding 失败: {e}，改用逐个调用")
-            embeddings = []
-            failed_count = 0
-            for i, text in enumerate(texts):
-                # 跳过空文本或过短文本
-                if not text or len(text.strip()) < 3:
-                    logger.warning(f"跳过空文本或过短文本 (索引 {i})")
-                    embeddings.append(None)  # 保持索引对应关系
-                    failed_count += 1
-                    continue
 
-                # 清理文本：移除多余空白和控制字符
-                cleaned_text = text.strip()
-                if not cleaned_text:
-                    logger.warning(f"跳过空白文本 (索引 {i})")
-                    embeddings.append(None)
-                    failed_count += 1
-                    continue
+            return self._generate_embeddings_fallback(texts)
 
-                try:
-                    emb = self.embed_model.get_text_embedding(cleaned_text)
-                    embeddings.append(emb)
-                except Exception as e:
-                    logger.warning(f"单个 embedding 失败 (索引 {i}): {e}, 文本长度: {len(cleaned_text)}")
-                    embeddings.append(None)
-                    failed_count += 1
+    def _generate_embeddings_fallback(self, texts: List[str]) -> List[List[float]]:
+        """
+        逐个生成嵌入向量的回退方法
 
-                if (i + 1) % 10 == 0:
-                    logger.debug(f"已处理 {i + 1}/{len(texts)} 个嵌入向量")
+        Args:
+            texts: 文本列表
 
-            logger.info(f"逐个生成完成: 成功 {len(embeddings) - failed_count}/{len(embeddings)}, 失败 {failed_count}")
+        Returns:
+            嵌入向量列表，失败的条目使用零向量
+        """
+        embeddings: List[Optional[List[float]]] = []
+        failed_count = 0
 
-            # 移除失败的 embedding，保持 ids、embeddings、documents 对应
-            # ChromaDB 可以处理 None embedding，但为了安全起见使用零向量
-            zero_emb = [0.0] * 1024  # bge-m3 默认维度
-            embeddings = [emb if emb is not None else zero_emb for emb in embeddings]
+        for i, text in enumerate(texts):
+            cleaned_text = text.strip()
 
-            return embeddings
-        except Exception as e:
-            logger.error(f"生成嵌入向量失败: {e}")
-            raise
+            if len(cleaned_text) < self.MIN_TEXT_LENGTH:
+                logger.warning(f"跳过过短文本 (索引 {i}, 长度: {len(cleaned_text)})")
+                embeddings.append(None)
+                failed_count += 1
+                continue
+
+            try:
+                emb = self.embed_model.get_text_embedding(cleaned_text)
+                embeddings.append(emb)
+            except Exception as e:
+                logger.warning(
+                    f"单个 embedding 失败 (索引 {i}): {e}, 文本长度: {len(cleaned_text)}"
+                )
+                embeddings.append(None)
+                failed_count += 1
+
+            if (i + 1) % 10 == 0:
+                logger.debug(f"已处理 {i + 1}/{len(texts)} 个嵌入向量")
+
+        success_count = len(embeddings) - failed_count
+        logger.info(
+            f"逐个生成完成: 成功 {success_count}/{len(embeddings)}, 失败 {failed_count}"
+        )
+
+        # 使用零向量替换失败的 embedding
+        zero_emb = [0.0] * self.DEFAULT_EMBEDDING_DIMENSION
+        return [emb if emb is not None else zero_emb for emb in embeddings]
+
+    def _ensure_collection(self, collection_name: str) -> None:
+        """
+        确保使用指定的集合
+
+        Args:
+            collection_name: 集合名称
+        """
+        if collection_name != self.vector_store.collection_name:
+            self.vector_store = VectorStore(collection_name=collection_name)
 
     async def create_index(
         self,
@@ -213,18 +257,12 @@ class DocumentIndexer(Indexer):
         logger.info(f"开始创建索引，文档数量: {len(documents)}")
 
         if collection_name:
-            self.vector_store = VectorStore(collection_name=collection_name)
+            self._ensure_collection(collection_name)
 
-        # 分块
         chunks, metadatas = self._chunk_documents(documents)
-
-        # 生成嵌入向量
         embeddings = self._generate_embeddings(chunks)
-
-        # 生成文档 ID
         doc_ids = [str(uuid.uuid4()) for _ in chunks]
 
-        # 添加到向量存储
         self.vector_store.add(
             ids=doc_ids,
             embeddings=embeddings,
@@ -252,22 +290,13 @@ class DocumentIndexer(Indexer):
         Returns:
             文档 ID 列表
         """
-        # 确保使用指定的集合
-        if collection_name != self.vector_store.collection_name:
-            self.vector_store = VectorStore(collection_name=collection_name)
-
+        self._ensure_collection(collection_name)
         logger.info(f"开始添加文档，数量: {len(documents)}")
 
-        # 分块
         chunks, metadatas = self._chunk_documents(documents, metadata_list)
-
-        # 生成嵌入向量
         embeddings = self._generate_embeddings(chunks)
-
-        # 生成文档 ID
         doc_ids = [str(uuid.uuid4()) for _ in chunks]
 
-        # 添加到向量存储
         self.vector_store.add(
             ids=doc_ids,
             embeddings=embeddings,
@@ -293,16 +322,14 @@ class DocumentIndexer(Indexer):
         Returns:
             是否成功
         """
-        # 确保使用指定的集合
-        if collection_name != self.vector_store.collection_name:
-            self.vector_store = VectorStore(collection_name=collection_name)
+        self._ensure_collection(collection_name)
 
         try:
             self.vector_store.delete(ids=document_ids)
             logger.info(f"文档删除成功: {len(document_ids)} 个")
             return True
         except Exception as e:
-            logger.error(f"文档删除失败: {e}")
+            logger.error(f"文档删除失败: {e}", exc_info=True)
             return False
 
     async def get_collection_stats(
@@ -318,8 +345,5 @@ class DocumentIndexer(Indexer):
         Returns:
             统计信息字典
         """
-        # 确保使用指定的集合
-        if collection_name != self.vector_store.collection_name:
-            self.vector_store = VectorStore(collection_name=collection_name)
-
+        self._ensure_collection(collection_name)
         return self.vector_store.get_stats()

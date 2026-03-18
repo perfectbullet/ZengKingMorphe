@@ -330,10 +330,9 @@ class RAGSystem:
 
     async def close(self) -> None:
         """关闭资源"""
-        if self._parser:
-            await self._parser.close()
-        if self._image_descriptor:
-            await self._image_descriptor.close()
+        # MinerUParser 和 ImageDescriptor 不需要显式关闭（基于 SDK）
+        # VectorStore 会自动处理连接清理
+        self._document_cache.clear()
         logger.info("RAG 系统资源已关闭")
 
     async def __aenter__(self):
