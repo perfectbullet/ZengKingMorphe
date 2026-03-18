@@ -2,9 +2,11 @@
 图片描述处理器
 
 使用多模态模型（Qwen2-VL）为图片生成描述
+通过 vLLM OpenAI 兼容 API 调用
 """
 
 import asyncio
+import base64
 from pathlib import Path
 from typing import List, Optional
 import aiohttp
@@ -20,19 +22,23 @@ class ImageDescriptor:
     def __init__(
         self,
         model_name: Optional[str] = None,
-        base_url: Optional[str] = None
+        api_base: Optional[str] = None,
+        api_key: Optional[str] = None
     ):
         """
         初始化图片描述生成器
 
         Args:
             model_name: 模型名称（如 qwen2-vl:latest）
-            base_url: 服务地址（如 Ollama 地址）
+            api_base: vLLM 服务地址
+            api_key: API Key（不需要真实 key）
         """
         self.model_name = model_name or settings.qwen_vl_model
-        self.base_url = base_url or settings.qwen_vl_base_url
+        self.api_base = api_base or settings.qwen_vl_base_url
+        self.api_key = api_key or settings.vllm_api_key
         self.session: Optional[aiohttp.ClientSession] = None
         self.enabled = settings.enable_image_description
+        self.use_ollama = True  # 当前仍使用 Ollama 运行 Qwen2-VL
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """获取或创建 HTTP 会话"""
@@ -45,6 +51,91 @@ class ImageDescriptor:
         """关闭 HTTP 会话"""
         if self.session and not self.session.closed:
             await self.session.close()
+
+    def _encode_image(self, image_path: str) -> str:
+        """
+        将图片编码为 base64
+
+        Args:
+            image_path: 图片文件路径
+
+        Returns:
+            base64 编码的图片字符串
+        """
+        with open(image_path, 'rb') as f:
+            return base64.b64encode(f.read()).decode('utf-8')
+
+    async def _describe_image_vllm(
+        self,
+        image_path: str,
+        prompt: str = "请详细描述这张图片的内容，包括其中的文字、公式、图表等所有可见元素。"
+    ) -> str:
+        """
+        使用 vLLM OpenAI 兼容 API 生成图片描述
+
+        Args:
+            image_path: 图片文件路径
+            prompt: 提示词
+
+        Returns:
+            图片描述文本
+        """
+        if not self.api_base:
+            raise ValueError("未配置 Qwen2-VL 服务地址")
+
+        session = await self._get_session()
+
+        # 编码图片
+        image_base64 = self._encode_image(image_path)
+
+        # 准备请求（OpenAI Chat Completions 格式）
+        url = f"{self.api_base.rstrip('/')}/v1/chat/completions"
+        headers = {
+            "Content-Type": "application/json",
+        }
+        if self.api_key and self.api_key != "not-needed":
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        payload = {
+            "model": self.model_name,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": prompt
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{image_base64}"
+                            }
+                        }
+                    ]
+                }
+            ],
+            "max_tokens": 500,
+            "stream": False
+        }
+
+        try:
+            async with session.post(url, json=payload, headers=headers) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    raise Exception(
+                        f"vLLM API 调用失败: {response.status} - {error_text}"
+                    )
+
+                result = await response.json()
+                return result['choices'][0]['message']['content']
+
+        except aiohttp.ClientError as e:
+            logger.error(f"vLLM API 请求错误: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"图片描述生成错误: {e}")
+            raise
 
     async def _describe_image_ollama(
         self,
@@ -61,7 +152,7 @@ class ImageDescriptor:
         Returns:
             图片描述文本
         """
-        if not self.base_url:
+        if not self.api_base:
             raise ValueError("未配置 Qwen2-VL 服务地址")
 
         session = await self._get_session()
@@ -71,6 +162,7 @@ class ImageDescriptor:
             image_data = f.read()
 
         # 准备请求
+        url = f"{self.api_base.rstrip('/')}/api/generate"
         payload = {
             "model": self.model_name,
             "prompt": prompt,
@@ -79,11 +171,7 @@ class ImageDescriptor:
         }
 
         try:
-            async with session.post(
-                f"{self.base_url}/api/generate",
-                json=payload,
-                headers={"Content-Type": "application/json"}
-            ) as response:
+            async with session.post(url, json=payload, headers={"Content-Type": "application/json"}) as response:
                 if response.status != 200:
                     error_text = await response.text()
                     raise Exception(
@@ -135,6 +223,8 @@ class ImageDescriptor:
         final_prompt = prompt or default_prompt
 
         try:
+            # 目前仍使用 Ollama 运行 Qwen2-VL
+            # 未来可切换到 vLLM
             description = await self._describe_image_ollama(image_path, final_prompt)
             logger.info(f"图片描述生成完成: {image_path}")
             return description

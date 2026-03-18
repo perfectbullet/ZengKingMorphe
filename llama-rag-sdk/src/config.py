@@ -20,18 +20,42 @@ class Settings(BaseSettings):
         extra="ignore"
     )
 
-    # ========== MinerU MCP 配置 ==========
-    mineru_mcp_url: str = Field(
-        default="http://localhost:8001",
-        description="MinerU MCP 服务地址"
+    # ========== MinerU API 配置 ==========
+    mineru_api_url: str = Field(
+        default="http://192.168.8.231:8000",
+        description="MinerU API 服务器地址"
     )
-    use_local_mineru: bool = Field(
-        default=True,
-        description="是否使用本地 MinerU"
+    mineru_mcp_url: str = Field(
+        default="http://192.168.8.231:8000",
+        description="MinerU API 服务地址（向后兼容）"
     )
     mineru_output_dir: str = Field(
         default="./data/output",
         description="MinerU 输出目录"
+    )
+    mineru_backend: str = Field(
+        default="pipeline",
+        description="MinerU 解析后端 (pipeline/vlm-auto-engine/hybrid-auto-engine)"
+    )
+    mineru_parse_method: str = Field(
+        default="auto",
+        description="MinerU 解析方法 (auto/txt/ocr)"
+    )
+    mineru_lang: str = Field(
+        default="ch",
+        description="MinerU 语言代码 (ch=中文, en=英文)"
+    )
+    mineru_timeout: int = Field(
+        default=1800,
+        description="MinerU API 请求超时时间（秒）"
+    )
+    mineru_formula_enable: bool = Field(
+        default=True,
+        description="是否启用公式解析"
+    )
+    mineru_table_enable: bool = Field(
+        default=True,
+        description="是否启用表格解析"
     )
 
     # ========== vLLM Embedding 配置 ==========

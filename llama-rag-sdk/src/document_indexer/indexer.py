@@ -18,10 +18,10 @@ from src.document_indexer.storage import VectorStore
 from src.config import settings
 
 try:
-    from llama_index.embeddings.ollama import OllamaEmbedding
+    from llama_index.embeddings.openai import OpenAIEmbedding
 except ImportError:
-    logger.warning("llama-index-embeddings-ollama 未安装，embedding 功能不可用")
-    OllamaEmbedding = None
+    logger.warning("llama-index-embeddings-openai 未安装，embedding 功能不可用")
+    OpenAIEmbedding = None
 
 
 class DocumentIndexer(Indexer):
@@ -31,7 +31,7 @@ class DocumentIndexer(Indexer):
         self,
         chunk_strategy: Optional[ChunkStrategy] = None,
         embedding_model: Optional[str] = None,
-        ollama_base_url: Optional[str] = None,
+        api_base: Optional[str] = None,
         collection_name: Optional[str] = None
     ):
         """
@@ -40,7 +40,7 @@ class DocumentIndexer(Indexer):
         Args:
             chunk_strategy: 分块策略
             embedding_model: Embedding 模型名称
-            ollama_base_url: Ollama 服务地址
+            api_base: vLLM Embedding API 地址
             collection_name: ChromaDB 集合名称
         """
         self.chunk_strategy = chunk_strategy or ChunkStrategy(
@@ -49,8 +49,8 @@ class DocumentIndexer(Indexer):
             chunk_overlap=settings.chunk_overlap
         )
 
-        self.embedding_model = embedding_model or settings.ollama_embedding_model
-        self.ollama_base_url = ollama_base_url or settings.ollama_base_url
+        self.embedding_model = embedding_model or settings.vllm_embedding_model
+        self.api_base = api_base or settings.vllm_embedding_api_base
 
         # 初始化分块器
         self.chunker = self._create_chunker()
@@ -77,16 +77,19 @@ class DocumentIndexer(Indexer):
 
     def _create_embedding_model(self) -> Optional[Any]:
         """创建 Embedding 模型"""
-        if OllamaEmbedding is None:
-            logger.error("OllamaEmbedding 不可用，请安装 llama-index-embeddings-ollama")
+        if OpenAIEmbedding is None:
+            logger.error("OpenAIEmbedding 不可用，请安装 llama-index-embeddings-openai")
             return None
 
         try:
-            embed_model = OllamaEmbedding(
+            embed_model = OpenAIEmbedding(
                 model_name=self.embedding_model,
-                base_url=self.ollama_base_url
+                api_base=self.api_base,
+                api_key=settings.vllm_api_key,
+                embed_batch_size=32,
+                timeout=300,
             )
-            logger.info(f"Embedding 模型初始化成功: {self.embedding_model}")
+            logger.info(f"Embedding 模型初始化成功: {self.embedding_model} @ {self.api_base}")
             return embed_model
         except Exception as e:
             logger.error(f"初始化 Embedding 模型失败: {e}")
@@ -145,8 +148,48 @@ class DocumentIndexer(Indexer):
             raise RuntimeError("Embedding 模型未初始化")
 
         try:
+            # 批量调用 vLLM API
             embeddings = self.embed_model.get_text_embedding_batch(texts)
-            logger.debug(f"生成 {len(embeddings)} 个嵌入向量")
+            logger.debug(f"批量生成 {len(embeddings)} 个嵌入向量")
+            return embeddings
+        except Exception as e:
+            logger.warning(f"批量 embedding 失败: {e}，改用逐个调用")
+            embeddings = []
+            failed_count = 0
+            for i, text in enumerate(texts):
+                # 跳过空文本或过短文本
+                if not text or len(text.strip()) < 3:
+                    logger.warning(f"跳过空文本或过短文本 (索引 {i})")
+                    embeddings.append(None)  # 保持索引对应关系
+                    failed_count += 1
+                    continue
+
+                # 清理文本：移除多余空白和控制字符
+                cleaned_text = text.strip()
+                if not cleaned_text:
+                    logger.warning(f"跳过空白文本 (索引 {i})")
+                    embeddings.append(None)
+                    failed_count += 1
+                    continue
+
+                try:
+                    emb = self.embed_model.get_text_embedding(cleaned_text)
+                    embeddings.append(emb)
+                except Exception as e:
+                    logger.warning(f"单个 embedding 失败 (索引 {i}): {e}, 文本长度: {len(cleaned_text)}")
+                    embeddings.append(None)
+                    failed_count += 1
+
+                if (i + 1) % 10 == 0:
+                    logger.debug(f"已处理 {i + 1}/{len(texts)} 个嵌入向量")
+
+            logger.info(f"逐个生成完成: 成功 {len(embeddings) - failed_count}/{len(embeddings)}, 失败 {failed_count}")
+
+            # 移除失败的 embedding，保持 ids、embeddings、documents 对应
+            # ChromaDB 可以处理 None embedding，但为了安全起见使用零向量
+            zero_emb = [0.0] * 1024  # bge-m3 默认维度
+            embeddings = [emb if emb is not None else zero_emb for emb in embeddings]
+
             return embeddings
         except Exception as e:
             logger.error(f"生成嵌入向量失败: {e}")

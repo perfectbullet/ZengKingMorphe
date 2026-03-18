@@ -6,7 +6,11 @@ import pytest
 from pathlib import Path
 
 from src.document_parser.base import ParsedDocument, TextChunk, ImageInfo
-from src.document_parser.mineru_client import MinerUParser
+from src.document_parser import (
+    MinerUParser,
+    ParseOptions,
+    ReturnOptions,
+)
 from src.document_parser.image_processor import ImageDescriptor
 
 
@@ -33,8 +37,51 @@ class TestMinerUParser:
 
     def test_parser_initialization(self, mineru_parser):
         """测试解析器初始化"""
-        assert mineru_parser.mcp_url is not None
+        assert mineru_parser.api_url is not None
+        assert mineru_parser.endpoint is not None
         assert mineru_parser.output_dir is not None
+
+    def test_parse_options(self):
+        """测试解析选项"""
+        options = ParseOptions(
+            backend="pipeline",
+            parse_method="auto",
+            lang="ch",
+            formula_enable=True,
+            table_enable=True,
+            start_page=0,
+            end_page=10,
+        )
+
+        assert options.backend == "pipeline"
+        assert options.parse_method == "auto"
+        assert options.lang == "ch"
+        assert options.formula_enable is True
+        assert options.table_enable is True
+        assert options.start_page == 0
+        assert options.end_page == 10
+
+    def test_return_options(self):
+        """测试返回选项"""
+        options = ReturnOptions(
+            return_md=True,
+            return_middle_json=False,
+            return_model_output=False,
+            return_content_list=True,
+            return_images=True,
+        )
+
+        assert options.return_md is True
+        assert options.return_middle_json is False
+        assert options.return_content_list is True
+        assert options.return_images is True
+
+    @pytest.mark.asyncio
+    async def test_health_check(self, mineru_parser):
+        """测试健康检查"""
+        is_healthy = await mineru_parser.health_check()
+        # 不断言结果，因为服务可能不可用
+        assert isinstance(is_healthy, bool)
 
     @pytest.mark.asyncio
     async def test_parse_document(self, mineru_parser, sample_pdf_path):
@@ -51,6 +98,30 @@ class TestMinerUParser:
         assert len(document.chunks) > 0
 
     @pytest.mark.asyncio
+    async def test_parse_with_options(self, mineru_parser, sample_pdf_path):
+        """测试使用自定义选项解析文档"""
+        pytest.skip("需要 MinerU 服务运行")
+
+        parse_options = ParseOptions(
+            backend="pipeline",
+            parse_method="auto",
+            start_page=0,
+            end_page=2,  # 只解析前 2 页
+        )
+        return_options = ReturnOptions(
+            return_md=True,
+            return_content_list=True,
+        )
+
+        document = await mineru_parser.parse(
+            sample_pdf_path,
+            parse_options=parse_options,
+            return_options=return_options,
+        )
+
+        assert isinstance(document, ParsedDocument)
+
+    @pytest.mark.asyncio
     async def test_parse_batch(self, mineru_parser):
         """测试批量解析"""
         pytest.skip("需要 MinerU 服务运行")
@@ -61,6 +132,15 @@ class TestMinerUParser:
         assert len(documents) == len(file_paths)
         for doc in documents:
             assert isinstance(doc, ParsedDocument)
+
+    @pytest.mark.asyncio
+    async def test_parse_to_memory(self, mineru_parser, sample_pdf_path):
+        """测试直接返回 JSON"""
+        pytest.skip("需要 MinerU 服务运行")
+
+        result = await mineru_parser.parse_to_memory(sample_pdf_path)
+
+        assert isinstance(result, dict)
 
 
 class TestImageDescriptor:

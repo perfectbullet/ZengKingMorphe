@@ -1,5 +1,14 @@
 """
 检索测试示例
+
+演示如何使用 Retriever 进行文档检索。
+
+功能说明：
+- 创建 Retriever 实例
+- 执行单一查询检索
+- 执行多查询检索（带去重）
+
+注意：当前所有 Retriever 实例都使用统一的混合检索 + Rerank 策略。
 """
 
 import asyncio
@@ -101,65 +110,36 @@ async def main():
 
     except Exception as e:
         print(f"✗ 索引创建失败: {e}")
-        print("  请确保 Ollama 和 ChromaDB 服务正在运行")
+        print("  请确保 vLLM embedding 服务和 ChromaDB 服务正在运行")
         return
 
-    # 3. 测试不同检索策略
-    print("\n=== 步骤 3: 测试检索策略 ===")
+    # 3. 测试检索功能
+    print("\n=== 步骤 3: 测试检索 ===")
 
     try:
         vector_store = VectorStore(collection_name="retrieve_test")
 
-        # 测试向量检索
-        print("\n--- 向量检索 ---")
-        vector_retriever = Retriever(
-            vector_store=vector_store,
-            use_hybrid=False,
-            use_rerank=False
-        )
+        # 创建 Retriever（统一使用混合检索 + Rerank 策略）
+        retriever = Retriever(vector_store=vector_store)
 
-        query = "什么是导数？"
-        results = await vector_retriever.retrieve(query, top_k=3)
+        # 示例查询
+        queries = [
+            "什么是导数？",
+            "牛顿第二定律的内容是什么？",
+            "动能的公式是什么？"
+        ]
 
-        print(f"查询: {query}")
-        for i, doc in enumerate(results, 1):
-            print(f"  结果 {i} (得分: {doc.score:.3f}):")
-            print(f"    {doc.text[:80]}...")
+        for query in queries:
+            print(f"\n--- 查询: {query} ---")
+            results = await retriever.retrieve(query, top_k=3)
 
-        # 测试混合检索
-        print("\n--- 混合检索 ---")
-        hybrid_retriever = Retriever(
-            vector_store=vector_store,
-            use_hybrid=True,
-            use_rerank=False
-        )
-
-        query = "牛顿第二定律的内容是什么？"
-        results = await hybrid_retriever.retrieve(query, top_k=3)
-
-        print(f"查询: {query}")
-        for i, doc in enumerate(results, 1):
-            print(f"  结果 {i} (得分: {doc.score:.3f}):")
-            print(f"    {doc.text[:80]}...")
-
-        # 测试重排序检索
-        print("\n--- 重排序检索 ---")
-        rerank_retriever = Retriever(
-            vector_store=vector_store,
-            use_hybrid=False,
-            use_rerank=True
-        )
-
-        query = "动能的公式是什么？"
-        results = await rerank_retriever.retrieve(query, top_k=3)
-
-        print(f"查询: {query}")
-        for i, doc in enumerate(results, 1):
-            print(f"  结果 {i} (得分: {doc.score:.3f}):")
-            print(f"    {doc.text[:80]}...")
+            for i, doc in enumerate(results, 1):
+                print(f"  结果 {i} (得分: {doc.score:.3f}):")
+                print(f"    {doc.text[:80]}...")
 
     except Exception as e:
         print(f"✗ 检索测试失败: {e}")
+        print("  请确保 vLLM embedding、ChromaDB 和 BGE Reranker 服务正在运行")
 
     # 4. 多查询检索
     print("\n=== 步骤 4: 多查询检索 ===")

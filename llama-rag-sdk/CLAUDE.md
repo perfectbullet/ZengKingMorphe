@@ -6,12 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 LlamaRAG SDK is a Python RAG (Retrieval-Augmented Generation) SDK built on LlamaIndex, optimized for textbook documents (Chinese language and high school math). It supports image description via Qwen2-VL and formula parsing.
 
-**Tech Stack**: Python 3.10+, LlamaIndex + ChromaDB + Ollama + Pydantic Settings + asyncio
+**Tech Stack**: Python 3.10+, LlamaIndex + ChromaDB + vLLM + Pydantic Settings + asyncio
 
 **External Services**:
-- **Ollama** - Embedding (bge-m3) and multimodal models (qwen2-vl)
+- **vLLM** - Embedding (bge-m3) and chat models via OpenAI-compatible API
 - **ChromaDB** - Vector storage (remote: 192.168.8.233:8200, or local)
 - **MinerU MCP** - PDF to Markdown parsing (localhost:8001)
+- **Ollama** - Qwen2-VL multimodal model for image description (temporary)
 
 ---
 
@@ -19,7 +20,15 @@ LlamaRAG SDK is a Python RAG (Retrieval-Augmented Generation) SDK built on Llama
 
 ### Python Environment
 
+**Python Interpreter**: `/home/zj/miniconda3/envs/morphe/bin/python`
+
 ```bash
+# Activate morphe environment (optional)
+conda activate morphe
+
+# Or use full path for python commands
+/home/zj/miniconda3/envs/morphe/bin/python script.py
+
 # Install dependencies
 pip install -r requirements.txt
 
@@ -78,13 +87,16 @@ python examples/retrieve_test.py
 
 # Full RAG system demo
 python examples/rag_system_demo.py
+
+# vLLM embedding test
+python examples/test_vllm_with_llamaindex.py
 ```
 
 ---
 
 ## Configuration
 
-The SDK uses Pydantic Settings (`src/config.py`) to manage all environment variables. Configuration is loaded from `.env` file in the project root.
+The SDK uses Pydantic Settings (`src/config.py`) to manage all environment variables. Configuration is loaded from `.env` file in project root.
 
 **Setup**:
 ```bash
@@ -100,7 +112,8 @@ nano .env
 | Category | Key Env Vars | Default |
 |----------|--------------|---------|
 | MinerU | `MINERU_MCP_URL`, `USE_LOCAL_MINERU`, `MINERU_OUTPUT_DIR` | http://localhost:8001 |
-| Ollama | `OLLAMA_BASE_URL`, `OLLAMA_EMBEDDING_MODEL`, `OLLAMA_CHAT_MODEL` | bge-m3 |
+| vLLM Embedding | `VLLM_EMBEDDING_BASE_URL`, `VLLM_EMBEDDING_MODEL` | http://192.168.8.233:8092, BAAI/bge-m3 |
+| vLLM Chat | `VLLM_CHAT_BASE_URL`, `VLLM_CHAT_MODEL` | http://192.168.8.233:8092 |
 | ChromaDB | `CHROMA_HOST`, `CHROMA_PORT`, `CHROMA_COLLECTION_NAME` | documents |
 | Image | `QWEN_VL_MODEL`, `ENABLE_IMAGE_DESCRIPTION` | qwen2-vl:latest |
 | Indexing | `CHUNK_SIZE`, `CHUNK_OVERLAP`, `TOP_K` | 512, 50, 5 |
@@ -111,7 +124,7 @@ nano .env
 from src.config import settings
 
 # All config values are available on the settings instance
-model = settings.ollama_embedding_model
+model = settings.vllm_embedding_model
 host = settings.chroma_host
 ```
 
@@ -266,7 +279,7 @@ class NewRetrieval(RetrievalStrategy):
 
 ### Extending RAGSystem
 
-Add new methods to `src/rag_system.py` following the existing pattern:
+Add new methods to `src/rag_system.py` following existing pattern:
 ```python
 async def my_new_feature(self, param: str) -> ResultType:
     """Description here"""
@@ -316,9 +329,9 @@ rag-sdk/
 
 ### Common Issues
 
-**Issue**: `Connection refused` when connecting to Ollama
-- **Cause**: Ollama service not running
-- **Fix**: Ensure `OLLAMA_BASE_URL` is correct and Ollama is running
+**Issue**: `Connection refused` when connecting to vLLM
+- **Cause**: vLLM service not running
+- **Fix**: Ensure `VLLM_EMBEDDING_BASE_URL` is correct and vLLM is running
 
 **Issue**: ChromaDB connection errors
 - **Cause**: ChromaDB not running or wrong port
@@ -343,21 +356,36 @@ Check service connectivity:
 ```python
 import httpx
 async with httpx.AsyncClient() as client:
-    response = await client.get("http://192.168.8.233:11434/api/tags")
-    print(response.json())  # Lists available Ollama models
+    response = await client.get("http://192.168.8.233:8092/v1/models")
+    print(response.json())  # Lists available vLLM models
 ```
 
 ---
 
 ## External Dependencies
 
-### Ollama Setup
+### vLLM Setup
+
+**Embedding Service** (BGE-M3):
+```bash
+# vLLM should be running at http://192.168.8.233:8092
+# Provides OpenAI-compatible API
+# Model: BAAI/bge-m3
+# API Base: http://192.168.8.233:8092/v1
+```
+
+**Configuration**:
+```bash
+VLLM_EMBEDDING_BASE_URL=http://192.168.8.233:8092
+VLLM_EMBEDDING_MODEL=BAAI/bge-m3
+VLLM_API_KEY=not-needed
+```
+
+### Ollama Setup (Image Description Only)
 
 ```bash
-# Pull required models
-ollama pull bge-m3              # Embedding model
-ollama pull qwen2-vl:latest    # Image description model
-ollama pull deepseek-coder     # Chat model (optional)
+# Pull Qwen2-VL model for image description
+ollama pull qwen2-vl:latest
 
 # Verify installation
 ollama list
