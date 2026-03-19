@@ -1,0 +1,82 @@
+version: '3.8'
+
+services:
+  # ========== vLLM 推理服务 ==========
+  qwen25-math-vllm:
+    image: docker.m.daocloud.io/vllm/vllm-openai:v0.11.0  # 官方vLLM镜像 [[41]]
+    container_name: qwen25-math-vllm
+    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: ${GPU_COUNT:-1}  # 通过.env配置
+              capabilities: [gpu]
+    ports:
+      - "8095:8095"
+    volumes:
+      # 挂载模型缓存，避免重复下载
+      - ./models:/root/.cache/huggingface
+      # 可选：挂载本地已下载模型
+      # - /path/to/local/models:/models:ro
+    environment:
+      - HF_TOKEN=${HF_TOKEN:-}
+      - VLLM_USE_MODELSCOPE=${USE_MODELSCOPE:-false}  # 国内用户设为true [[1]]
+      - MODEL_ID=${MODEL_ID:-Qwen/Qwen2.5-Math-7B-Instruct}
+    command: >
+      --model ${MODEL_ID:-Qwen/Qwen2.5-Math-7B-Instruct}
+      --tensor-parallel-size ${TP_SIZE:-1}
+      --gpu-memory-utilization ${GPU_MEM_UTIL:-0.9}
+      --max-model-len ${MAX_LEN:-8192}
+      --dtype auto
+      --enable-auto-tool-choice  # 启用TIR工具调用支持
+      --tool-call-parser qwen
+      --port 8095
+      --host 0.0.0.0
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8095/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    restart: unless-stopped
+    networks:
+      - qwen-net
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "200m"
+        max-file: "3"
+
+  # ========== Qwen-Agent (TIR模式可选) ==========
+  # 仅当需要Tool-Integrated Reasoning时启用
+  qwen-agent:
+    build:
+      context: ./qwen-agent
+      dockerfile: Dockerfile.agent
+    container_name: qwen25-math-agent
+    depends_on:
+      qwen25-math-vllm:
+        condition: service_healthy
+    environment:
+      - VLLM_API_BASE=http://qwen25-math-vllm:8000/v1
+      - MODEL_NAME=${MODEL_ID:-Qwen/Qwen2.5-Math-7B-Instruct}
+      - PYTHON_EXECUTOR_MODE=${EXECUTOR_MODE:-local}  # local|sandbox
+    volumes:
+      - ./workspace:/workspace  # 代码执行工作目录
+      - ./qwen-agent/config.json:/app/config.json:ro
+    ports:
+      - "${AGENT_PORT:-8001}:8001"
+    restart: unless-stopped
+    networks:
+      - qwen-net
+    # ⚠️ 生产环境建议添加安全限制
+    # security_opt:
+    #   - no-new-privileges:true
+    #   - apparmor=unconfined  # 根据需求调整
+
+networks:
+  qwen-net:
+    driver: bridge
+    name: qwen25-math-net
