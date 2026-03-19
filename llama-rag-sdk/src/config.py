@@ -4,7 +4,6 @@
 使用 Pydantic Settings 管理所有环境变量配置
 """
 
-from typing import Optional
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pathlib import Path
@@ -22,12 +21,8 @@ class Settings(BaseSettings):
 
     # ========== MinerU API 配置 ==========
     mineru_api_url: str = Field(
-        default="http://192.168.8.233:8000",
-        description="MinerU API 服务器地址"
-    )
-    mineru_mcp_url: str = Field(
-        default="http://192.168.8.233:8000",
-        description="MinerU API 服务地址（向后兼容）"
+        ...,
+        description="MinerU API 服务器地址（需在环境变量中配置）"
     )
     mineru_output_dir: str = Field(
         default="./data/output",
@@ -57,38 +52,26 @@ class Settings(BaseSettings):
         default=True,
         description="是否启用表格解析"
     )
+    mineru_structure_aware_chunking: bool = Field(
+        default=True,
+        description="是否启用 MinerU 结构感知分块（按章节分块，保持语义完整性）"
+    )
 
     # ========== vLLM Embedding 配置 ==========
     vllm_embedding_base_url: str = Field(
-        default="http://192.168.8.233:8092",
-        description="vLLM Embedding 服务地址"
-    )
-    vllm_embedding_api_base: str = Field(
-        default="http://192.168.8.233:8092/v1",
-        description="vLLM Embedding API Base 地址"
+        ...,
+        description="vLLM Embedding 服务地址（需在环境变量中配置）"
     )
     vllm_embedding_model: str = Field(
-        default="BAAI/bge-m3",
-        description="Embedding 模型名称"
+        ...,
+        description="Embedding 模型名称（需在环境变量中配置）"
     )
     vllm_api_key: str = Field(
         default="not-needed",
         description="vLLM API Key（不需要真实 key）"
     )
 
-    # ========== vLLM Chat 配置 ==========
-    vllm_chat_base_url: str = Field(
-        default="http://192.168.8.233:8092",
-        description="vLLM Chat 服务地址"
-    )
-    vllm_chat_api_base: str = Field(
-        default="http://192.168.8.233:8092/v1",
-        description="vLLM Chat API Base 地址"
-    )
-    vllm_chat_model: str = Field(
-        default="deepseek-coder:instruct",
-        description="问答模型名称"
-    )
+    # ========== 多模态模型配置（Qwen2-VL）==========
 
     # ========== 多模态模型配置（Qwen2-VL）==========
     qwen_vl_model: str = Field(
@@ -106,66 +89,52 @@ class Settings(BaseSettings):
 
     # ========== ChromaDB 配置 ==========
     chroma_host: str = Field(
-        default="192.168.8.233",
-        description="ChromaDB 主机地址"
+        ...,
+        description="ChromaDB 主机地址（需在环境变量中配置）"
     )
     chroma_port: int = Field(
-        default=8200,
-        description="ChromaDB 端口"
+        ...,
+        description="ChromaDB 端口（需在环境变量中配置）"
     )
     chroma_persist_dir: str = Field(
-        default="./chroma_db",
-        description="ChromaDB 持久化目录"
+        ...,
+        description="ChromaDB 持久化目录（需在环境变量中配置）"
     )
     chroma_collection_name: str = Field(
-        default="documents",
-        description="ChromaDB 集合名称"
+        ...,
+        description="ChromaDB 集合名称（需在环境变量中配置）"
     )
     chroma_use_remote: bool = Field(
-        default=True,
-        description="是否使用远程 ChromaDB"
+        ...,
+        description="是否使用远程 ChromaDB（需在环境变量中配置）"
     )
 
     # ========== 索引配置 ==========
     chunk_size: int = Field(
-        default=512,
-        description="文本分块大小"
+        ...,
+        description="文本分块大小（需在环境变量中配置）"
     )
     chunk_overlap: int = Field(
-        default=50,
-        description="文本分块重叠大小"
+        ...,
+        description="文本分块重叠大小（需在环境变量中配置）"
     )
     top_k: int = Field(
-        default=5,
-        description="检索返回的文档数量"
+        ...,
+        description="检索返回的文档数量（需在环境变量中配置）"
     )
     similarity_threshold: float = Field(
-        default=0.7,
-        description="相似度阈值"
+        ...,
+        description="相似度阈值（需在环境变量中配置）"
     )
 
-    # ========== 检索配置 ==========
-    use_hybrid_retrieval: bool = Field(
-        default=False,
-        description="是否使用混合检索（向量 + 关键词）"
-    )
-    use_rerank: bool = Field(
-        default=True,
-        description="是否使用重排序"
-    )
+    # ========== 检索配置（包含 Reranker 配置）==========
     rerank_model: str = Field(
-        default="bge-reranker-m3",
-        description="重排序模型名称"
+        ...,
+        description="重排序模型名称（需在环境变量中配置）"
     )
-
-    # ========== BGE Reranker 配置 ==========
     rerank_base_url: str = Field(
-        default="http://192.168.8.233:8091",
-        description="BGE Reranker 服务地址"
-    )
-    rerank_api_base: str = Field(
-        default="http://192.168.8.233:8091/v1",
-        description="BGE Reranker API Base 地址"
+        ...,
+        description="BGE Reranker 服务地址（需在环境变量中配置）"
     )
     rerank_timeout: int = Field(
         default=120,

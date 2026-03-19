@@ -212,6 +212,49 @@ async def main():
     # await example_batch_parse()
     # await example_image_description()
     # await example_to_memory()
+    # await example_structure_aware_chunking()
+
+
+async def example_structure_aware_chunking():
+    """示例 7: 结构感知分块测试"""
+    print("\n=== 示例 7: 结构感知分块测试 ===")
+    async with MinerUParser() as parser:
+        pdf_path = "/home/zj/ZengKingMorphe/Digital-Human-Disciplinary-Dataset/math_file_part/01高中数学必修第一册-40pages-part1-page1-40.pdf"
+
+        if Path(pdf_path).exists():
+            document = await parser.parse(pdf_path)
+
+            print(f"✓ 文档解析成功（使用结构感知分块）")
+            print(f"  标题: {document.title}")
+            print(f"  分块数量: {len(document.chunks)}")
+            print(f"  图片数量: {len(document.images)}")
+
+            # 显示前几个分块的详细信息
+            print("\n前 3 个分块的详细信息:")
+            for i, chunk in enumerate(document.chunks[:3], 1):
+                print(f"\n分块 {i}:")
+                print(f"  长度: {len(chunk.text)} 字符")
+                print(f"  页码: {chunk.page}")
+                print(f"  章节: {chunk.section}")
+                print(f"  标题路径: {' > '.join(chunk.metadata.get('title_path', []))}")
+                print(f"  块类型: {chunk.metadata.get('block_types', [])}")
+                print(f"  包含页码: {chunk.metadata.get('page_indices', [])}")
+                print(f"  预览: {chunk.text[:150]}...")
+
+            # 统计分块长度分布
+            chunk_lengths = [len(c.text) for c in document.chunks]
+            print(f"\n分块长度统计:")
+            print(f"  最大: {max(chunk_lengths)} 字符")
+            print(f"  最小: {min(chunk_lengths)} 字符")
+            print(f"  平均: {sum(chunk_lengths) / len(chunk_lengths):.1f} 字符")
+
+            # 统计标题路径深度
+            title_depths = [c.metadata.get('structure_level', 0) for c in document.chunks]
+            print(f"\n标题层级统计:")
+            print(f"  最大深度: {max(title_depths)}")
+            print(f"  平均深度: {sum(title_depths) / len(title_depths):.1f}")
+        else:
+            print(f"✗ PDF 文件不存在: {pdf_path}")
 
 
 if __name__ == "__main__":

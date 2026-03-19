@@ -30,8 +30,6 @@ class RAGSystem:
         self,
         collection_name: Optional[str] = None,
         enable_image_description: Optional[bool] = None,
-        use_hybrid_retrieval: Optional[bool] = None,
-        use_rerank: Optional[bool] = None
     ):
         """
         初始化 RAG 系统
@@ -39,21 +37,11 @@ class RAGSystem:
         Args:
             collection_name: 集合名称
             enable_image_description: 是否启用图片描述
-            use_hybrid_retrieval: 是否使用混合检索
-            use_rerank: 是否使用重排序
         """
         self.collection_name = collection_name or settings.chroma_collection_name
         self.enable_image_description = (
             enable_image_description if enable_image_description is not None
             else settings.enable_image_description
-        )
-        self.use_hybrid_retrieval = (
-            use_hybrid_retrieval if use_hybrid_retrieval is not None
-            else settings.use_hybrid_retrieval
-        )
-        self.use_rerank = (
-            use_rerank if use_rerank is not None
-            else settings.use_rerank
         )
 
         # 确保必要的目录存在
@@ -104,8 +92,7 @@ class RAGSystem:
         """获取检索器"""
         if self._retriever is None:
             self._retriever = Retriever(
-                vector_store=self.vector_store,
-                use_rerank=self.use_rerank
+                vector_store=self.vector_store
             )
         return self._retriever
 

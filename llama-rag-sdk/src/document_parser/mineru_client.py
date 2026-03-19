@@ -281,18 +281,23 @@ class MinerUParser(DocumentParser):
         file_path: str,
         parse_options: Optional[ParseOptions] = None,
     ) -> ParsedDocument:
-        """将 SDK ZipResult 转换为 ParsedDocument"""
+        """将 SDK ZipResult 转换为 ParsedDocument（使用结构感知分块）"""
         # 提取标题
         title = self._extract_title(zip_result)
 
         # 提取 Markdown 内容
         content = zip_result.md_content or ""
 
-        # 转换 content_list 为 TextChunk
-        chunks = self._convert_content_list_to_chunks(
-            zip_result.content_list,
-            zip_result.pdf_name,
-        )
+        # 转换 content_list 为 TextChunk（使用结构感知分块）
+        if zip_result.content_list:
+            from src.document_parser.mineru_structure_aware_chunker import MinerUStructureAwareChunker
+            chunker = MinerUStructureAwareChunker()
+            chunks = chunker.chunk_content_list(
+                content_list=zip_result.content_list,
+                pdf_name=zip_result.pdf_name
+            )
+        else:
+            chunks = []
 
         # 转换图片为 ImageInfo
         images = self._convert_images_to_image_info(

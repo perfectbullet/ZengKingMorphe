@@ -2,7 +2,9 @@
 文档解析器基类和数据模型
 """
 
+import json
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
 
@@ -43,6 +45,45 @@ class ParsedDocument(BaseModel):
     def add_image(self, image: ImageInfo) -> None:
         """添加图片信息"""
         self.images.append(image)
+
+    def save_to_json(
+        self,
+        pdf_filename: str,
+        output_dir: Optional[str] = None,
+        ensure_ascii: bool = False,
+        indent: int = 2
+    ) -> str:
+        """
+        将文档保存为 JSON 文件
+
+        Args:
+            pdf_filename: PDF 文件名（用于生成 JSON 文件名）
+            output_dir: 输出目录（默认为 None，保存在当前目录）
+            ensure_ascii: 是否确保 ASCII 编码（默认 False，支持中文）
+            indent: JSON 缩进空格数（默认 2）
+
+        Returns:
+            保存的 JSON 文件路径
+        """
+        # 生成 JSON 文件名：使用 PDF 文件名，替换扩展名为 .json
+        json_filename = Path(pdf_filename).stem + ".json"
+
+        # 确定输出路径
+        if output_dir:
+            output_path = Path(output_dir)
+            output_path.mkdir(parents=True, exist_ok=True)
+            json_path = output_path / json_filename
+        else:
+            json_path = Path(json_filename)
+
+        # 转换为字典（Pydantic 模型自动支持）
+        document_dict = self.model_dump(mode='json')
+
+        # 写入 JSON 文件
+        with open(json_path, 'w', encoding='utf-8') as f:
+            json.dump(document_dict, f, ensure_ascii=ensure_ascii, indent=indent)
+
+        return str(json_path)
 
 
 class DocumentParser(ABC):

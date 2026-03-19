@@ -74,7 +74,7 @@ class HybridRerankRetrieval(RetrievalStrategy):
 
             self.embedding_model = OpenAIEmbedding(
                 model_name=settings.vllm_embedding_model,
-                api_base=settings.vllm_embedding_api_base,
+                api_base=settings.vllm_embedding_base_url,
                 api_key=settings.vllm_api_key,
                 embed_batch_size=32,
                 timeout=300,

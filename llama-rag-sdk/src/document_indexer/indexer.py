@@ -66,7 +66,7 @@ class DocumentIndexer(Indexer):
         )
 
         self.embedding_model = embedding_model or settings.vllm_embedding_model
-        self.api_base = api_base or settings.vllm_embedding_api_base
+        self.api_base = api_base or settings.vllm_embedding_base_url
 
         self.chunker = self._create_chunker()
         self.vector_store = VectorStore(collection_name=collection_name)

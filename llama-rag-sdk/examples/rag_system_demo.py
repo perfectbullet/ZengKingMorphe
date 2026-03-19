@@ -119,9 +119,9 @@ async def parse_and_evaluate_pdf(
 ) -> None:
     """解析 PDF 并评估解析性能"""
     print(f"\n{'=' * 60}")
-    print(f"步骤 1: 文档解析 - {Path(pdf_path).name}")
+    pdf_name = Path(pdf_path).name
+    print(f"步骤 1: 文档解析 - {pdf_name}")
     print(f"{'=' * 60}")
-
     if not Path(pdf_path).exists():
         print(f"✗ PDF 文件不存在: {pdf_path}")
         return
@@ -148,12 +148,17 @@ async def parse_and_evaluate_pdf(
             parse_options=parse_options,
             return_options=return_options,
         )
+        json_path = document.save_to_json(
+            pdf_filename=pdf_name,
+            output_dir="./data/output"
+        )
 
         parse_duration = time.time() - start_time
 
         print(f"✓ 文档解析完成 (耗时: {parse_duration:.2f}s)")
         print(f"  标题: {document.title}")
         print(f"  文本块: {len(document.chunks)}")
+        print(f"  文本块文件的路径: {json_path}")
         print(f"  图片: {len(document.images)}")
         print(f"  内容长度: {len(document.content)} 字符")
 
@@ -297,13 +302,9 @@ async def main():
     # 创建 RAG 系统
     async with RAGSystem(
         collection_name=collection_name,
-        use_hybrid_retrieval=False,  # 纯向量检索
-        use_rerank=True  # 启用 Rerank
     ) as rag:
         print(f"\nRAG 系统配置:")
         print(f"  集合名称: {collection_name}")
-        print(f"  混合检索: {rag.use_hybrid_retrieval}")
-        print(f"  Rerank: {rag.use_rerank}")
 
         # 步骤 1-2: 解析和索引 PDF
         for pdf_path in pdf_paths:
@@ -324,8 +325,6 @@ async def main():
             f.write("RAG 系统性能评估结果\n")
             f.write("=" * 60 + "\n\n")
             f.write(f"集合名称: {collection_name}\n")
-            f.write(f"混合检索: {rag.use_hybrid_retrieval}\n")
-            f.write(f"Rerank: {rag.use_rerank}\n\n")
             f.write(f"解析耗时: {evaluator.metrics['parse_time']:.2f}s\n")
             f.write(f"文本块数: {evaluator.metrics['total_chunks']}\n")
             f.write(f"索引耗时: {evaluator.metrics['index_time']:.2f}s\n")

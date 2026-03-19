@@ -26,7 +26,6 @@ class Retriever:
     def __init__(
         self,
         vector_store: VectorStore,
-        use_rerank: Optional[bool] = None,
         candidate_multiplier: Optional[int] = None,
         embedding_model: Optional[Any] = None
     ):
@@ -35,7 +34,6 @@ class Retriever:
 
         Args:
             vector_store: 向量存储实例
-            use_rerank: 是否使用重排序（默认从配置读取）
             candidate_multiplier: 候选数量倍数（默认从配置读取）
             embedding_model: Embedding 模型
 
@@ -44,9 +42,6 @@ class Retriever:
         """
         self.vector_store = vector_store
         self.embedding_model = embedding_model
-
-        # 从参数或配置读取设置
-        self.use_rerank = use_rerank if use_rerank is not None else settings.use_rerank
 
         # 创建检索策略
         self.strategy = self._create_strategy(candidate_multiplier)
@@ -63,7 +58,7 @@ class Retriever:
         try:
             return OpenAIEmbedding(
                 model_name=settings.vllm_embedding_model,
-                api_base=settings.vllm_embedding_api_base,
+                api_base=settings.vllm_embedding_base_url,
                 api_key=settings.vllm_api_key,
                 embed_batch_size=32,
                 timeout=300,
