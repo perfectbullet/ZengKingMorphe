@@ -21,7 +21,7 @@ class BGERerankerClient:
         self,
         base_url: str = "http://192.168.8.233:8091",
         api_key: str = "not-needed",
-        model: str = "bge-reranker-v2-m3",
+        model: str = "bge-reranker-m3",
         timeout: int = 120,
     ):
         """
@@ -120,6 +120,7 @@ class BGERerankerClient:
         }
 
         try:
+            # 使用正确的端点: /v1/rerank
             resp = requests.post(
                 f"{self.base_url}/v1/rerank",
                 json=payload,

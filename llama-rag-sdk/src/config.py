@@ -154,7 +154,7 @@ class Settings(BaseSettings):
         description="是否使用重排序"
     )
     rerank_model: str = Field(
-        default="bge-reranker-v2-m3",
+        default="bge-reranker-m3",
         description="重排序模型名称"
     )
 

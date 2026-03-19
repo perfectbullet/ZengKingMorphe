@@ -105,7 +105,6 @@ class RAGSystem:
         if self._retriever is None:
             self._retriever = Retriever(
                 vector_store=self.vector_store,
-                use_hybrid=self.use_hybrid_retrieval,
                 use_rerank=self.use_rerank
             )
         return self._retriever

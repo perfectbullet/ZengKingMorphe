@@ -19,6 +19,21 @@ from src.utils import setup_logger
 class RAGEvaluator:
     """RAG 系统评估器"""
 
+    @staticmethod
+    def clean_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:
+        """清理元数据，移除 None 值（ChromaDB 不接受 None）
+
+        Args:
+            metadata: 原始元数据
+
+        Returns:
+            清理后的元数据，只包含 str, int, float, bool 类型的值
+        """
+        return {
+            k: v for k, v in metadata.items()
+            if v is not None and isinstance(v, (str, int, float, bool))
+        }
+
     def __init__(self):
         self.metrics: Dict[str, Any] = {
             "parse_time": 0,
@@ -160,17 +175,23 @@ async def parse_and_evaluate_pdf(
 
         # 准备文本块和元数据
         chunks = [chunk.text for chunk in document.chunks]
-        metadata_list = [
-            {
+        metadata_list = []
+        for chunk in document.chunks:
+            # 构建基础元数据
+            meta = {
                 "source": pdf_path,
                 "title": document.title,
-                "page": chunk.page,
-                "section": chunk.section,
+                "page": chunk.page if chunk.page is not None else -1,
                 "chunk_index": chunk.index,
-                **chunk.metadata
             }
-            for chunk in document.chunks
-        ]
+            if chunk.section:
+                meta["section"] = chunk.section
+
+            # 合并 chunk.metadata，清理 None 值
+            cleaned_chunk_meta = RAGEvaluator.clean_metadata(chunk.metadata)
+            meta.update(cleaned_chunk_meta)
+
+            metadata_list.append(meta)
 
         # 添加到索引
         doc_ids = await rag.indexer.add_documents(
