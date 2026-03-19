@@ -8,7 +8,7 @@
 |------|------|------|------|
 | bge-reranker | BAAI/bge-reranker-v2-m3 | 8091 | 文档重排序（Rerank API） |
 | bge-m3 | BAAI/bge-m3 | 8092 | 多语言文本嵌入生成（Embedding API） |
-| bge-large | BAAI/bge-large-zh-v1.5 | 8093 | 中文文本嵌入生成（Embedding API） |
+| bge-large | BAAI/BGE-large | 8093 | 中文文本嵌入生成（最大512字符，Embedding API） |
 
 ## 快速启动
 
@@ -197,12 +197,13 @@ curl -X POST http://192.168.8.233:8093/v1/embeddings \
 ```bash
 cd examples
 pip install openai requests numpy
+python test_bge_large.py
 ```
 
 ```python
-from examples.test_embedding import BGEEmbeddingClient
+from examples.test_bge_large import BGELargeEmbeddingClient
 
-client = BGEEmbeddingClient("http://192.168.8.233:8093")
+client = BGELargeEmbeddingClient("http://192.168.8.233:8093")
 
 # 生成嵌入
 text = "人工智能是计算机科学的一个分支"
@@ -260,7 +261,7 @@ for idx, doc, score in final_results:
 |--------|----------|--------|-----------|
 | 端口 | 8091 | 8092 | 8093 |
 | GPU 显存 | 0.2 | 0.3 | 0.2 |
-| 最大上下文 | 8192 tokens | 8192 tokens | 512 tokens |
+| 最大上下文 | 8192 tokens | 8192 tokens | 512 tokens (约512字符) |
 | 精度 | float16 | float16 | float16 |
 
 ### 模型规格
@@ -269,7 +270,7 @@ for idx, doc, score in final_results:
 |------|--------|----------|------|
 | bge-reranker-v2-m3 | ~278M | - | 文档重排序 |
 | bge-m3 | ~567M | 1024 | 多语言文本嵌入 |
-| bge-large-zh-v1.5 | ~326M | 1024 | 中文文本嵌入 |
+| BGE-large | ~326M | 1024 | 中文文本嵌入（最大512字符） |
 
 ## 模型存储
 
@@ -328,12 +329,27 @@ BGE-M3 经过测试，支持 1000 ~ 8000 个中文字符的嵌入生成：
 
 ### 运行长文本测试
 
+**BGE-M3 长文本测试:**
+
 ```python
 from examples.test_embedding import BGEEmbeddingClient
 
 client = BGEEmbeddingClient("http://192.168.8.233:8092")
 client.test_long_text_embedding([1000, 2000, 4000, 8000])
 ```
+
+**BGE-Large 长文本测试:**
+
+```python
+from examples.test_bge_large import BGELargeEmbeddingClient
+
+client = BGELargeEmbeddingClient("http://192.168.8.233:8093")
+client.test_long_text_embedding([1000, 2000, 4000, 8000])
+```
+
+**注意:**
+- **BGE-Large**: 最大支持 **512 字符**（实测中文约 1 token/字符），超过限制会报错。
+- **BGE-M3**: 最大支持 8192 tokens，中文约 2 tokens/字符，实际测试最大约 4000 字符。
 
 ## 常见问题
 
@@ -352,6 +368,17 @@ client.test_long_text_embedding([1000, 2000, 4000, 8000])
 - Reranker: -10 到 +10，越高越相关
 - Embedding: -1 到 +1（余弦相似度）
 
+### Q: BGE-Large 的字符限制是多少？
+
+BGE-Large 最大支持 **512 字符**（约 512 tokens），超过此限制会返回错误：
+```
+Error code: 400 - This model's maximum context length is 512 tokens
+```
+
+**解决方案**：
+- 使用 BGE-M3 处理长文本（最大 8192 tokens）
+- 或对长文本进行分块处理，每块不超过 512 字符
+
 ### Q: 模型下载很慢怎么办？
 
 使用 ModelScope 或 HuggingFace 镜像：
@@ -365,7 +392,7 @@ export HF_ENDPOINT=https://hf-mirror.com
 ./download_models.sh bge-m3
 
 # 手动下载模型
-hf download BAAI/bge-large-zh-v1.5 --local-dir ./models/BAAI/BGE-large
+hf download BAAI/BGE-large --local-dir ./models/BAAI/BGE-large
 ```
 
 ### Q: 如何更新模型？
@@ -387,7 +414,7 @@ docker-compose up -d
 |------|-------------|------------|
 | bge-reranker-v2-m3 | `BAAI/bge-reranker-v2-m3` | `AI-ModelScope/bge-reranker-v2-m3` |
 | bge-m3 | `BAAI/bge-m3` | `AI-ModelScope/bge-m3` |
-| bge-large-zh-v1.5 | `BAAI/bge-large-zh-v1.5` | `AI-ModelScope/bge-large-zh-v1.5` |
+| BGE-large | `BAAI/BGE-large` | `AI-ModelScope/bge-large-zh-v1.5` |
 
 ## 硬件要求
 
