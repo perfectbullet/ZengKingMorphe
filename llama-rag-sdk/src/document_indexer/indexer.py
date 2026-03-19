@@ -291,6 +291,7 @@ class DocumentIndexer(Indexer):
             文档 ID 列表
         """
         self._ensure_collection(collection_name)
+
         logger.info(f"开始添加文档，数量: {len(documents)}")
 
         chunks, metadatas = self._chunk_documents(documents, metadata_list)

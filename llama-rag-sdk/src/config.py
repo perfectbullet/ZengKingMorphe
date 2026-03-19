@@ -57,7 +57,7 @@ class Settings(BaseSettings):
         description="是否启用 MinerU 结构感知分块（按章节分块，保持语义完整性）"
     )
 
-    # ========== vLLM Embedding 配置 ==========
+    # ========== vLLM Embedding 配置（保留向后兼容）==========
     vllm_embedding_base_url: str = Field(
         ...,
         description="vLLM Embedding 服务地址（需在环境变量中配置）"

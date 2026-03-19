@@ -41,49 +41,66 @@ class ChunkingStrategy:
 class MinerUStructureAwareChunker:
     """基于 MinerU content_list 的结构感知分块器
 
-    注意：以下参数已写死为默认值，与 ai-service 保持一致：
-    - max_chunk_size: 400 (适配 bge-large-zh-v1.5-2k 的 2048 tokens)
-    - min_chunk_size: 60 (约 max 的 12%)
-    - chunk_overlap: 50 (约 max 的 10%)
-    - strategy: "hybrid" (混合策略)
+    配置来源（优先级从高到低）：
+    1. 初始化参数（仅用于兼容，已废弃）
+    2. 环境变量 CHUNK_SIZE, CHUNK_OVERLAP（推荐）
+    3. 硬编码默认值（兜底）
 
     Token 计算：
-    - BGE-large-zh-v1.5-2k 最大 2048 tokens
+    - BGE-m3 / BGE-large-zh-v1.5: 4096 tokens
     - 中文字符约等于 2-2.5 tokens
-    - 400 字符 ≈ 800-1000 tokens（安全边界）
+    - 1000 字符 ≈ 2000-2500 tokens（61% 利用率，安全边界）
     """
 
-    # 写死的默认配置
-    # BGE-large-zh-v1.5-2k: 2048 tokens 限制
-    # 中文字符约等于 2-2.5 tokens，使用 400 字符安全边界 (约 800-1000 tokens)
-    DEFAULT_MAX_CHUNK_SIZE = 400
-    DEFAULT_MIN_CHUNK_SIZE = 60  # 约 max 的 12%
-    DEFAULT_CHUNK_OVERLAP = 50  # 约 max 的 10%
+    # 硬编码默认值（兜底，当环境变量未设置时使用）
+    # 适配 BGE-m3 / BGE-large-zh-v1.5 的 4096 tokens 限制
+    # 中文字符约等于 2-2.5 tokens，使用 1000 字符 (约 2000-2500 tokens, 61% 利用率)
+    DEFAULT_MAX_CHUNK_SIZE = 1000
+    DEFAULT_MIN_CHUNK_SIZE = 150  # 约 max 的 15%
+    DEFAULT_CHUNK_OVERLAP = 150  # 约 max 的 15%
     DEFAULT_STRATEGY = ChunkingStrategy.HYBRID
-    MIN_VALID_CHUNK_LENGTH = 20  # 最小有效 chunk 长度（过滤无效章节）
+    MIN_VALID_CHUNK_LENGTH = 30  # 最小有效 chunk 长度（过滤无效章节，约 max 的 3%）
 
     def __init__(
         self,
-        max_chunk_size: int = DEFAULT_MAX_CHUNK_SIZE,
-        min_chunk_size: int = DEFAULT_MIN_CHUNK_SIZE,
-        chunk_overlap: int = DEFAULT_CHUNK_OVERLAP,
-        strategy: str = DEFAULT_STRATEGY,
+        max_chunk_size: Optional[int] = None,
+        min_chunk_size: Optional[int] = None,
+        chunk_overlap: Optional[int] = None,
+        strategy: Optional[str] = None,
     ):
         """
         初始化结构感知分块器
 
         Args:
-            max_chunk_size: 最大分块大小（字符）- 忽略，使用默认值
-            min_chunk_size: 最小分块大小（字符）- 忽略，使用默认值
-            chunk_overlap: 分块重叠大小（字符）- 忽略，使用默认值
-            strategy: 分块策略 - 忽略，使用默认值
+            max_chunk_size: 最大分块大小（字符）- 已废弃，请使用环境变量 CHUNK_SIZE
+            min_chunk_size: 最小分块大小（字符）- 已废弃，从 max_chunk_size 自动计算
+            chunk_overlap: 分块重叠大小（字符）- 已废弃，请使用环境变量 CHUNK_OVERLAP
+            strategy: 分块策略 - 已废弃，固定使用 "hybrid"
         """
-        # 强制使用写死的默认值，忽略调用方传入的参数
-        _ = (max_chunk_size, min_chunk_size, chunk_overlap, strategy)  # 显式忽略
-        self.max_chunk_size = self.DEFAULT_MAX_CHUNK_SIZE
-        self.min_chunk_size = self.DEFAULT_MIN_CHUNK_SIZE
-        self.chunk_overlap = self.DEFAULT_CHUNK_OVERLAP
-        self.strategy = self.DEFAULT_STRATEGY
+        # 导入配置（延迟导入避免循环依赖）
+        try:
+            from src.config import settings
+            self.max_chunk_size = settings.chunk_size
+            self.chunk_overlap = settings.chunk_overlap
+        except Exception:
+            # 如果配置加载失败，使用硬编码默认值
+            logger.warning("无法加载配置，使用硬编码默认值")
+            self.max_chunk_size = self.DEFAULT_MAX_CHUNK_SIZE
+            self.chunk_overlap = self.DEFAULT_CHUNK_OVERLAP
+
+        # min_chunk_size 自动计算为 max_chunk_size 的 15%
+        self.min_chunk_size = int(self.max_chunk_size * 0.15)
+
+        # 强制使用 hybrid 策略
+        self.strategy = ChunkingStrategy.HYBRID
+
+        # 显式忽略传入的参数（保持兼容性但给出警告）
+        if any([max_chunk_size, min_chunk_size, chunk_overlap, strategy]):
+            logger.warning(
+                f"MinerUStructureAwareChunker 初始化参数已被废弃，"
+                f"请使用环境变量 CHUNK_SIZE={self.max_chunk_size} 和 "
+                f"CHUNK_OVERLAP={self.chunk_overlap}"
+            )
 
     def chunk_content_list(
         self,

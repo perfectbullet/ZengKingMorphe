@@ -66,6 +66,24 @@ class Retriever:
         except Exception as e:
             logger.error(f"初始化 Embedding 模型失败: {e}")
             return None
+        if self.embedding_model is not None:
+            return self.embedding_model
+
+        if OpenAIEmbedding is None:
+            logger.warning("OpenAIEmbedding 不可用")
+            return None
+
+        try:
+            return OpenAIEmbedding(
+                model_name=settings.vllm_embedding_model,
+                api_base=settings.vllm_embedding_base_url,
+                api_key=settings.vllm_api_key,
+                embed_batch_size=32,
+                timeout=300,
+            )
+        except Exception as e:
+            logger.error(f"初始化 Embedding 模型失败: {e}")
+            return None
 
     def _create_strategy(self, candidate_multiplier: Optional[int] = None) -> HybridRerankRetrieval:
         """
@@ -80,8 +98,6 @@ class Retriever:
         Raises:
             RuntimeError: 当 Reranker 服务不可用时抛出异常
         """
-        embed_model = self._create_embedding_model()
-
         # 创建 Reranker 客户端
         from src.retrieval.reranker import BGERerankerClient
 
@@ -98,6 +114,8 @@ class Retriever:
                 f"无法连接到 BGE Reranker 服务: {e}\n"
                 f"请确认服务已启动: {settings.rerank_base_url}"
             )
+
+        embed_model = self._create_embedding_model()
 
         # 统一使用混合+Rerank策略
         strategy = HybridRerankRetrieval(
