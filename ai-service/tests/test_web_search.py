@@ -20,7 +20,7 @@ try:
             print("❌ TAVILY_API_KEY not configured in .env file")
             return
         
-        print(f"✅ Tavily API Key found: {settings.tavily_api_key[:8]}...")
+        print(f"✅ Tavily API Key found: {settings.tavily_api_key[8:]}...")
         print(f"✅ Web search enabled: {settings.web_search_enabled}")
         print(f"✅ Max results: {settings.web_search_max_results}")
         
@@ -56,10 +56,23 @@ try:
                 if not isinstance(results, list):
                     results_str = str(results)
                     print(f"\n⚠️  Unexpected results type: {type(results).__name__}")
-                    print(f"   Results: {results_str[:200]}...")
+                    print(f"   Results: {results_str}")
 
-                    # 检查认证错误
-                    if "401" in results_str or "Unauthorized" in results_str:
+                    # 检查配额错误 (432)
+                    if "432" in results_str:
+                        print("\n❌ API Quota/Insufficient Funds Error Detected!")
+                        print("   ⚠️  Error: 432 - Quota exceeded or insufficient balance")
+                        print("   ⚠️  Possible causes:")
+                        print("      - API quota has been exhausted")
+                        print("      - Account balance is insufficient")
+                        print("      - Subscription plan limit reached")
+                        print("\n   💡 Solutions:")
+                        print("      1. Check your Tavily account at https://tavily.com")
+                        print("      2. Upgrade your subscription plan")
+                        print("      3. Wait for quota reset (monthly cycle)")
+                        print("      4. Temporarily disable web search: WEB_SEARCH_ENABLED=false")
+                    # 检查认证错误 (401)
+                    elif "401" in results_str or "Unauthorized" in results_str:
                         print("\n❌ API Authentication Error Detected!")
                         print("   ⚠️  Error: 401 Unauthorized")
                         print("   ⚠️  Possible causes:")
