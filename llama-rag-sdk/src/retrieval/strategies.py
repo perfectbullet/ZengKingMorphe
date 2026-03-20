@@ -216,8 +216,11 @@ class HybridRerankRetrieval(RetrievalStrategy):
         # 1. 查询扩展
         queries = [query]
         if self.enable_query_expansion and self.query_expander:
+            logger.info(f"查询扩展已启用，正在处理原始查询...")
             queries = await self.query_expander.expand(query)
-            logger.debug(f"查询扩展结果: {queries}")
+            logger.info(f"查询扩展结果: {queries}")
+        else:
+            logger.info(f"查询扩展未启用 (enable={self.enable_query_expansion}, expander={'已创建' if self.query_expander else '未创建'})")
 
         # 2. 对每个扩展查询执行检索
         all_candidates = []
