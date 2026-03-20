@@ -4,9 +4,10 @@
 使用 Pydantic Settings 管理所有环境变量配置
 """
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pathlib import Path
+from typing import List, Union
 
 
 class Settings(BaseSettings):
@@ -176,6 +177,38 @@ class Settings(BaseSettings):
     rerank_candidate_multiplier: int = Field(
         default=4,
         description="候选数量倍数（候选数量 = top_k * multiplier）"
+    )
+
+    # ========== 查询扩展配置 ==========
+    query_expansion_enabled: bool = Field(
+        default=False,
+        description="是否启用查询扩展（需要 LLM 服务）"
+    )
+    query_expansion_max_expansions: int = Field(
+        default=3,
+        description="最大扩展查询数量"
+    )
+
+    # ========== LLM 配置（用于查询扩展）==========
+    llm_provider: str = Field(
+        default="ollama",
+        description="LLM 提供商 (ollama/openai_compatible/siliconflow)"
+    )
+    llm_base_url: str = Field(
+        default="http://192.168.8.233:11434",
+        description="LLM 服务地址"
+    )
+    llm_model: str = Field(
+        default="qwen2.5:14b",
+        description="LLM 模型名称"
+    )
+    llm_api_key: str = Field(
+        default="not-needed",
+        description="LLM API Key"
+    )
+    llm_timeout: int = Field(
+        default=60,
+        description="LLM 请求超时时间（秒）"
     )
 
     # ========== 日志配置 ==========

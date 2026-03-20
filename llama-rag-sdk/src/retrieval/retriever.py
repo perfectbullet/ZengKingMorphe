@@ -1,7 +1,7 @@
 """
 检索器
 
-提供统一的检索接口，使用混合检索 + Rerank 流水线
+提供统一的检索接口，使用混合检索 + Rerank + 查询扩展流水线
 """
 
 from typing import List, Dict, Any, Optional
@@ -14,15 +14,24 @@ from src.document_indexer.storage import VectorStore
 from src.config import settings
 from src.embedding_factory import EmbeddingFactory
 
+# 用于类型提示
+try:
+    from typing import TYPE_CHECKING
+    if TYPE_CHECKING:
+        from src.retrieval.query_expansion import QueryExpander
+except ImportError:
+    pass
+
 
 class Retriever:
-    """统一检索器（混合检索 + Rerank）"""
+    """统一检索器（混合检索 + Rerank + 查询扩展）"""
 
     def __init__(
         self,
         vector_store: VectorStore,
         candidate_multiplier: Optional[int] = None,
-        embedding_model: Optional[Any] = None
+        embedding_model: Optional[Any] = None,
+        enable_query_expansion: Optional[bool] = None,
     ):
         """
         初始化检索器
@@ -31,6 +40,7 @@ class Retriever:
             vector_store: 向量存储实例
             candidate_multiplier: 候选数量倍数（默认从配置读取）
             embedding_model: Embedding 模型
+            enable_query_expansion: 是否启用查询扩展（默认从配置读取）
 
         Raises:
             RuntimeError: 当 Reranker 服务不可用时抛出异常
@@ -38,39 +48,81 @@ class Retriever:
         self.vector_store = vector_store
         self.embedding_model = embedding_model
 
+        # 创建查询扩展器
+        self.query_expander = self._create_query_expander()
+
         # 创建检索策略
-        self.strategy = self._create_strategy(candidate_multiplier)
+        self.strategy = self._create_strategy(
+            candidate_multiplier,
+            enable_query_expansion=enable_query_expansion
+        )
 
     def _create_embedding_model(self) -> Optional[Any]:
         """创建 Embedding 模型（使用工厂模式）"""
         return EmbeddingFactory.create_embedding_model(
             model_name=self.embedding_model
         ) if self.embedding_model else EmbeddingFactory.create_embedding_model()
-        if self.embedding_model is not None:
-            return self.embedding_model
 
-        if OpenAIEmbedding is None:
-            logger.warning("OpenAIEmbedding 不可用")
+    def _create_query_expander(self) -> Optional["QueryExpander"]:
+        """
+        创建查询扩展器（仅 LLM 语义扩展）
+
+        Returns:
+            QueryExpander 实例，如果配置禁用则返回 None
+        """
+        # 检查配置是否启用查询扩展
+        try:
+            enabled = getattr(settings, 'query_expansion_enabled', False)
+        except Exception:
+            enabled = False
+
+        if not enabled:
+            logger.debug("查询扩展未启用")
             return None
 
         try:
-            return OpenAIEmbedding(
-                model_name=settings.vllm_embedding_model,
-                api_base=settings.vllm_embedding_base_url,
-                api_key=settings.vllm_api_key,
-                embed_batch_size=32,
-                timeout=300,
+            from src.retrieval.query_expansion import QueryExpander
+            from src.retrieval.llm_client import create_llm_client
+
+            # 创建 LLM 客户端
+            llm_client = create_llm_client(
+                provider=getattr(settings, 'llm_provider', 'ollama'),
+                base_url=getattr(settings, 'llm_base_url', 'http://localhost:11434'),
+                model=getattr(settings, 'llm_model', 'qwen2.5:14b'),
+                api_key=getattr(settings, 'llm_api_key', 'not-needed'),
+                timeout=getattr(settings, 'llm_timeout', 60)
             )
+
+            # 获取最大扩展数量
+            max_expansions = getattr(
+                settings,
+                'query_expansion_max_expansions',
+                3
+            )
+
+            expander = QueryExpander(
+                llm_client=llm_client,
+                max_total_expansions=max_expansions
+            )
+
+            logger.info("查询扩展器已创建（仅 LLM 语义扩展）")
+            return expander
+
         except Exception as e:
-            logger.error(f"初始化 Embedding 模型失败: {e}")
+            logger.warning(f"创建查询扩展器失败: {e}，将不使用查询扩展")
             return None
 
-    def _create_strategy(self, candidate_multiplier: Optional[int] = None) -> HybridRerankRetrieval:
+    def _create_strategy(
+        self,
+        candidate_multiplier: Optional[int] = None,
+        enable_query_expansion: Optional[bool] = None
+    ) -> HybridRerankRetrieval:
         """
-        创建检索策略 - 统一使用混合+Rerank
+        创建检索策略 - 统一使用混合+Rerank+查询扩展
 
         Args:
             candidate_multiplier: 候选数量倍数
+            enable_query_expansion: 是否启用查询扩展
 
         Returns:
             检索策略实例
@@ -97,15 +149,26 @@ class Retriever:
 
         embed_model = self._create_embedding_model()
 
-        # 统一使用混合+Rerank策略
+        # 确定是否启用查询扩展
+        use_qe = enable_query_expansion
+        if use_qe is None:
+            try:
+                use_qe = settings.query_expansion_enabled
+            except Exception:
+                use_qe = False
+
+        # 统一使用混合+Rerank+查询扩展策略
         strategy = HybridRerankRetrieval(
             vector_store=self.vector_store,
             embedding_model=embed_model,
             rerank_client=rerank_client,
             candidate_multiplier=candidate_multiplier or settings.rerank_candidate_multiplier,
+            query_expander=self.query_expander,
+            enable_query_expansion=use_qe and self.query_expander is not None,
         )
 
-        logger.info("使用混合检索 + Rerank 策略")
+        qe_status = "启用" if use_qe else "未启用"
+        logger.info(f"使用混合检索 + Rerank 策略，查询扩展: {qe_status}")
         return strategy
 
     async def retrieve(

@@ -21,6 +21,11 @@
 - **向量索引**: 基于 LlamaIndex 和 ChromaDB 的高效向量存储
 - **vLLM 集成**: 使用 vLLM OpenAI 兼容 API 进行 Embedding
 - **灵活检索**: 统一的混合检索 + Rerank 策略
+- **查询扩展**: LLM 驱动的智能查询扩展（专为教育场景优化）
+  - 自动分解复合查询（如"导数和积分的关系" → "导数的定义" + "积分的定义"）
+  - 数学术语同义词扩展（如"微商" → "导数"、"变化率"）
+  - Few-shot 示例学习，准确识别需要/不需要分解的查询
+  - 可通过 `QUERY_EXPANSION_ENABLED` 环境变量启用
 - **模块化设计**: 各模块可独立开发和测试
 
 ## 项目结构
@@ -42,7 +47,9 @@ rag-sdk/
 │   └── retrieval/            # 检索模块
 │       ├── base.py           # 基类和数据模型
 │       ├── strategies.py     # 检索策略
-│       └── retriever.py      # 检索器
+│       ├── retriever.py      # 检索器
+│       ├── query_expansion.py # 查询扩展
+│       └── llm_client.py     # LLM 客户端
 ├── tests/                    # 测试文件
 ├── examples/                 # 使用示例
 ├── data/                     # 数据目录
@@ -75,11 +82,18 @@ cp .env.example .env
 # MinerU API 服务
 MINERU_API_URL=http://192.168.8.231:8000
 
-
 # ChromaDB
 CHROMA_HOST=192.168.8.233
 CHROMA_PORT=8200
 
+# 查询扩展（可选，需要 LLM 服务）
+QUERY_EXPANSION_ENABLED=true
+QUERY_EXPANSION_MAX_EXPANSIONS=3
+
+# LLM 配置（用于查询扩展）
+LLM_PROVIDER=ollama
+LLM_BASE_URL=http://192.168.8.233:11434
+LLM_MODEL=qwen2.5:14b
 ```
 
 ### 3. 基本使用
