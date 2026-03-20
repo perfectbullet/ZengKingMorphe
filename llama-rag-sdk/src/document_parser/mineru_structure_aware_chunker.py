@@ -28,38 +28,21 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 
 from src.document_parser.base import TextChunk
-
-
-class ChunkingStrategy:
-    """分块策略枚举"""
-    BY_TITLE = "by_title"           # 按标题分块
-    BY_PAGE = "by_page"             # 按页分块
-    HYBRID = "hybrid"               # 混合策略（标题优先，超长再分）
-    SEMANTIC_STRUCTURE = "semantic_structure"  # 语义+结构混合
+from src.constants import ChunkingStrategy, MinerUChunkingDefaults
 
 
 class MinerUStructureAwareChunker:
     """基于 MinerU content_list 的结构感知分块器
 
     配置来源（优先级从高到低）：
-    1. 初始化参数（仅用于兼容，已废弃）
-    2. 环境变量 CHUNK_SIZE, CHUNK_OVERLAP（推荐）
-    3. 硬编码默认值（兜底）
+    1. 环境变量 CHUNK_SIZE, CHUNK_OVERLAP（推荐）
+    2. settings 配置（从 .env 读取）
 
     Token 计算：
-    - BGE-m3 / BGE-large-zh-v1.5: 4096 tokens
+    - BGE-m3: 8192 tokens
     - 中文字符约等于 2-2.5 tokens
-    - 1000 字符 ≈ 2000-2500 tokens（61% 利用率，安全边界）
+    - 512 字符 ≈ 1024-1280 tokens（安全边界）
     """
-
-    # 硬编码默认值（兜底，当环境变量未设置时使用）
-    # 适配 BGE-m3 / BGE-large-zh-v1.5 的 4096 tokens 限制
-    # 中文字符约等于 2-2.5 tokens，使用 1000 字符 (约 2000-2500 tokens, 61% 利用率)
-    DEFAULT_MAX_CHUNK_SIZE = 1000
-    DEFAULT_MIN_CHUNK_SIZE = 150  # 约 max 的 15%
-    DEFAULT_CHUNK_OVERLAP = 150  # 约 max 的 15%
-    DEFAULT_STRATEGY = ChunkingStrategy.HYBRID
-    MIN_VALID_CHUNK_LENGTH = 30  # 最小有效 chunk 长度（过滤无效章节，约 max 的 3%）
 
     def __init__(
         self,
@@ -71,11 +54,9 @@ class MinerUStructureAwareChunker:
         """
         初始化结构感知分块器
 
-        Args:
-            max_chunk_size: 最大分块大小（字符）- 已废弃，请使用环境变量 CHUNK_SIZE
-            min_chunk_size: 最小分块大小（字符）- 已废弃，从 max_chunk_size 自动计算
-            chunk_overlap: 分块重叠大小（字符）- 已废弃，请使用环境变量 CHUNK_OVERLAP
-            strategy: 分块策略 - 已废弃，固定使用 "hybrid"
+        配置优先级（从高到低）：
+        1. 环境变量 CHUNK_SIZE, CHUNK_OVERLAP（推荐）
+        2. settings 配置（从 .env 读取）
         """
         # 导入配置（延迟导入避免循环依赖）
         try:
@@ -83,13 +64,14 @@ class MinerUStructureAwareChunker:
             self.max_chunk_size = settings.chunk_size
             self.chunk_overlap = settings.chunk_overlap
         except Exception:
-            # 如果配置加载失败，使用硬编码默认值
-            logger.warning("无法加载配置，使用硬编码默认值")
-            self.max_chunk_size = self.DEFAULT_MAX_CHUNK_SIZE
-            self.chunk_overlap = self.DEFAULT_CHUNK_OVERLAP
+            # 如果配置加载失败，使用兜底值
+            logger.warning("无法加载配置，使用兜底值")
+            self.max_chunk_size = 512
+            self.chunk_overlap = 150
 
         # min_chunk_size 自动计算为 max_chunk_size 的 15%
-        self.min_chunk_size = int(self.max_chunk_size * 0.15)
+        self.min_chunk_size = int(self.max_chunk_size * MinerUChunkingDefaults.MIN_CHUNK_SIZE_RATIO / 100)
+        self.min_valid_chunk_length = MinerUChunkingDefaults.MIN_VALID_CHUNK_LENGTH
 
         # 强制使用 hybrid 策略
         self.strategy = ChunkingStrategy.HYBRID
@@ -114,7 +96,7 @@ class MinerUStructureAwareChunker:
         策略（hybrid）：
         1. 按标题层级组织内容
         2. 标题不作为独立 chunk，必须与后续内容合并
-        3. 单个章节超长时（> 400 字符），在段落边界分割
+        3. 单个章节超长时，在段落边界分割
         4. 每个chunk保留：页码、标题路径、块类型、图片信息
 
         Args:
@@ -128,232 +110,9 @@ class MinerUStructureAwareChunker:
         if not content_list:
             return []
 
-        if self.strategy == ChunkingStrategy.BY_TITLE:
-            return self._chunk_by_title(content_list, pdf_name, image_captions)
-        elif self.strategy == ChunkingStrategy.BY_PAGE:
-            return self._chunk_by_page(content_list, pdf_name, image_captions)
-        else:
-            return self._chunk_hybrid(content_list, pdf_name, image_captions)
+        return self._chunk_by_sections(content_list, pdf_name, image_captions)
 
-    def _chunk_by_title(
-        self,
-        content_list: List[Dict[str, Any]],
-        pdf_name: str,
-        image_captions: Optional[Dict[str, str]] = None
-    ) -> List[TextChunk]:
-        """按标题边界分块"""
-        chunks = []
-        current_chunk_text = []
-        current_chunk_images = []
-        current_chunk_page_idx = 0
-        current_page_indices = set()
-        current_title_path = []
-        chunk_index = 0
-
-        for item in content_list:
-            content_type = item.get("type", "text")
-            page_idx = item.get("page_idx", item.get("page_id", 0))
-
-            # 跳过 discarded 类型（页眉页脚等）
-            if content_type == "discarded":
-                continue
-
-            # 添加页码到当前 chunk（跳过 discarded 后）
-            current_page_indices.add(page_idx)
-
-            # 判断是否为标题（支持两种方式）
-            is_title = (
-                content_type == "title" or
-                (content_type == "text" and item.get("text_level", 0) > 0)
-            )
-
-            # 处理标题
-            if is_title:
-                # 如果当前chunk有内容，先保存
-                if current_chunk_text and self._get_text_length(current_chunk_text) >= self.min_chunk_size:
-                    chunks.append(self._create_chunk(
-                        pdf_name=pdf_name,
-                        content="\n".join(current_chunk_text),
-                        chunk_index=chunk_index,
-                        page_idx=current_chunk_page_idx,
-                        page_indices=list(current_page_indices),
-                        image_references=current_chunk_images,
-                        image_captions=image_captions,
-                        title_path=current_title_path.copy(),
-                        block_types=["title", "text"]
-                    ))
-                    chunk_index += 1
-                    current_chunk_text = []
-                    current_chunk_images = []
-                    current_page_indices = set()
-
-                # 更新标题路径
-                title_text = item.get("text", "").strip()
-                text_level = item.get("text_level")
-                current_title_path = self._update_title_path(
-                    current_title_path, title_text, text_level
-                )
-
-                # 添加标题到新chunk
-                current_chunk_text.append(f"## {title_text}")
-                current_chunk_page_idx = page_idx
-
-            # 处理文本段落（排除已识别为标题的）
-            elif content_type == "text" and not is_title:
-                text = item.get("text", "").strip()
-                if text:
-                    current_chunk_text.append(text)
-
-            # 处理列表
-            elif content_type == "list":
-                text = item.get("text", "").strip()
-                if text:
-                    # 转换为markdown列表格式
-                    list_items = []
-                    for line in text.split("\n"):
-                        line = line.strip()
-                        if line and not line.startswith("-"):
-                            list_items.append(f"- {line}")
-                        else:
-                            list_items.append(line)
-                    current_chunk_text.extend(list_items)
-
-            # 处理图片
-            elif content_type == "image":
-                img_path = item.get("img_path")
-                if img_path:
-                    current_chunk_images.append(img_path)
-                    # 如果有图片描述，添加到文本中
-                    if image_captions and img_path in image_captions:
-                        current_chunk_text.append(f"[图片: {image_captions[img_path]}]")
-
-            # 检查是否需要分块（避免chunk过大）
-            if self._get_text_length(current_chunk_text) >= self.max_chunk_size:
-                chunks.append(self._create_chunk(
-                    pdf_name=pdf_name,
-                    content="\n".join(current_chunk_text),
-                    chunk_index=chunk_index,
-                    page_idx=current_chunk_page_idx,
-                    page_indices=list(current_page_indices),
-                    image_references=current_chunk_images,
-                    image_captions=image_captions,
-                    title_path=current_title_path.copy(),
-                    block_types=self._infer_block_types(current_chunk_text)
-                ))
-                chunk_index += 1
-                current_chunk_text = []
-                current_chunk_images = []
-                current_page_indices = set()
-
-        # 保存最后一个chunk
-        if current_chunk_text:
-            chunks.append(self._create_chunk(
-                pdf_name=pdf_name,
-                content="\n".join(current_chunk_text),
-                chunk_index=chunk_index,
-                page_idx=current_chunk_page_idx,
-                page_indices=list(current_page_indices),
-                image_references=current_chunk_images,
-                image_captions=image_captions,
-                title_path=current_title_path.copy(),
-                block_types=self._infer_block_types(current_chunk_text)
-            ))
-
-        return chunks
-
-    def _chunk_by_page(
-        self,
-        content_list: List[Dict[str, Any]],
-        pdf_name: str,
-        image_captions: Optional[Dict[str, str]] = None
-    ) -> List[TextChunk]:
-        """按页分块"""
-        # 按页码分组（跳过 discarded 类型）
-        pages: Dict[int, List[Dict]] = {}
-        for item in content_list:
-            content_type = item.get("type", "text")
-            # 跳过 discarded 类型
-            if content_type == "discarded":
-                continue
-
-            page_idx = item.get("page_idx", item.get("page_id", 0))
-            if page_idx not in pages:
-                pages[page_idx] = []
-            pages[page_idx].append(item)
-
-        chunks = []
-        chunk_index = 0
-
-        for page_idx in sorted(pages.keys()):
-            page_items = pages[page_idx]
-            page_text = []
-            page_images = []
-            title_path = []
-
-            for item in page_items:
-                content_type = item.get("type", "text")
-
-                # 判断是否为标题
-                is_title = (
-                    content_type == "title" or
-                    (content_type == "text" and item.get("text_level", 0) > 0)
-                )
-
-                if is_title:
-                    title_text = item.get("text", "").strip()
-                    text_level = item.get("text_level")
-                    title_path = self._update_title_path(title_path, title_text, text_level)
-                    page_text.append(f"## {title_text}")
-
-                elif content_type == "text" and not is_title:
-                    text = item.get("text", "").strip()
-                    if text:
-                        page_text.append(text)
-
-                elif content_type == "list":
-                    text = item.get("text", "").strip()
-                    if text:
-                        page_text.append(text)
-
-                elif content_type == "image":
-                    img_path = item.get("img_path")
-                    if img_path:
-                        page_images.append(img_path)
-
-            # 如果页面内容过长，进行分割
-            full_text = "\n".join(page_text)
-            if len(full_text) <= self.max_chunk_size:
-                chunks.append(self._create_chunk(
-                    pdf_name=pdf_name,
-                    content=full_text,
-                    chunk_index=chunk_index,
-                    page_idx=page_idx,
-                    page_indices=[page_idx],
-                    image_references=page_images,
-                    image_captions=image_captions,
-                    title_path=title_path,
-                    block_types=["text"]
-                ))
-                chunk_index += 1
-            else:
-                # 长页面分割
-                sub_chunks = self._split_long_text_preserve_structure(
-                    texts=page_text,
-                    pdf_name=pdf_name,
-                    start_index=chunk_index,
-                    page_idx=page_idx,
-                    page_indices=[page_idx],
-                    image_references=page_images,
-                    image_captions=image_captions,
-                    title_path=title_path,
-                    block_types=["text"]
-                )
-                chunks.extend(sub_chunks)
-                chunk_index += len(sub_chunks)
-
-        return chunks
-
-    def _chunk_hybrid(
+    def _chunk_by_sections(
         self,
         content_list: List[Dict[str, Any]],
         pdf_name: str,
@@ -494,7 +253,7 @@ class MinerUStructureAwareChunker:
             section_length = len(section_text)
 
             # 过滤掉内容过少的无效章节
-            if section_length < self.MIN_VALID_CHUNK_LENGTH:
+            if section_length < self.min_valid_chunk_length:
                 skipped_count += 1
                 continue
 
@@ -749,7 +508,7 @@ class MinerUStructureAwareChunker:
             ))
 
         # 过滤掉过短的 chunk（分割时可能产生极短片段）
-        valid_chunks = [c for c in chunks if len(c.text) >= self.MIN_VALID_CHUNK_LENGTH]
+        valid_chunks = [c for c in chunks if len(c.text) >= self.min_valid_chunk_length]
 
         # 重新编号
         for i, chunk in enumerate(valid_chunks):

@@ -18,7 +18,7 @@ from src.document_indexer.chunker import (
 from src.document_indexer.storage import VectorStore
 from src.config import settings
 from src.embedding_factory import EmbeddingFactory
-from src.constants import EmbeddingDefaults, TextDefaults
+from src.constants import EmbeddingDefaults, TextDefaults, MinerUChunkingDefaults
 
 if TYPE_CHECKING:
     try:
@@ -42,8 +42,8 @@ class EmbeddingModelNotAvailableError(RuntimeError):
 class DocumentIndexer(Indexer):
     """文档索引器"""
 
-    DEFAULT_EMBEDDING_DIMENSION = 1024  # bge-m3 默认维度
-    MIN_TEXT_LENGTH = 3
+    DEFAULT_EMBEDDING_DIMENSION = EmbeddingDefaults.DEFAULT_DIMENSION  # bge-m3 默认维度
+    MIN_TEXT_LENGTH = EmbeddingDefaults.MIN_TEXT_LENGTH
 
     def __init__(
         self,
@@ -195,7 +195,7 @@ class DocumentIndexer(Indexer):
         for i, text in enumerate(texts):
             cleaned_text = text.strip()
 
-            if len(cleaned_text) < self.MIN_TEXT_LENGTH:
+            if len(cleaned_text) < EmbeddingDefaults.MIN_TEXT_LENGTH:
                 logger.warning(f"跳过过短文本 (索引 {i}, 长度: {len(cleaned_text)})")
                 embeddings.append(None)
                 failed_count += 1
@@ -220,7 +220,7 @@ class DocumentIndexer(Indexer):
         )
 
         # 使用零向量替换失败的 embedding
-        zero_emb = [0.0] * self.DEFAULT_EMBEDDING_DIMENSION
+        zero_emb = [0.0] * EmbeddingDefaults.DEFAULT_DIMENSION
         return [emb if emb is not None else zero_emb for emb in embeddings]
 
     def _ensure_collection(self, collection_name: str) -> None:

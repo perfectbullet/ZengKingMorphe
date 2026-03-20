@@ -124,129 +124,6 @@ class MinerUParser(DocumentParser):
 
         return zip_result.pdf_name.replace("_", " ").strip()
 
-    def _convert_content_list_to_chunks(
-        self,
-        content_list: Optional[List[Dict[str, Any]]],
-        pdf_name: str,
-    ) -> List[TextChunk]:
-        """将 SDK content_list 转换为 TextChunk 列表
-
-        SDK content_list 结构:
-        [
-            {
-                "type": "text",        # 或 "title", "image", "table", "equation", "discarded"
-                "text": "文本内容",
-                "page_idx": 0,         # 页码索引
-                "text_level": 1,       # 标题级别（仅 title 类型）
-                "bbox": [x0, y0, x1, y1],
-            },
-            ...
-        ]
-        """
-        if not content_list:
-            return []
-
-        chunks: List[TextChunk] = []
-        chunk_index = 0
-        current_section = None
-
-        for item in content_list:
-            content_type = item.get("type", "text")
-
-            # 处理标题 - 更新当前章节
-            if content_type == "title":
-                text = item.get("text", "").strip()
-                if text:
-                    current_section = text
-                    level = item.get("text_level", item.get("level", 0))
-                    chunks.append(TextChunk(
-                        text=text,
-                        index=chunk_index,
-                        page=item.get("page_idx", item.get("page_id")),
-                        section=text,
-                        metadata={
-                            "type": "title",
-                            "level": level,
-                            "page_idx": item.get("page_idx", item.get("page_id")),
-                        },
-                    ))
-                    chunk_index += 1
-
-            # 处理文本
-            elif content_type == "text":
-                text = item.get("text", "").strip()
-                if text:
-                    chunks.append(TextChunk(
-                        text=text,
-                        index=chunk_index,
-                        page=item.get("page_idx", item.get("page_id")),
-                        section=current_section,
-                        metadata={
-                            "type": "text",
-                            "page_idx": item.get("page_idx", item.get("page_id")),
-                            "section_title": item.get("section_title", current_section),
-                            "para_id": item.get("para_id"),
-                        },
-                    ))
-                    chunk_index += 1
-
-            # 处理图片 - 作为特殊 chunk
-            elif content_type == "image":
-                chunks.append(TextChunk(
-                    text=f"[图片: {item.get('img_path', 'unknown')}]",
-                    index=chunk_index,
-                    page=item.get("page_idx", item.get("page_id")),
-                    section=current_section,
-                    metadata={
-                        "type": "image",
-                        "img_path": item.get("img_path"),
-                        "image_caption": item.get("image_caption", []),
-                        "page_idx": item.get("page_idx", item.get("page_id")),
-                    },
-                ))
-                chunk_index += 1
-
-            # 处理表格 - 作为特殊 chunk
-            elif content_type == "table":
-                chunks.append(TextChunk(
-                    text=f"[表格]",
-                    index=chunk_index,
-                    page=item.get("page_idx", item.get("page_id")),
-                    section=current_section,
-                    metadata={
-                        "type": "table",
-                        "img_path": item.get("img_path"),
-                        "table_caption": item.get("table_caption", []),
-                        "table_body": item.get("table_body", ""),
-                        "page_idx": item.get("page_idx", item.get("page_id")),
-                    },
-                ))
-                chunk_index += 1
-
-            # 处理公式 - 作为特殊 chunk
-            elif content_type == "equation":
-                latex = item.get("text", "")
-                chunks.append(TextChunk(
-                    text=f"[公式: {latex}]",
-                    index=chunk_index,
-                    page=item.get("page_idx", item.get("page_id")),
-                    section=current_section,
-                    metadata={
-                        "type": "equation",
-                        "img_path": item.get("img_path"),
-                        "latex": latex,
-                        "text_format": item.get("text_format", "latex"),
-                        "page_idx": item.get("page_idx", item.get("page_id")),
-                    },
-                ))
-                chunk_index += 1
-
-            # discarded 类型跳过
-            elif content_type == "discarded":
-                continue
-
-        return chunks
-
     def _convert_images_to_image_info(
         self,
         images: List[Path],
@@ -289,6 +166,7 @@ class MinerUParser(DocumentParser):
         content = zip_result.md_content or ""
 
         # 转换 content_list 为 TextChunk（使用结构感知分块）
+        chunks = []
         if zip_result.content_list:
             from src.document_parser.mineru_structure_aware_chunker import MinerUStructureAwareChunker
             chunker = MinerUStructureAwareChunker()
@@ -296,8 +174,6 @@ class MinerUParser(DocumentParser):
                 content_list=zip_result.content_list,
                 pdf_name=zip_result.pdf_name
             )
-        else:
-            chunks = []
 
         # 转换图片为 ImageInfo
         images = self._convert_images_to_image_info(

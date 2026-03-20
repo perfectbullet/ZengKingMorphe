@@ -40,3 +40,15 @@ class TextDefaults:
     """文本处理默认值"""
     DEFAULT_SEPARATOR = "\n\n"  # 默认分隔符
     MAX_TRUNCATION_LENGTH = 1000  # 截断文本最大长度（用于日志）
+
+# ========== MinerU 分块配置常量 ==========
+class MinerUChunkingDefaults(IntEnum):
+    """MinerU 结构感知分块默认值"""
+    MIN_CHUNK_SIZE_RATIO = 15  # min_chunk_size = max * 0.15
+    MIN_VALID_CHUNK_LENGTH = 30  # 最小有效 chunk 长度
+    TITLE_PREFIX_OVERHEAD = 2  # 标题前缀开销（换行符等）
+
+# ========== 分块策略枚举 ==========
+class ChunkingStrategy:
+    """分块策略"""
+    HYBRID = "hybrid"  # 混合策略（按标题分块，超长再分割）
