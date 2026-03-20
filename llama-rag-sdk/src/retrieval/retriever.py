@@ -12,12 +12,7 @@ from src.retrieval.strategies import HybridRerankRetrieval
 from src.retrieval.reranker import BGERerankerClientError
 from src.document_indexer.storage import VectorStore
 from src.config import settings
-
-try:
-    from llama_index.embeddings.openai import OpenAIEmbedding
-except ImportError:
-    logger.warning("llama-index-embeddings-openai 未安装")
-    OpenAIEmbedding = None
+from src.embedding_factory import EmbeddingFactory
 
 
 class Retriever:
@@ -47,25 +42,10 @@ class Retriever:
         self.strategy = self._create_strategy(candidate_multiplier)
 
     def _create_embedding_model(self) -> Optional[Any]:
-        """创建 Embedding 模型"""
-        if self.embedding_model is not None:
-            return self.embedding_model
-
-        if OpenAIEmbedding is None:
-            logger.warning("OpenAIEmbedding 不可用")
-            return None
-
-        try:
-            return OpenAIEmbedding(
-                model_name=settings.vllm_embedding_model,
-                api_base=settings.vllm_embedding_base_url,
-                api_key=settings.vllm_api_key,
-                embed_batch_size=32,
-                timeout=300,
-            )
-        except Exception as e:
-            logger.error(f"初始化 Embedding 模型失败: {e}")
-            return None
+        """创建 Embedding 模型（使用工厂模式）"""
+        return EmbeddingFactory.create_embedding_model(
+            model_name=self.embedding_model
+        ) if self.embedding_model else EmbeddingFactory.create_embedding_model()
         if self.embedding_model is not None:
             return self.embedding_model
 

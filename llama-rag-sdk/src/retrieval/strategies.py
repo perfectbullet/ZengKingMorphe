@@ -11,12 +11,7 @@ from src.retrieval.base import RetrievalStrategy, RetrievedDocument
 from src.retrieval.reranker import BGERerankerClientError
 from src.document_indexer.storage import VectorStore
 from src.config import settings
-
-try:
-    from llama_index.embeddings.openai import OpenAIEmbedding
-except ImportError:
-    logger.warning("llama-index-embeddings-openai 未安装")
-    OpenAIEmbedding = None
+from src.embedding_factory import EmbeddingFactory
 
 
 class HybridRerankRetrieval(RetrievalStrategy):
@@ -60,7 +55,7 @@ class HybridRerankRetrieval(RetrievalStrategy):
 
     def _create_embedding(self, text: str) -> List[float]:
         """
-        生成查询的嵌入向量
+        生成查询的嵌入向量（使用工厂模式）
 
         Args:
             text: 查询文本
@@ -69,16 +64,10 @@ class HybridRerankRetrieval(RetrievalStrategy):
             嵌入向量
         """
         if self.embedding_model is None:
-            if OpenAIEmbedding is None:
-                raise RuntimeError("Embedding 模型不可用")
+            self.embedding_model = EmbeddingFactory.create_embedding_model()
 
-            self.embedding_model = OpenAIEmbedding(
-                model_name=settings.vllm_embedding_model,
-                api_base=settings.vllm_embedding_base_url,
-                api_key=settings.vllm_api_key,
-                embed_batch_size=32,
-                timeout=300,
-            )
+        if self.embedding_model is None:
+            raise RuntimeError("Embedding 模型不可用")
 
         try:
             return self.embedding_model.get_text_embedding(text)
@@ -174,8 +163,12 @@ class HybridRerankRetrieval(RetrievalStrategy):
             if 0 <= idx < len(candidates):
                 # 更新分数为 Reranker 分数
                 doc = candidates[idx]
-                # 归一化分数到 0-1 范围 (BGE 分数约为 -10 到 10)
-                normalized_score = (score + 10) / 20 if score is not None else doc.score
+                # 归一化分数到 0-1 范围 (使用配置常量)
+                normalized_score = (
+                    (score - settings.rerank_score_min) /
+                    (settings.rerank_score_max - settings.rerank_score_min)
+                    if score is not None else doc.score
+                )
                 doc.score = max(0.0, min(1.0, normalized_score))
                 reranked.append(doc)
 

@@ -17,6 +17,8 @@ from src.document_indexer.chunker import (
 )
 from src.document_indexer.storage import VectorStore
 from src.config import settings
+from src.embedding_factory import EmbeddingFactory
+from src.constants import EmbeddingDefaults, TextDefaults
 
 if TYPE_CHECKING:
     try:
@@ -95,7 +97,7 @@ class DocumentIndexer(Indexer):
 
     def _create_embedding_model(self) -> Optional["OpenAIEmbedding"]:
         """
-        创建 Embedding 模型
+        创建 Embedding 模型（使用工厂模式）
 
         Returns:
             Embedding 模型实例，如果不可用则返回 None
@@ -103,25 +105,17 @@ class DocumentIndexer(Indexer):
         Raises:
             EmbeddingModelNotAvailableError: 当 OpenAIEmbedding 不可用时
         """
-        if OpenAIEmbedding is None:
-            error_msg = "OpenAIEmbedding 不可用，请安装 llama-index-embeddings-openai"
-            logger.error(error_msg)
-            raise EmbeddingModelNotAvailableError(error_msg)
+        embed_model = EmbeddingFactory.create_embedding_model(
+            model_name=self.embedding_model,
+            api_base=self.api_base
+        )
 
-        try:
-            embed_model = OpenAIEmbedding(
-                model_name=self.embedding_model,
-                api_base=self.api_base,
-                api_key=settings.vllm_api_key,
-                embed_batch_size=32,
-                timeout=300,
+        if embed_model is None:
+            raise EmbeddingModelNotAvailableError(
+                "OpenAIEmbedding 不可用，请安装 llama-index-embeddings-openai"
             )
-            logger.info(f"Embedding 模型初始化成功: {self.embedding_model} @ {self.api_base}")
-            return embed_model
-        except Exception as e:
-            error_msg = f"初始化 Embedding 模型失败: {e}"
-            logger.error(error_msg, exc_info=True)
-            raise
+
+        return embed_model
 
     def _chunk_documents(
         self,

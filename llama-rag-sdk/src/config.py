@@ -127,6 +127,39 @@ class Settings(BaseSettings):
         description="相似度阈值（需在环境变量中配置）"
     )
 
+    # ========== 嵌入向量配置常量 ==========
+    # BGE Reranker 分数归一化常量
+    rerank_score_min: float = Field(
+        default=-10.0,
+        description="BGE Reranker 最小分数（用于归一化）"
+    )
+    rerank_score_max: float = Field(
+        default=10.0,
+        description="BGE Reranker 最大分数（用于归一化）"
+    )
+
+    # 默认嵌入维度
+    embedding_dimension: int = Field(
+        default=1024,
+        description="默认嵌入向量维度"
+    )
+    chunk_size: int = Field(
+        ...,
+        description="文本分块大小（需在环境变量中配置）"
+    )
+    chunk_overlap: int = Field(
+        ...,
+        description="文本分块重叠大小（需在环境变量中配置）"
+    )
+    top_k: int = Field(
+        ...,
+        description="检索返回的文档数量（需在环境变量中配置）"
+    )
+    similarity_threshold: float = Field(
+        ...,
+        description="相似度阈值（需在环境变量中配置）"
+    )
+
     # ========== 检索配置（包含 Reranker 配置）==========
     rerank_model: str = Field(
         ...,

@@ -90,7 +90,7 @@ class VectorStore:
             chromadb.errors.ChromaError: 添加文档失败时抛出
         """
         if metadatas is None:
-            metadatas = [{}] * len(ids)
+            metadatas = [{} for _ in range(len(ids))]
 
         try:
             self.collection.add(
