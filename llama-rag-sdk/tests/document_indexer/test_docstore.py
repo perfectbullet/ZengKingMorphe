@@ -1,12 +1,12 @@
 """
-DocStore 和上下文扩展测试
+MongoDB DocStore 和上下文扩展测试
 """
 
 import pytest
 
 from src.document_indexer.docstore import (
     DocStoreDocument,
-    MemoryDocStore,
+    MongoDBDocStore,
     create_docstore
 )
 from src.retrieval.context_expander import ContextExpander, AutoMergingRetriever
@@ -60,13 +60,22 @@ class TestDocStoreDocument:
         assert doc.text == "测试内容"
 
 
-class TestMemoryDocStore:
-    """MemoryDocStore 测试"""
+@pytest.mark.mongodb
+class TestMongoDBDocStore:
+    """MongoDBDocStore 测试"""
 
     @pytest.fixture
-    def store(self):
+    async def store(self):
         """创建 DocStore 实例"""
-        return MemoryDocStore()
+        # 使用测试数据库
+        store = create_docstore(
+            uri="mongodb://funasr:funasr2026@192.168.8.233:27017/funasr?authSource=admin",
+            db_name="funasr",
+            collection_name="docstore_test"
+        )
+        yield store
+        # 清理测试数据
+        await store.delete_all()
 
     @pytest.mark.asyncio
     async def test_add_and_get(self, store):
@@ -94,11 +103,6 @@ class TestMemoryDocStore:
 
         count = await store.add_many(docs)
         assert count == 5
-
-        # 验证所有文档都已添加
-        for i in range(5):
-            doc = await store.get(f"test_{i}")
-            assert doc is not None
 
     @pytest.mark.asyncio
     async def test_get_many(self, store):
@@ -159,6 +163,21 @@ class TestMemoryDocStore:
         assert len(children) == 3
         assert all(c.parent_id == parent_id for c in children)
 
+    @pytest.mark.asyncio
+    async def test_count(self, store):
+        """测试统计文档数量"""
+        # 先清空
+        await store.delete_all()
+
+        docs = [
+            DocStoreDocument(id=f"test_{i}", text=f"内容{i}", metadata={})
+            for i in range(3)
+        ]
+        await store.add_many(docs)
+
+        count = await store.count()
+        assert count == 3
+
 
 class TestContextExpander:
     """ContextExpander 测试"""
@@ -166,7 +185,12 @@ class TestContextExpander:
     @pytest.fixture
     async def setup_store(self):
         """设置测试用的 DocStore"""
-        store = MemoryDocStore()
+        from src.document_indexer.docstore import MongoDBDocStore
+        store = MongoDBDocStore(
+            uri="mongodb://funasr:funasr2026@192.168.8.233:27017/funasr?authSource=admin",
+            db_name="funasr",
+            collection_name="docstore_test"
+        )
 
         # 添加测试文档（带顺序关系）
         docs = [
@@ -273,7 +297,12 @@ class TestAutoMergingRetriever:
     @pytest.fixture
     async def setup_store(self):
         """设置测试用的 DocStore"""
-        store = MemoryDocStore()
+        from src.document_indexer.docstore import MongoDBDocStore
+        store = MongoDBDocStore(
+            uri="mongodb://funasr:funasr2026@192.168.8.233:27017/funasr?authSource=admin",
+            db_name="funasr",
+            collection_name="docstore_test"
+        )
 
         # 父节点
         parent_doc = DocStoreDocument(

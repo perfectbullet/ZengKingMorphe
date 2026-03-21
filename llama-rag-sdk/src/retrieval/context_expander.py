@@ -9,7 +9,7 @@ from typing import Any, Optional
 
 from loguru import logger
 
-from src.document_indexer.docstore import DocStore
+from src.document_indexer.docstore import MongoDBDocStore
 from src.retrieval.base import RetrievedDocument
 
 
@@ -31,7 +31,7 @@ class ContextExpander:
 
     def __init__(
         self,
-        docstore: DocStore,
+        docstore: MongoDBDocStore,
         window: int = 1,
         include_parent: bool = False,
         context_score_multiplier: float = 0.8
@@ -227,7 +227,7 @@ class AutoMergingRetriever:
 
     def __init__(
         self,
-        docstore: DocStore,
+        docstore: MongoDBDocStore,
         merge_threshold: float = 0.5
     ):
         """

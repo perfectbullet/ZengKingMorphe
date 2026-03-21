@@ -151,10 +151,6 @@ class Settings(BaseSettings):
     )
 
     # ========== DocStore 配置 ==========
-    docstore_type: str = Field(
-        default="memory",
-        description="DocStore 类型 (memory/mongodb)"
-    )
     mongodb_uri: str = Field(
         default="mongodb://localhost:27017/llamarag",
         description="MongoDB 连接 URI"

@@ -1,5 +1,5 @@
 """
-DocStore - 文档存储模块
+DocStore - MongoDB 文档存储模块
 
 用于存储和检索文档的完整内容和元数据，与向量存储（Vector Store）配合使用。
 
@@ -9,7 +9,6 @@ DocStore - 文档存储模块
 3. 存储完整的内容和元数据
 """
 
-from abc import ABC, abstractmethod
 from typing import Any, Optional
 from dataclasses import dataclass, asdict
 from loguru import logger
@@ -41,111 +40,12 @@ class DocStoreDocument:
         return cls(**data)
 
 
-class DocStore(ABC):
-    """DocStore 抽象基类"""
+class MongoDBDocStore:
+    """
+    MongoDB DocStore 实现
 
-    @abstractmethod
-    async def add(self, doc: DocStoreDocument) -> bool:
-        """添加文档"""
-        pass
-
-    @abstractmethod
-    async def add_many(self, docs: list[DocStoreDocument]) -> int:
-        """批量添加文档，返回添加数量"""
-        pass
-
-    @abstractmethod
-    async def get(self, doc_id: str) -> Optional[DocStoreDocument]:
-        """根据 ID 获取文档"""
-        pass
-
-    @abstractmethod
-    async def get_many(self, doc_ids: list[str]) -> list[DocStoreDocument]:
-        """根据 ID 列表批量获取文档"""
-        pass
-
-    @abstractmethod
-    async def update(self, doc_id: str, updates: dict[str, Any]) -> bool:
-        """更新文档"""
-        pass
-
-    @abstractmethod
-    async def delete(self, doc_id: str) -> bool:
-        """删除文档"""
-        pass
-
-    @abstractmethod
-    async def delete_by_collection(self, collection_name: str) -> int:
-        """根据集合名称删除所有文档，返回删除数量"""
-        pass
-
-    @abstractmethod
-    async def get_children(self, parent_id: str) -> list[DocStoreDocument]:
-        """获取父节点的所有子节点"""
-        pass
-
-    @abstractmethod
-    async def close(self) -> None:
-        """关闭连接"""
-        pass
-
-
-class MemoryDocStore(DocStore):
-    """内存 DocStore 实现（用于开发测试）"""
-
-    def __init__(self):
-        self._documents: dict[str, DocStoreDocument] = {}
-
-    async def add(self, doc: DocStoreDocument) -> bool:
-        self._documents[doc.id] = doc
-        return True
-
-    async def add_many(self, docs: list[DocStoreDocument]) -> int:
-        for doc in docs:
-            self._documents[doc.id] = doc
-        return len(docs)
-
-    async def get(self, doc_id: str) -> Optional[DocStoreDocument]:
-        return self._documents.get(doc_id)
-
-    async def get_many(self, doc_ids: list[str]) -> list[DocStoreDocument]:
-        return [self._documents.get(doc_id) for doc_id in doc_ids if doc_id in self._documents]
-
-    async def update(self, doc_id: str, updates: dict[str, Any]) -> bool:
-        if doc_id not in self._documents:
-            return False
-        doc = self._documents[doc_id]
-        for key, value in updates.items():
-            if hasattr(doc, key):
-                setattr(doc, key, value)
-        return True
-
-    async def delete(self, doc_id: str) -> bool:
-        if doc_id in self._documents:
-            del self._documents[doc_id]
-            return True
-        return False
-
-    async def delete_by_collection(self, collection_name: str) -> int:
-        count = 0
-        to_delete = []
-        for doc_id, doc in self._documents.items():
-            if doc.metadata.get("collection_name") == collection_name:
-                to_delete.append(doc_id)
-        for doc_id in to_delete:
-            del self._documents[doc_id]
-            count += 1
-        return count
-
-    async def get_children(self, parent_id: str) -> list[DocStoreDocument]:
-        return [doc for doc in self._documents.values() if doc.parent_id == parent_id]
-
-    async def close(self) -> None:
-        self._documents.clear()
-
-
-class MongoDBDocStore(DocStore):
-    """MongoDB DocStore 实现"""
+    用于存储文档完整内容和元数据，支持按 ID 快速查询。
+    """
 
     def __init__(
         self,
@@ -202,6 +102,7 @@ class MongoDBDocStore(DocStore):
         return data
 
     async def add(self, doc: DocStoreDocument) -> bool:
+        """添加文档"""
         collection = await self._get_collection()
         try:
             await collection.insert_one(self._doc_to_dict(doc))
@@ -211,6 +112,7 @@ class MongoDBDocStore(DocStore):
             return False
 
     async def add_many(self, docs: list[DocStoreDocument]) -> int:
+        """批量添加文档，返回添加数量"""
         if not docs:
             return 0
 
@@ -239,6 +141,7 @@ class MongoDBDocStore(DocStore):
             return count
 
     async def get(self, doc_id: str) -> Optional[DocStoreDocument]:
+        """根据 ID 获取文档"""
         collection = await self._get_collection()
         doc = await collection.find_one({"id": doc_id})
         if doc:
@@ -247,6 +150,7 @@ class MongoDBDocStore(DocStore):
         return None
 
     async def get_many(self, doc_ids: list[str]) -> list[DocStoreDocument]:
+        """根据 ID 列表批量获取文档"""
         if not doc_ids:
             return []
 
@@ -259,6 +163,7 @@ class MongoDBDocStore(DocStore):
         return docs
 
     async def update(self, doc_id: str, updates: dict[str, Any]) -> bool:
+        """更新文档"""
         collection = await self._get_collection()
         result = await collection.update_one(
             {"id": doc_id},
@@ -267,6 +172,7 @@ class MongoDBDocStore(DocStore):
         return result.modified_count > 0
 
     async def delete(self, doc_id: str) -> bool:
+        """删除文档"""
         collection = await self._get_collection()
         result = await collection.delete_one({"id": doc_id})
         return result.deleted_count > 0
@@ -279,7 +185,14 @@ class MongoDBDocStore(DocStore):
         })
         return result.deleted_count
 
+    async def delete_all(self) -> int:
+        """删除所有文档"""
+        collection = await self._get_collection()
+        result = await collection.delete_many({})
+        return result.deleted_count
+
     async def get_children(self, parent_id: str) -> list[DocStoreDocument]:
+        """获取父节点的所有子节点"""
         collection = await self._get_collection()
         cursor = collection.find({"parent_id": parent_id}).sort("metadata.page_idx", 1)
         docs = []
@@ -288,7 +201,13 @@ class MongoDBDocStore(DocStore):
             docs.append(DocStoreDocument.from_dict(doc))
         return docs
 
+    async def count(self) -> int:
+        """获取文档总数"""
+        collection = await self._get_collection()
+        return await collection.count_documents({})
+
     async def close(self) -> None:
+        """关闭连接"""
         if self._client:
             self._client.close()
             self._client = None
@@ -297,26 +216,19 @@ class MongoDBDocStore(DocStore):
 
 
 def create_docstore(
-    store_type: str = "memory",
-    uri: Optional[str] = None,
-    db_name: Optional[str] = None,
+    uri: str,
+    db_name: str,
     collection_name: str = "docstore"
-) -> DocStore:
+) -> MongoDBDocStore:
     """
-    创建 DocStore 实例
+    创建 MongoDB DocStore 实例
 
     Args:
-        store_type: 存储类型（memory/mongodb）
-        uri: MongoDB URI（仅当 store_type=mongodb 时需要）
-        db_name: 数据库名称（仅当 store_type=mongodb 时需要）
+        uri: MongoDB URI
+        db_name: 数据库名称
         collection_name: 集合名称
 
     Returns:
-        DocStore 实例
+        MongoDBDocStore 实例
     """
-    if store_type == "mongodb":
-        if not uri or not db_name:
-            raise ValueError("MongoDB DocStore 需要 uri 和 db_name 参数")
-        return MongoDBDocStore(uri, db_name, collection_name)
-    else:
-        return MemoryDocStore()
+    return MongoDBDocStore(uri, db_name, collection_name)

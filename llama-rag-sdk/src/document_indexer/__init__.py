@@ -13,9 +13,7 @@ from src.document_indexer.chunker import (
 from src.document_indexer.storage import VectorStore
 from src.document_indexer.indexer import DocumentIndexer
 from src.document_indexer.docstore import (
-    DocStore,
     DocStoreDocument,
-    MemoryDocStore,
     MongoDBDocStore,
     create_docstore,
 )
@@ -28,9 +26,7 @@ __all__ = [
     "HybridChunker",
     "VectorStore",
     "DocumentIndexer",
-    "DocStore",
     "DocStoreDocument",
-    "MemoryDocStore",
     "MongoDBDocStore",
     "create_docstore",
 ]

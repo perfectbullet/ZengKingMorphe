@@ -115,7 +115,8 @@ async def parse_and_evaluate_pdf(
     rag: RAGSystem,
     pdf_path: str,
     evaluator: RAGEvaluator,
-    collection_name: str
+    collection_name: str,
+    clear_old_data: bool = False
 ) -> None:
     """解析 PDF 并评估解析性能"""
     print(f"\n{'=' * 60}")
@@ -169,12 +170,6 @@ async def parse_and_evaluate_pdf(
         print(f"\n{'=' * 60}")
         print(f"步骤 2: 文档索引")
         print(f"{'=' * 60}")
-
-        # 清空旧集合以避免干扰
-        try:
-            await rag.clear_collection()
-        except Exception as e:
-            print(f"  注意: 清空集合时出错（可能是首次运行）: {e}")
 
         index_start = time.time()
 
@@ -272,6 +267,12 @@ async def retrieve_and_evaluate(
 
 async def main():
     """主函数 - RAG 系统性能评估"""
+    # ========== 配置区域 ==========
+    # 是否在开始前清理旧数据（清空 ChromaDB 集合和 DocStore）
+    clear_old_data = True  # 设为 False 保留旧数据，设为 True 清空重新索引
+
+    # =================================
+
     # 配置日志
     logger = setup_logger(
         log_level="INFO",
@@ -302,13 +303,16 @@ async def main():
     # 创建 RAG 系统
     async with RAGSystem(
         collection_name=collection_name,
+        enable_docstore=True,
+        enable_context_expansion=True,
     ) as rag:
         print(f"\nRAG 系统配置:")
         print(f"  集合名称: {collection_name}")
+        print(f"  清理旧数据: {clear_old_data}")
 
         # 步骤 1-2: 解析和索引 PDF
         for pdf_path in pdf_paths:
-            await parse_and_evaluate_pdf(rag, pdf_path, evaluator, collection_name)
+            await parse_and_evaluate_pdf(rag, pdf_path, evaluator, collection_name, clear_old_data)
 
         # 步骤 3: 检索和评估
         if evaluator.metrics["total_chunks"] > 0:

@@ -13,7 +13,7 @@ from src.config import settings
 from src.document_parser.mineru_client import MinerUParser
 from src.document_parser.image_processor import ImageDescriptor
 from src.document_parser.base import ParsedDocument, TextChunk
-from src.document_indexer.docstore import DocStore, DocStoreDocument, create_docstore
+from src.document_indexer.docstore import DocStoreDocument, MongoDBDocStore, create_docstore
 from src.document_indexer.indexer import DocumentIndexer
 from src.document_indexer.storage import VectorStore
 from src.retrieval.retriever import Retriever
@@ -71,7 +71,7 @@ class RAGSystem:
         self._indexer: Optional[DocumentIndexer] = None
         self._retriever: Optional[Retriever] = None
         self._vector_store: Optional[VectorStore] = None
-        self._docstore: Optional[DocStore] = None
+        self._docstore: Optional[MongoDBDocStore] = None
         self._context_expander: Optional[ContextExpander] = None
 
         # 追踪已处理的文档
@@ -117,11 +117,10 @@ class RAGSystem:
         return self._retriever
 
     @property
-    def docstore(self) -> DocStore:
-        """获取 DocStore"""
+    def docstore(self) -> MongoDBDocStore:
+        """获取 MongoDB DocStore"""
         if self._docstore is None:
             self._docstore = create_docstore(
-                store_type=settings.docstore_type,
                 uri=settings.mongodb_uri,
                 db_name=settings.mongodb_db_name,
                 collection_name=settings.docstore_collection
