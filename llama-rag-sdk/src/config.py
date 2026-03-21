@@ -178,6 +178,20 @@ class Settings(BaseSettings):
         description="是否包含父节点摘要"
     )
 
+    # ========== 文档摘要配置 ==========
+    enable_summarization: bool = Field(
+        default=True,
+        description="是否启用文档摘要生成"
+    )
+    summarization_min_length: int = Field(
+        default=512,
+        description="chunk 最小长度，低于此长度不生成摘要"
+    )
+    summarization_concurrent: int = Field(
+        default=5,
+        description="批量生成摘要时的并发数"
+    )
+
     # ========== 嵌入向量配置常量 ==========
     # BGE Reranker 分数归一化常量
     rerank_score_min: float = Field(

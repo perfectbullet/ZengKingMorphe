@@ -14,7 +14,7 @@ from src.rag_system import RAGSystem
 from src.document_parser import ParseOptions, ReturnOptions
 from src.retrieval.base import RetrievedDocument
 from src.utils import setup_logger
-
+from mineru_client import  ZipResult
 
 class RAGEvaluator:
     """RAG 系统评估器"""

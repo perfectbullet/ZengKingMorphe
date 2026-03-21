@@ -4,21 +4,26 @@ RAG 系统集成类
 提供统一的 RAG 系统接口，整合解析、索引和检索功能
 """
 
-import uuid
-from pathlib import Path
+from collections import defaultdict
 from typing import Any, Dict, List, Optional
+
 from loguru import logger
 
 from src.config import settings
-from src.document_parser.mineru_client import MinerUParser
-from src.document_parser.image_processor import ImageDescriptor
-from src.document_parser.base import ParsedDocument, TextChunk
-from src.document_indexer.docstore import DocStoreDocument, MongoDBDocStore, create_docstore
+from src.document_indexer.docstore import (
+    DocStoreDocument,
+    MongoDBDocStore,
+    create_docstore,
+)
 from src.document_indexer.indexer import DocumentIndexer
 from src.document_indexer.storage import VectorStore
-from src.retrieval.retriever import Retriever
+from src.document_indexer.summarizer import DocumentSummarizer
+from src.document_parser.base import ParsedDocument
+from src.document_parser.image_processor import ImageDescriptor
+from src.document_parser.mineru_client import MinerUParser
 from src.retrieval.base import RetrievedDocument
 from src.retrieval.context_expander import ContextExpander
+from src.retrieval.retriever import Retriever
 
 
 class RAGSystem:
@@ -30,12 +35,14 @@ class RAGSystem:
     新增功能：
     - DocStore 支持：存储完整文档内容和元数据
     - 上下文扩展：自动扩展检索结果的上下文
+    - 文档摘要：LLM 驱动的双重索引（全文+摘要）
     """
 
     def __init__(
         self,
         collection_name: Optional[str] = None,
         enable_image_description: Optional[bool] = None,
+        enable_summarization: Optional[bool] = None,
     ):
         """
         初始化 RAG 系统
@@ -43,11 +50,16 @@ class RAGSystem:
         Args:
             collection_name: 集合名称
             enable_image_description: 是否启用图片描述
+            enable_summarization: 是否启用文档摘要生成
         """
         self.collection_name = collection_name or settings.chroma_collection_name
         self.enable_image_description = (
             enable_image_description if enable_image_description is not None
             else settings.enable_image_description
+        )
+        self.enable_summarization = (
+            enable_summarization if enable_summarization is not None
+            else settings.enable_summarization
         )
 
         # 确保必要的目录存在
@@ -61,6 +73,7 @@ class RAGSystem:
         self._vector_store: Optional[VectorStore] = None
         self._docstore: Optional[MongoDBDocStore] = None
         self._context_expander: Optional[ContextExpander] = None
+        self._summarizer: Optional["DocumentSummarizer"] = None
 
         # 追踪已处理的文档
         self._document_cache: dict[str, ParsedDocument] = {}
@@ -124,6 +137,14 @@ class RAGSystem:
             include_parent=settings.context_expansion_include_parent
         )
         return self._context_expander
+
+    @property
+    def summarizer(self) -> "DocumentSummarizer":
+        """获取文档摘要生成器"""
+        if self._summarizer is None:
+            from src.document_indexer.summarizer import DocumentSummarizer
+            self._summarizer = DocumentSummarizer()
+        return self._summarizer
 
     @classmethod
     def from_config(cls) -> 'RAGSystem':
@@ -202,25 +223,78 @@ class RAGSystem:
     async def index_parsed_document(
         self,
         document: ParsedDocument,
-        source_path: Optional[str] = None
+        source_path: Optional[str] = None,
+        generate_summaries: Optional[bool] = None
     ) -> list[str]:
         """
         索引已解析的文档（同时同步到 ChromaDB 和 DocStore）
 
+        双重索引策略：
+        - chunk.text → 向量化 → ChromaDB
+        - chunk.summary → 向量化 → ChromaDB (如果启用摘要)
+
         Args:
             document: 已解析的文档对象
             source_path: 源文件路径（用于元数据）
+            generate_summaries: 是否生成摘要（默认使用配置值）
 
         Returns:
             文档 ID 列表
         """
-        # 提取文本块
-        chunks = [chunk.text for chunk in document.chunks]
-        metadata_list = []
+        # 确定是否生成摘要
+        should_summarize = (
+            generate_summaries if generate_summaries is not None
+            else self.enable_summarization
+        )
+
+        # 如果启用摘要生成
+        summary_map = {}  # chunk_index → summary
+        if should_summarize:
+            min_length = settings.summarization_min_length
+            logger.info(f"开始生成摘要（最小长度: {min_length} 字符）...")
+
+            # 筛选需要摘要的 chunks
+            chunks_to_summarize = [
+                (i, chunk) for i, chunk in enumerate(document.chunks)
+                if len(chunk.text) >= min_length
+            ]
+
+            logger.info(
+                f"需要摘要的 chunk: {len(chunks_to_summarize)}/{len(document.chunks)}"
+            )
+
+            # 为每个 chunk 生成摘要（只对长 chunks）
+            if chunks_to_summarize:
+                texts = [chunk.text for _, chunk in chunks_to_summarize]
+                summaries = await self.summarizer.summarize_batch(
+                    texts,
+                    summary_type="chunk",
+                    concurrent=settings.summarization_concurrent
+                )
+
+                # 保存摘要映射
+                for (idx, chunk), summary in zip(chunks_to_summarize, summaries):
+                    if summary:
+                        chunk.metadata["summary"] = summary
+                        summary_map[idx] = summary
+                    else:
+                        chunk.metadata["summary"] = None
+
+            # 短 chunk 的 summary 设为 None
+            for chunk in document.chunks:
+                if "summary" not in chunk.metadata:
+                    chunk.metadata["summary"] = None
+
+            logger.info(
+                f"摘要生成完成: {len(summary_map)}/{len(document.chunks)} 成功"
+            )
+
+        # ========== 双重索引：全文 + 摘要 ==========
+        all_chunks_text = []
+        all_metadata = []
         docstore_docs = []
 
-        for chunk in document.chunks:
-            # 合并所有元数据
+        for i, chunk in enumerate(document.chunks):
             raw_metadata = {
                 "source": source_path or "unknown",
                 "title": document.title,
@@ -230,9 +304,13 @@ class RAGSystem:
                 **chunk.metadata
             }
 
-            # 为 ChromaDB 清理元数据（移除列表和 None）
+            # 清理元数据给 ChromaDB
             chromadb_metadata = self._clean_metadata_for_chromadb(raw_metadata)
-            metadata_list.append(chromadb_metadata)
+            chromadb_metadata["entry_type"] = "full"  # 标记为全文条目
+
+            # 添加全文条目
+            all_chunks_text.append(chunk.text)
+            all_metadata.append(chromadb_metadata)
 
             # DocStore 保留完整元数据（包含所有列表字段）
             docstore_docs.append(DocStoreDocument(
@@ -244,18 +322,32 @@ class RAGSystem:
                 level="leaf"
             ))
 
-        # 添加到向量索引
+            # 如果有摘要，添加摘要条目
+            if i in summary_map:
+                summary = summary_map[i]
+                summary_metadata = chromadb_metadata.copy()
+                summary_metadata["entry_type"] = "summary"  # 标记为摘要条目
+                summary_metadata["original_chunk_id"] = chunk.metadata.get("chunk_id", str(chunk.index))
+
+                all_chunks_text.append(summary)
+                all_metadata.append(summary_metadata)
+                # 摘要条目不需要单独的 DocStore entry，关联到原文即可
+
+        # 添加到向量索引（全文 + 摘要）
         doc_ids = await self.indexer.add_documents(
-            documents=chunks,
+            documents=all_chunks_text,
             collection_name=self.collection_name,
-            metadata_list=metadata_list
+            metadata_list=all_metadata
         )
 
         # 添加到 DocStore
         await self.docstore.add_many(docstore_docs)
         logger.info(f"DocStore 存储: {len(docstore_docs)} 个文档")
 
-        logger.info(f"文档索引完成: {len(doc_ids)} 个块")
+        logger.info(
+            f"双重索引完成: {len(all_chunks_text)} 个条目"
+            f"（全文 {len(document.chunks)} + 摘要 {len(summary_map)}）"
+        )
         return doc_ids
 
     async def index_document(
@@ -370,7 +462,7 @@ class RAGSystem:
         filters: Optional[dict[str, Any]] = None
     ) -> list[RetrievedDocument]:
         """
-        检索文档
+        检索文档（支持双重索引结果合并）
 
         Args:
             query: 查询文本
@@ -383,7 +475,11 @@ class RAGSystem:
         if top_k is None:
             top_k = settings.top_k
 
-        documents = await self.retriever.retrieve(query, top_k, filters)
+        # 获取双重结果（全文 + 摘要），请求更多以便合并
+        documents = await self.retriever.retrieve(query, top_k * 2, filters)
+
+        # 合并去重：同一 chunk 的全文和摘要条目，保留分数高的
+        documents = self._merge_dual_results(documents, top_k)
 
         # 从 DocStore 获取完整元数据
         documents = await self._enrich_results_from_docstore(documents)
@@ -393,6 +489,44 @@ class RAGSystem:
             documents = await self.context_expander.expand(documents)
 
         return documents
+
+    def _merge_dual_results(
+        self,
+        results: list[RetrievedDocument],
+        top_k: int
+    ) -> list[RetrievedDocument]:
+        """
+        合并双重索引结果
+
+        如果同一 chunk 有全文和摘要两个条目，保留分数高的。
+
+        Args:
+            results: 原始检索结果
+            top_k: 返回数量
+
+        Returns:
+            合并后的结果
+        """
+        # 按 chunk_id 分组
+        grouped = defaultdict(list)
+        for result in results:
+            chunk_id = result.chunk_id
+
+            # 摘要条目：获取 original_chunk_id
+            if result.metadata.get("entry_type") == "summary":
+                chunk_id = result.metadata.get("original_chunk_id")
+
+            grouped[chunk_id].append(result)
+
+        # 每组保留分数最高的
+        merged = []
+        for chunk_id, items in grouped.items():
+            best = max(items, key=lambda x: x.score)
+            merged.append(best)
+
+        # 按分数排序并限制数量
+        merged.sort(key=lambda x: x.score, reverse=True)
+        return merged[:top_k]
 
     async def retrieve_multiple(
         self,
@@ -448,6 +582,8 @@ class RAGSystem:
         # 关闭 DocStore 连接
         if self._docstore:
             await self._docstore.close()
+        # 清理摘要器
+        self._summarizer = None
         # MinerUParser 和 ImageDescriptor 不需要显式关闭（基于 SDK）
         # VectorStore 会自动处理连接清理
         self._document_cache.clear()
