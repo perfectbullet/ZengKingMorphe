@@ -4,10 +4,10 @@
 使用 Pydantic Settings 管理所有环境变量配置
 """
 
-from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
 from pathlib import Path
-from typing import List, Union
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -126,6 +126,28 @@ class Settings(BaseSettings):
     similarity_threshold: float = Field(
         ...,
         description="相似度阈值（需在环境变量中配置）"
+    )
+
+    # ========== 目录过滤配置 ==========
+    enable_toc_filter: bool = Field(
+        default=True,
+        description="是否启用目录内容过滤（过滤文档开头的章节目录）"
+    )
+    max_toc_pages: int = Field(
+        default=4,
+        description="目录内容最大页码范围（前N页，超过此页码的内容不会被识别为目录）"
+    )
+    toc_min_page_numbers: int = Field(
+        default=3,
+        description="判断为目录的最小页码数量（内容中包含的页码引用数量）"
+    )
+    toc_short_line_ratio: float = Field(
+        default=0.7,
+        description="目录短行占比阈值（短行占比超过此值且在前N页，会被识别为目录）"
+    )
+    toc_short_line_length: int = Field(
+        default=50,
+        description="短行最大长度（用于计算短行占比）"
     )
 
     # ========== 嵌入向量配置常量 ==========

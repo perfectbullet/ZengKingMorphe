@@ -13,7 +13,8 @@
 - **结构感知分块**: MinerU 专用的智能分块策略
   - 按章节边界自然分割，保持语义完整性
   - 智能标题识别（支持 type=title 和 text_level）
-  - 丰富元数据（标题路径、页码范围、块类型、图片引用）
+  - **自动过滤目录内容**，避免检索干扰
+  - 丰富元数据（标题路径、页码范围、块类型、图片引用、顺序关系）
   - 可通过环境变量配置（CHUNK_SIZE, CHUNK_OVERLAP）
   - 适配 BGE-M3 的 8192 token 容量
 - **图片描述**: 使用 Qwen2-VL 多模态模型生成图片描述
@@ -38,6 +39,7 @@ rag-sdk/
 │   ├── document_parser/       # 文档解析模块
 │   │   ├── base.py           # 数据模型和基类
 │   │   ├── mineru_client.py  # MinerU API 客户端
+│   │   ├── mineru_structure_aware_chunker.py # 结构感知分块器
 │   │   └── image_processor.py # 图片描述生成器
 │   ├── document_indexer/      # 文档索引模块
 │   │   ├── base.py           # 基类
@@ -85,6 +87,15 @@ MINERU_API_URL=http://192.168.8.231:8000
 # ChromaDB
 CHROMA_HOST=192.168.8.233
 CHROMA_PORT=8200
+
+# 分块配置
+CHUNK_SIZE=512
+CHUNK_OVERLAP=150
+
+# 目录过滤配置
+ENABLE_TOC_FILTER=true        # 是否启用目录内容过滤
+MAX_TOC_PAGES=4               # 目录最大页码范围（前N页）
+TOC_MIN_PAGE_NUMBERS=3        # 判断为目录的最小页码数量
 
 # 查询扩展（可选，需要 LLM 服务）
 QUERY_EXPANSION_ENABLED=true

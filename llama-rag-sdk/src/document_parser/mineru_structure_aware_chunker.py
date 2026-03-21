@@ -23,12 +23,12 @@ MinerU Structure-Aware Chunker - 基于 MinerU content_list 的结构感知分�
 import re
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from loguru import logger
 
-from src.document_parser.base import TextChunk
 from src.constants import ChunkingStrategy, MinerUChunkingDefaults
+from src.document_parser.base import TextChunk
 
 
 class MinerUStructureAwareChunker:
@@ -63,11 +63,22 @@ class MinerUStructureAwareChunker:
             from src.config import settings
             self.max_chunk_size = settings.chunk_size
             self.chunk_overlap = settings.chunk_overlap
+            # 目录过滤配置
+            self.enable_toc_filter = settings.enable_toc_filter
+            self.max_toc_pages = settings.max_toc_pages
+            self.toc_min_page_numbers = settings.toc_min_page_numbers
+            self.toc_short_line_ratio = settings.toc_short_line_ratio
+            self.toc_short_line_length = settings.toc_short_line_length
         except Exception:
             # 如果配置加载失败，使用兜底值
             logger.warning("无法加载配置，使用兜底值")
             self.max_chunk_size = 512
             self.chunk_overlap = 150
+            self.enable_toc_filter = True
+            self.max_toc_pages = 4
+            self.toc_min_page_numbers = 3
+            self.toc_short_line_ratio = 0.7
+            self.toc_short_line_length = 50
 
         # min_chunk_size 自动计算为 max_chunk_size 的 15%
         self.min_chunk_size = int(self.max_chunk_size * MinerUChunkingDefaults.MIN_CHUNK_SIZE_RATIO / 100)
@@ -86,10 +97,10 @@ class MinerUStructureAwareChunker:
 
     def chunk_content_list(
         self,
-        content_list: List[Dict[str, Any]],
+        content_list: list[dict[str, Any]],
         pdf_name: str,
-        image_captions: Optional[Dict[str, str]] = None
-    ) -> List[TextChunk]:
+        image_captions: Optional[dict[str, str]] = None
+    ) -> list[TextChunk]:
         """
         将 MinerU SDK 的 content_list 转换为结构化的 TextChunk 列表
 
@@ -114,10 +125,10 @@ class MinerUStructureAwareChunker:
 
     def _chunk_by_sections(
         self,
-        content_list: List[Dict[str, Any]],
+        content_list: list[dict[str, Any]],
         pdf_name: str,
-        image_captions: Optional[Dict[str, str]] = None
-    ) -> List[TextChunk]:
+        image_captions: Optional[dict[str, str]] = None
+    ) -> list[TextChunk]:
         """
         混合分块策略 - 充分利用 MinerU content_list 结构化数据
 
@@ -137,7 +148,7 @@ class MinerUStructureAwareChunker:
 
         # 按标题层级组织内容
         # 每个 section 包含：标题路径、段落列表、图片列表、页码范围
-        sections = []  # List[Dict]
+        sections = []  # list[dict]
         current_section = {
             "title_path": [],
             "texts": [],
@@ -252,6 +263,16 @@ class MinerUStructureAwareChunker:
             section_text = "\n".join(section["texts"])
             section_length = len(section_text)
 
+            # 过滤目录内容
+            if self._is_toc_content(section_text, section["start_page"], section["title_path"]):
+                skipped_count += 1
+                logger.info(
+                    f"过滤目录章节: page={section['start_page']}, "
+                    f"title_path={section['title_path']}, "
+                    f"length={section_length}"
+                )
+                continue
+
             # 过滤掉内容过少的无效章节
             if section_length < self.min_valid_chunk_length:
                 skipped_count += 1
@@ -292,6 +313,11 @@ class MinerUStructureAwareChunker:
         for i, chunk in enumerate(chunks):
             chunk.index = i
 
+        # 添加顺序关系（前后 chunk ID）
+        for i, chunk in enumerate(chunks):
+            chunk.metadata["prev_chunk_id"] = chunks[i - 1].metadata["chunk_id"] if i > 0 else None
+            chunk.metadata["next_chunk_id"] = chunks[i + 1].metadata["chunk_id"] if i < len(chunks) - 1 else None
+
         # 验证并记录结果
         if chunks:
             chunk_lengths = [len(c.text) for c in chunks]
@@ -325,11 +351,11 @@ class MinerUStructureAwareChunker:
         content: str,
         chunk_index: int,
         page_idx: int,
-        page_indices: List[int],
-        image_references: List[str],
-        image_captions: Optional[Dict[str, str]],
-        title_path: List[str],
-        block_types: List[str]
+        page_indices: list[int],
+        image_references: list[str],
+        image_captions: Optional[dict[str, str]],
+        title_path: list[str],
+        block_types: list[str]
     ) -> TextChunk:
         """创建一个 TextChunk"""
         # 提取图片描述
@@ -370,16 +396,16 @@ class MinerUStructureAwareChunker:
 
     def _split_long_text_preserve_structure(
         self,
-        texts: List[str],
+        texts: list[str],
         pdf_name: str,
         start_index: int,
         page_idx: int,
-        page_indices: List[int],
-        image_references: List[str],
-        image_captions: Optional[Dict[str, str]],
-        title_path: List[str],
-        block_types: List[str]
-    ) -> List[TextChunk]:
+        page_indices: list[int],
+        image_references: list[str],
+        image_captions: Optional[dict[str, str]],
+        title_path: list[str],
+        block_types: list[str]
+    ) -> list[TextChunk]:
         """
         按段落边界分割长文本，保持段落完整性和结构信息
 
@@ -401,7 +427,7 @@ class MinerUStructureAwareChunker:
         current_paragraphs = []
         current_length = 0
 
-        def split_half(text: str) -> List[str]:
+        def split_half(text: str) -> list[str]:
             """对半分文本，如果还超长则递归分割"""
             if len(text) <= available_length:
                 return [text]
@@ -516,11 +542,11 @@ class MinerUStructureAwareChunker:
 
         return valid_chunks
 
-    def _get_text_length(self, texts: List[str]) -> int:
+    def _get_text_length(self, texts: list[str]) -> int:
         """计算文本列表的总长度"""
         return sum(len(t) for t in texts)
 
-    def _infer_block_types(self, texts: List[str]) -> List[str]:
+    def _infer_block_types(self, texts: list[str]) -> list[str]:
         """推断块类型"""
         types = set()
         text_str = "\n".join(texts)
@@ -536,10 +562,10 @@ class MinerUStructureAwareChunker:
 
     def _update_title_path(
         self,
-        current_path: List[str],
+        current_path: list[str],
         new_title: str,
         text_level: Optional[int] = None
-    ) -> List[str]:
+    ) -> list[str]:
         """
         更新标题路径
 
@@ -580,15 +606,68 @@ class MinerUStructureAwareChunker:
         else:
             return current_path + [new_title]
 
+    def _is_toc_content(
+        self,
+        text: str,
+        page_idx: int,
+        title_path: list[str]
+    ) -> bool:
+        """
+        判断内容是否为目录（Table of Contents）
+
+        规则：
+        1. 页码在前 max_toc_pages 页内
+        2. 满足以下任一条件：
+           - 包含 >= toc_min_page_numbers 个页码引用（如 "1.1 集合的概念  2"）
+           - 短行占比 > toc_short_line_ratio
+
+        Args:
+            text: 章节文本内容
+            page_idx: 起始页码
+            title_path: 标题路径
+
+        Returns:
+            True 表示是目录内容，应被过滤
+        """
+        if not self.enable_toc_filter:
+            return False
+
+        # 规则1: 页码范围检查
+        if page_idx > self.max_toc_pages:
+            return False
+
+        # 规则2: 页码密度检测（检测行尾的页码，如 "1.1 集合的概念  2"）
+        page_numbers = re.findall(r'\s+(\d+)\s*$', text, re.MULTILINE)
+        if len(page_numbers) >= self.toc_min_page_numbers:
+            logger.debug(
+                f"检测到目录内容(页码密度): page_idx={page_idx}, "
+                f"页码数={len(page_numbers)}, title_path={title_path}"
+            )
+            return True
+
+        # 规则3: 短行占比检测（目录通常有很多短行）
+        lines = [l.strip() for l in text.split('\n') if l.strip()]
+        if lines:
+            short_lines = [l for l in lines if len(l) < self.toc_short_line_length]
+            short_ratio = len(short_lines) / len(lines)
+            if short_ratio > self.toc_short_line_ratio:
+                logger.debug(
+                    f"检测到目录内容(短行占比): page_idx={page_idx}, "
+                    f"短行比={short_ratio:.2f}, title_path={title_path}"
+                )
+                return True
+
+        return False
+
 
 # 便捷函数
 def chunk_mineru_content_list(
-    content_list: List[Dict[str, Any]],
+    content_list: list[dict[str, Any]],
     pdf_name: str,
     strategy: str = ChunkingStrategy.HYBRID,
     max_chunk_size: int = 400,
-    image_captions: Optional[Dict[str, str]] = None
-) -> List[TextChunk]:
+    image_captions: Optional[dict[str, str]] = None
+) -> list[TextChunk]:
     """
     便捷函数：对 MinerU content_list 进行分块
 
