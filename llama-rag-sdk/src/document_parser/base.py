@@ -66,7 +66,7 @@ class ParsedDocument(BaseModel):
             保存的 JSON 文件路径
         """
         # 生成 JSON 文件名：使用 PDF 文件名，替换扩展名为 .json
-        json_filename = Path(pdf_filename).stem + ".json"
+        json_filename = Path(pdf_filename).stem + "-chunk.json"
 
         # 确定输出路径
         if output_dir:
