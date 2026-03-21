@@ -165,39 +165,15 @@ async def parse_and_evaluate_pdf(
         # 记录解析指标
         evaluator.record_parse_time(parse_duration, len(document.chunks), len(document.images))
 
-        # 步骤 2: 文档索引
+        # 步骤 2: 文档索引（同时同步到 ChromaDB 和 DocStore）
         print(f"\n{'=' * 60}")
         print(f"步骤 2: 文档索引")
         print(f"{'=' * 60}")
 
         index_start = time.time()
 
-        # 准备文本块和元数据
-        chunks = [chunk.text for chunk in document.chunks]
-        metadata_list = []
-        for chunk in document.chunks:
-            # 构建基础元数据
-            meta = {
-                "source": pdf_path,
-                "title": document.title,
-                "page": chunk.page if chunk.page is not None else -1,
-                "chunk_index": chunk.index,
-            }
-            if chunk.section:
-                meta["section"] = chunk.section
-
-            # 合并 chunk.metadata，清理 None 值
-            cleaned_chunk_meta = RAGEvaluator.clean_metadata(chunk.metadata)
-            meta.update(cleaned_chunk_meta)
-
-            metadata_list.append(meta)
-
-        # 添加到索引
-        doc_ids = await rag.indexer.add_documents(
-            documents=chunks,
-            collection_name=collection_name,
-            metadata_list=metadata_list
-        )
+        # 使用 RAGSystem 的方法同时索引到 ChromaDB 和 DocStore
+        doc_ids = await rag.index_parsed_document(document, source_path=pdf_path)
 
         index_duration = time.time() - index_start
 
@@ -302,7 +278,6 @@ async def main():
     # 创建 RAG 系统
     async with RAGSystem(
         collection_name=collection_name,
-        enable_context_expansion=True,
     ) as rag:
         print(f"\nRAG 系统配置:")
         print(f"  集合名称: {collection_name}")

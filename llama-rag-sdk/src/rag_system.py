@@ -135,6 +135,27 @@ class RAGSystem:
         """
         return cls()
 
+    def _clean_metadata_for_chromadb(
+        self,
+        metadata: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        清理元数据，只保留 ChromaDB 支持的类型
+
+        ChromaDB 支持: str, int, float, bool
+        ChromaDB 不支持: list, dict, None
+
+        Args:
+            metadata: 原始元数据
+
+        Returns:
+            清理后的元数据
+        """
+        return {
+            k: v for k, v in metadata.items()
+            if v is not None and isinstance(v, (str, int, float, bool))
+        }
+
     async def parse_document(
         self,
         file_path: str,
@@ -178,46 +199,46 @@ class RAGSystem:
 
         return document
 
-    async def index_document(
+    async def index_parsed_document(
         self,
-        file_path: str,
-        generate_image_descriptions: Optional[bool] = None
+        document: ParsedDocument,
+        source_path: Optional[str] = None
     ) -> list[str]:
         """
-        索引文档
+        索引已解析的文档（同时同步到 ChromaDB 和 DocStore）
 
         Args:
-            file_path: 文档文件路径
-            generate_image_descriptions: 是否生成图片描述
+            document: 已解析的文档对象
+            source_path: 源文件路径（用于元数据）
 
         Returns:
             文档 ID 列表
         """
-        # 解析文档
-        document = await self.parse_document(file_path, generate_image_descriptions)
-
         # 提取文本块
         chunks = [chunk.text for chunk in document.chunks]
         metadata_list = []
         docstore_docs = []
 
         for chunk in document.chunks:
-            # 构建向量库元数据
-            metadata = {
-                "source": file_path,
+            # 合并所有元数据
+            raw_metadata = {
+                "source": source_path or "unknown",
                 "title": document.title,
                 "page": chunk.page,
                 "section": chunk.section,
                 "chunk_index": chunk.index,
                 **chunk.metadata
             }
-            metadata_list.append(metadata)
 
-            # 构建 DocStore 文档
+            # 为 ChromaDB 清理元数据（移除列表和 None）
+            chromadb_metadata = self._clean_metadata_for_chromadb(raw_metadata)
+            metadata_list.append(chromadb_metadata)
+
+            # DocStore 保留完整元数据（包含所有列表字段）
             docstore_docs.append(DocStoreDocument(
                 id=chunk.metadata.get("chunk_id", str(chunk.index)),
                 text=chunk.text,
-                metadata=metadata,
+                metadata=raw_metadata,
                 prev_id=chunk.metadata.get("prev_chunk_id"),
                 next_id=chunk.metadata.get("next_chunk_id"),
                 level="leaf"
@@ -236,6 +257,25 @@ class RAGSystem:
 
         logger.info(f"文档索引完成: {len(doc_ids)} 个块")
         return doc_ids
+
+    async def index_document(
+        self,
+        file_path: str,
+        generate_image_descriptions: Optional[bool] = None
+    ) -> list[str]:
+        """
+        索引文档
+
+        Args:
+            file_path: 文档文件路径
+            generate_image_descriptions: 是否生成图片描述
+
+        Returns:
+            文档 ID 列表
+        """
+        # 解析文档
+        document = await self.parse_document(file_path, generate_image_descriptions)
+        return await self.index_parsed_document(document, source_path=file_path)
 
     async def index_documents_batch(
         self,
@@ -288,6 +328,41 @@ class RAGSystem:
         logger.info(f"添加文本文档完成: {len(doc_ids)} 个块")
         return doc_ids
 
+    async def _enrich_results_from_docstore(
+        self,
+        results: list[RetrievedDocument]
+    ) -> list[RetrievedDocument]:
+        """
+        从 DocStore 获取完整元数据并增强检索结果
+
+        Args:
+            results: ChromaDB 检索结果（包含有限元数据）
+
+        Returns:
+            增强后的结果（包含完整元数据）
+        """
+        if not results:
+            return results
+
+        # 收集所有 chunk_id
+        chunk_ids = [r.chunk_id for r in results if r.chunk_id]
+
+        if not chunk_ids:
+            return results
+
+        # 批量从 DocStore 获取完整文档
+        docstore_docs = await self.docstore.get_many(chunk_ids)
+        docstore_map = {doc.id: doc for doc in docstore_docs}
+
+        # 用完整元数据增强每个结果
+        for result in results:
+            if result.chunk_id and result.chunk_id in docstore_map:
+                doc = docstore_map[result.chunk_id]
+                # 用完整元数据替换有限元数据
+                result.metadata = doc.metadata
+
+        return results
+
     async def retrieve(
         self,
         query: str,
@@ -309,6 +384,9 @@ class RAGSystem:
             top_k = settings.top_k
 
         documents = await self.retriever.retrieve(query, top_k, filters)
+
+        # 从 DocStore 获取完整元数据
+        documents = await self._enrich_results_from_docstore(documents)
 
         # 应用上下文扩展
         if self.context_expander:
