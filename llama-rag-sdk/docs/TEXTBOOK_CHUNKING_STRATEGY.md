@@ -1,7 +1,27 @@
-# 教材 RAG 分块与关联优化方案（P1 优先级）
+# 教材 RAG 分块与关联优化方案（已实施）
 
 > 针对几百页数学教材的分块策略
 > 优化目标：保持结构完整性 + 解决边界截断问题
+
+---
+
+## 实施总结（2026-03-21）
+
+### 已完成功能
+
+| 功能 | 状态 | 说明 |
+|------|------|------|
+| **目录过滤** | ✅ 已实施 | 自动过滤文档开头的目录内容 |
+| **顺序关系** | ✅ 已实施 | 添加 prev_chunk_id / next_chunk_id 元数据 |
+| **DocStore** | ✅ 已实施 | MongoDB + Memory 双实现 |
+| **上下文扩展** | ✅ 已实施 | ContextExpander 自动扩展检索上下文 |
+| **自动合并** | ✅ 已实施 | AutoMergingRetriever 智能合并子节点 |
+
+### 待评估功能
+
+| 功能 | 状态 | 说明 |
+|------|------|------|
+| **层次化存储** | ⏸️ 暂缓 | 需要评估实际收益后再决定 |
 
 ---
 
@@ -19,15 +39,161 @@ MinerU 解析 → 结构感知分块 → ChromaDB 存储 → 检索
 - ✅ 按标题层级分块（`title_path`）
 - ✅ 保留页码、块类型等元数据
 - ✅ 图片与上下文关联
+- ✅ 自动过滤目录内容
+- ✅ 分块间顺序关系（prev/next）
 
-**存在的问题**：
-- ❌ 分块之间没有关联关系
-- ❌ 检索结果可能在边界处截断
-- ❌ 缺少层次化索引
+**已解决的问题**：
+- ✅ 分块之间没有关联关系 → 添加了 prev_chunk_id / next_chunk_id
+- ✅ 检索结果在边界处截断 → 实现了上下文扩展
+- ✅ 目录干扰检索 → 实现了目录过滤
 
 ---
 
-## 优化方案 1：MinerU 结构感知 + 层次化结合
+## 已实施功能详情
+
+### 1. 目录过滤
+
+**文件**: `src/document_parser/mineru_structure_aware_chunker.py`
+
+**识别规则**:
+1. 页码范围检查（前 N 页）
+2. 页码密度检测（行尾页码数量）
+3. 短行占比检测
+
+**配置**:
+```bash
+ENABLE_TOC_FILTER=true        # 是否启用
+MAX_TOC_PAGES=4               # 目录最大页码范围
+TOC_MIN_PAGE_NUMBERS=3        # 最小页码数量
+```
+
+### 2. DocStore
+
+**文件**: `src/document_indexer/docstore.py`
+
+**支持实现**:
+- `MemoryDocStore` - 内存实现（开发测试）
+- `MongoDBDocStore` - MongoDB 实现（生产环境）
+
+**API**:
+```python
+# 创建 DocStore
+docstore = create_docstore(
+    store_type="mongodb",
+    uri="mongodb://...",
+    db_name="llamarag"
+)
+
+# 添加文档
+await docstore.add(DocStoreDocument(
+    id="chunk_1",
+    text="内容",
+    metadata={...},
+    prev_id="chunk_0",
+    next_id="chunk_2"
+))
+
+# 获取文档
+doc = await docstore.get("chunk_1")
+
+# 获取子节点
+children = await docstore.get_children("parent_1")
+```
+
+### 3. 上下文扩展
+
+**文件**: `src/retrieval/context_expander.py`
+
+**功能**:
+- 向前/向后扩展 N 个节点
+- 自动去重
+- 可选父节点摘要
+
+**使用**:
+```python
+expander = ContextExpander(docstore, window=1)
+expanded = await expander.expand(results)
+```
+
+### 4. 自动合并
+
+**功能**: 当检索到多个同一父节点的子节点时，自动合并为父节点
+
+**使用**:
+```python
+merger = AutoMergingRetriever(docstore, threshold=0.5)
+merged = await merger.merge(results)
+```
+
+---
+
+## 待评估功能：层次化存储
+
+### 设计思路
+
+```
+教材文档
+    ↓
+┌─────────────────────────────────────────┐
+│  第一层：MinerU 结构分块（已有）        │
+│  - 按 title_path 分块                   │
+│  - 保持章节完整性                       │
+└─────────────────────────────────────────┘
+    ↓
+┌─────────────────────────────────────────┐
+│  第二层：建立父子关系（可选）          │
+│  - 章节作为父节点                       │
+│  - 段落作为子节点                       │
+└─────────────────────────────────────────┘
+```
+
+### 评估要点
+
+1. **实际收益**：embedding 成本降低多少？
+2. **检索质量**：是否显著提升？
+3. **维护成本**：额外的复杂度是否值得？
+
+---
+
+## 关键文件
+
+| 文件 | 状态 | 说明 |
+|------|------|------|
+| `mineru_structure_aware_chunker.py` | ✅ 已有 | 结构分块 + 目录过滤 |
+| `docstore.py` | 🔨 新增 | DocStore 抽象层 |
+| `context_expander.py` | 🔨 新增 | 上下文扩展器 |
+| `rag_system.py` | 🔨 更新 | 集成 DocStore 和扩展 |
+
+---
+
+## 实施检查清单
+
+### 阶段 1：数据结构准备 ✅
+- [x] 扩展 `TextChunk` metadata 添加顺序关系
+- [x] 创建 `DocStoreDocument` 数据类
+- [x] 创建 DocStore 抽象类和实现
+
+### 阶段 2：存储改造 ✅
+- [x] 添加 DocStore 配置
+- [x] 实现 MongoDBDocStore
+- [x] 集成到 RAGSystem
+
+### 阶段 3：检索增强 ✅
+- [x] 实现 `ContextExpander` 上下文扩展
+- [x] 实现 `AutoMergingRetriever` 自动合并
+- [x] 集成到检索流程
+
+### 阶段 4：测试验证 ✅
+- [x] 单元测试：DocStore 基本功能
+- [x] 单元测试：上下文扩展
+- [x] 单元测试：自动合并
+- [x] 单元测试：目录过滤
+
+---
+
+## 原方案内容（保留参考）
+
+## 优化方案 1：MinerU 结构感知 + 层次化结合（暂缓）
 
 ### 1.1 设计思路
 

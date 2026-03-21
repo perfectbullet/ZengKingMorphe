@@ -6,17 +6,19 @@ RAG 系统集成类
 
 import uuid
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
 from loguru import logger
 
 from src.config import settings
 from src.document_parser.mineru_client import MinerUParser
 from src.document_parser.image_processor import ImageDescriptor
-from src.document_parser.base import ParsedDocument
+from src.document_parser.base import ParsedDocument, TextChunk
+from src.document_indexer.docstore import DocStore, DocStoreDocument, create_docstore
 from src.document_indexer.indexer import DocumentIndexer
 from src.document_indexer.storage import VectorStore
 from src.retrieval.retriever import Retriever
 from src.retrieval.base import RetrievedDocument
+from src.retrieval.context_expander import ContextExpander
 
 
 class RAGSystem:
@@ -24,12 +26,18 @@ class RAGSystem:
     RAG 系统集成类
 
     整合文档解析、索引创建和智能检索功能
+
+    新增功能：
+    - DocStore 支持：存储完整文档内容和元数据
+    - 上下文扩展：自动扩展检索结果的上下文
     """
 
     def __init__(
         self,
         collection_name: Optional[str] = None,
         enable_image_description: Optional[bool] = None,
+        enable_docstore: Optional[bool] = None,
+        enable_context_expansion: Optional[bool] = None,
     ):
         """
         初始化 RAG 系统
@@ -37,11 +45,21 @@ class RAGSystem:
         Args:
             collection_name: 集合名称
             enable_image_description: 是否启用图片描述
+            enable_docstore: 是否启用 DocStore
+            enable_context_expansion: 是否启用上下文扩展
         """
         self.collection_name = collection_name or settings.chroma_collection_name
         self.enable_image_description = (
             enable_image_description if enable_image_description is not None
             else settings.enable_image_description
+        )
+        self.enable_docstore = (
+            enable_docstore if enable_docstore is not None
+            else settings.docstore_type != "memory"
+        )
+        self.enable_context_expansion = (
+            enable_context_expansion if enable_context_expansion is not None
+            else settings.context_expansion_enabled
         )
 
         # 确保必要的目录存在
@@ -53,9 +71,11 @@ class RAGSystem:
         self._indexer: Optional[DocumentIndexer] = None
         self._retriever: Optional[Retriever] = None
         self._vector_store: Optional[VectorStore] = None
+        self._docstore: Optional[DocStore] = None
+        self._context_expander: Optional[ContextExpander] = None
 
         # 追踪已处理的文档
-        self._document_cache: Dict[str, ParsedDocument] = {}
+        self._document_cache: dict[str, ParsedDocument] = {}
 
     @property
     def parser(self) -> MinerUParser:
@@ -95,6 +115,29 @@ class RAGSystem:
                 vector_store=self.vector_store
             )
         return self._retriever
+
+    @property
+    def docstore(self) -> DocStore:
+        """获取 DocStore"""
+        if self._docstore is None:
+            self._docstore = create_docstore(
+                store_type=settings.docstore_type,
+                uri=settings.mongodb_uri,
+                db_name=settings.mongodb_db_name,
+                collection_name=settings.docstore_collection
+            )
+        return self._docstore
+
+    @property
+    def context_expander(self) -> Optional[ContextExpander]:
+        """获取上下文扩展器"""
+        if self._context_expander is None and self.enable_context_expansion:
+            self._context_expander = ContextExpander(
+                docstore=self.docstore,
+                window=settings.context_expansion_window,
+                include_parent=settings.context_expansion_include_parent
+            )
+        return self._context_expander
 
     @classmethod
     def from_config(cls) -> 'RAGSystem':
@@ -153,7 +196,7 @@ class RAGSystem:
         self,
         file_path: str,
         generate_image_descriptions: Optional[bool] = None
-    ) -> List[str]:
+    ) -> list[str]:
         """
         索引文档
 
@@ -169,8 +212,12 @@ class RAGSystem:
 
         # 提取文本块
         chunks = [chunk.text for chunk in document.chunks]
-        metadata_list = [
-            {
+        metadata_list = []
+        docstore_docs = []
+
+        for chunk in document.chunks:
+            # 构建向量库元数据
+            metadata = {
                 "source": file_path,
                 "title": document.title,
                 "page": chunk.page,
@@ -178,15 +225,30 @@ class RAGSystem:
                 "chunk_index": chunk.index,
                 **chunk.metadata
             }
-            for chunk in document.chunks
-        ]
+            metadata_list.append(metadata)
 
-        # 添加到索引
+            # 构建 DocStore 文档
+            if self.enable_docstore:
+                docstore_docs.append(DocStoreDocument(
+                    id=chunk.metadata.get("chunk_id", str(chunk.index)),
+                    text=chunk.text,
+                    metadata=metadata,
+                    prev_id=chunk.metadata.get("prev_chunk_id"),
+                    next_id=chunk.metadata.get("next_chunk_id"),
+                    level="leaf"
+                ))
+
+        # 添加到向量索引
         doc_ids = await self.indexer.add_documents(
             documents=chunks,
             collection_name=self.collection_name,
             metadata_list=metadata_list
         )
+
+        # 添加到 DocStore
+        if self.enable_docstore and docstore_docs:
+            await self.docstore.add_many(docstore_docs)
+            logger.info(f"DocStore 存储: {len(docstore_docs)} 个文档")
 
         logger.info(f"文档索引完成: {len(doc_ids)} 个块")
         return doc_ids
@@ -246,8 +308,8 @@ class RAGSystem:
         self,
         query: str,
         top_k: Optional[int] = None,
-        filters: Optional[Dict[str, Any]] = None
-    ) -> List[RetrievedDocument]:
+        filters: Optional[dict[str, Any]] = None
+    ) -> list[RetrievedDocument]:
         """
         检索文档
 
@@ -263,6 +325,11 @@ class RAGSystem:
             top_k = settings.top_k
 
         documents = await self.retriever.retrieve(query, top_k, filters)
+
+        # 应用上下文扩展
+        if self.enable_context_expansion and self.context_expander:
+            documents = await self.context_expander.expand(documents)
+
         return documents
 
     async def retrieve_multiple(
@@ -316,6 +383,9 @@ class RAGSystem:
 
     async def close(self) -> None:
         """关闭资源"""
+        # 关闭 DocStore 连接
+        if self._docstore:
+            await self._docstore.close()
         # MinerUParser 和 ImageDescriptor 不需要显式关闭（基于 SDK）
         # VectorStore 会自动处理连接清理
         self._document_cache.clear()

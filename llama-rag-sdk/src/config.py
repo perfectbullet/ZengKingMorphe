@@ -150,6 +150,38 @@ class Settings(BaseSettings):
         description="短行最大长度（用于计算短行占比）"
     )
 
+    # ========== DocStore 配置 ==========
+    docstore_type: str = Field(
+        default="memory",
+        description="DocStore 类型 (memory/mongodb)"
+    )
+    mongodb_uri: str = Field(
+        default="mongodb://localhost:27017/llamarag",
+        description="MongoDB 连接 URI"
+    )
+    mongodb_db_name: str = Field(
+        default="llamarag",
+        description="MongoDB 数据库名称"
+    )
+    docstore_collection: str = Field(
+        default="docstore",
+        description="DocStore 集合名称"
+    )
+
+    # ========== 上下文扩展配置 ==========
+    context_expansion_enabled: bool = Field(
+        default=True,
+        description="是否启用上下文扩展"
+    )
+    context_expansion_window: int = Field(
+        default=1,
+        description="上下文扩展窗口大小（前后各获取几个节点）"
+    )
+    context_expansion_include_parent: bool = Field(
+        default=False,
+        description="是否包含父节点摘要"
+    )
+
     # ========== 嵌入向量配置常量 ==========
     # BGE Reranker 分数归一化常量
     rerank_score_min: float = Field(
