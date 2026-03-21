@@ -130,12 +130,13 @@ class RAGSystem:
 
     @property
     def context_expander(self) -> Optional[ContextExpander]:
-        """获取上下文扩展器"""
-        self._context_expander = ContextExpander(
-            docstore=self.docstore,
-            window=settings.context_expansion_window,
-            include_parent=settings.context_expansion_include_parent
-        )
+        """获取上下文扩展器（延迟初始化）"""
+        if self._context_expander is None:
+            self._context_expander = ContextExpander(
+                docstore=self.docstore,
+                window=settings.context_expansion_window,
+                include_parent=settings.context_expansion_include_parent
+            )
         return self._context_expander
 
     @property

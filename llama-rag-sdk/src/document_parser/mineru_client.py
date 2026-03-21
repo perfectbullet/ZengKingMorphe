@@ -242,11 +242,10 @@ class MinerUParser(DocumentParser):
                 return_options=return_options,
                 progress_callback=progress_callback,
             )
-            print('-' * 100)
-            print(zip_result)
-            print('-' * 100)
             # 转换为 ParsedDocument
-            document: ZipResult = self._convert_to_parsed_document(zip_result, file_path, parse_options)
+            document = self._convert_to_parsed_document(
+                zip_result, file_path, parse_options
+            )
 
             logger.info(
                 f"文档解析完成: 标题={document.title}, 文本块={len(document.chunks)}, 图片={len(document.images)}"

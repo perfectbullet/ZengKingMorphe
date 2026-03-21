@@ -4,23 +4,19 @@
 提供统一的检索接口，使用混合检索 + Rerank + 查询扩展流水线
 """
 
-from typing import List, Dict, Any, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
 from loguru import logger
 
-from src.retrieval.base import RetrievedDocument
-from src.retrieval.strategies import HybridRerankRetrieval
-from src.retrieval.reranker import BGERerankerClientError
-from src.document_indexer.storage import VectorStore
 from src.config import settings
+from src.document_indexer.storage import VectorStore
 from src.embedding_factory import EmbeddingFactory
+from src.retrieval.base import RetrievedDocument
+from src.retrieval.reranker import BGERerankerClientError
+from src.retrieval.strategies import HybridRerankRetrieval
 
-# 用于类型提示
-try:
-    from typing import TYPE_CHECKING
-    if TYPE_CHECKING:
-        from src.retrieval.query_expansion import QueryExpander
-except ImportError:
-    pass
+if TYPE_CHECKING:
+    from src.retrieval.query_expansion import QueryExpander
 
 
 class Retriever:

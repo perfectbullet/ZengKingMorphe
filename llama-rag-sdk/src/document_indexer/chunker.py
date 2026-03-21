@@ -4,8 +4,9 @@
 提供多种分块策略
 """
 
-from typing import List
 from abc import ABC, abstractmethod
+from typing import List
+
 from loguru import logger
 
 from src.document_indexer.base import ChunkStrategy

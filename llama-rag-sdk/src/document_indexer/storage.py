@@ -4,7 +4,8 @@
 封装 ChromaDB 操作
 """
 
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
+
 import chromadb
 from chromadb.config import Settings as ChromaSettings
 from loguru import logger
