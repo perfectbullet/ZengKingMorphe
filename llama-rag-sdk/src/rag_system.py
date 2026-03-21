@@ -36,8 +36,6 @@ class RAGSystem:
         self,
         collection_name: Optional[str] = None,
         enable_image_description: Optional[bool] = None,
-        enable_docstore: Optional[bool] = None,
-        enable_context_expansion: Optional[bool] = None,
     ):
         """
         初始化 RAG 系统
@@ -45,21 +43,11 @@ class RAGSystem:
         Args:
             collection_name: 集合名称
             enable_image_description: 是否启用图片描述
-            enable_docstore: 是否启用 DocStore
-            enable_context_expansion: 是否启用上下文扩展
         """
         self.collection_name = collection_name or settings.chroma_collection_name
         self.enable_image_description = (
             enable_image_description if enable_image_description is not None
             else settings.enable_image_description
-        )
-        self.enable_docstore = (
-            enable_docstore if enable_docstore is not None
-            else settings.docstore_type != "memory"
-        )
-        self.enable_context_expansion = (
-            enable_context_expansion if enable_context_expansion is not None
-            else settings.context_expansion_enabled
         )
 
         # 确保必要的目录存在
@@ -130,12 +118,11 @@ class RAGSystem:
     @property
     def context_expander(self) -> Optional[ContextExpander]:
         """获取上下文扩展器"""
-        if self._context_expander is None and self.enable_context_expansion:
-            self._context_expander = ContextExpander(
-                docstore=self.docstore,
-                window=settings.context_expansion_window,
-                include_parent=settings.context_expansion_include_parent
-            )
+        self._context_expander = ContextExpander(
+            docstore=self.docstore,
+            window=settings.context_expansion_window,
+            include_parent=settings.context_expansion_include_parent
+        )
         return self._context_expander
 
     @classmethod
@@ -227,15 +214,14 @@ class RAGSystem:
             metadata_list.append(metadata)
 
             # 构建 DocStore 文档
-            if self.enable_docstore:
-                docstore_docs.append(DocStoreDocument(
-                    id=chunk.metadata.get("chunk_id", str(chunk.index)),
-                    text=chunk.text,
-                    metadata=metadata,
-                    prev_id=chunk.metadata.get("prev_chunk_id"),
-                    next_id=chunk.metadata.get("next_chunk_id"),
-                    level="leaf"
-                ))
+            docstore_docs.append(DocStoreDocument(
+                id=chunk.metadata.get("chunk_id", str(chunk.index)),
+                text=chunk.text,
+                metadata=metadata,
+                prev_id=chunk.metadata.get("prev_chunk_id"),
+                next_id=chunk.metadata.get("next_chunk_id"),
+                level="leaf"
+            ))
 
         # 添加到向量索引
         doc_ids = await self.indexer.add_documents(
@@ -245,9 +231,8 @@ class RAGSystem:
         )
 
         # 添加到 DocStore
-        if self.enable_docstore and docstore_docs:
-            await self.docstore.add_many(docstore_docs)
-            logger.info(f"DocStore 存储: {len(docstore_docs)} 个文档")
+        await self.docstore.add_many(docstore_docs)
+        logger.info(f"DocStore 存储: {len(docstore_docs)} 个文档")
 
         logger.info(f"文档索引完成: {len(doc_ids)} 个块")
         return doc_ids
@@ -326,7 +311,7 @@ class RAGSystem:
         documents = await self.retriever.retrieve(query, top_k, filters)
 
         # 应用上下文扩展
-        if self.enable_context_expansion and self.context_expander:
+        if self.context_expander:
             documents = await self.context_expander.expand(documents)
 
         return documents
