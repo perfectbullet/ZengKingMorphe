@@ -1,0 +1,27 @@
+当然可以。以下是几个常用的三角函数和差化积的公式：
+
+1. **正弦和差化积公式**：
+   \[
+   \sin \alpha + \sin \beta = 2 \sin\left(\frac{\alpha + \beta}{2}\right) \cos\left(\frac{\alpha - \beta}{2}\right)
+   \]
+   \[
+   \sin \alpha - \sin \beta = 2 \cos\left(\frac{\alpha + \beta}{2}\right) \sin\left(\frac{\alpha - \beta}{2}\right)
+   \]
+
+2. **余弦和差化积公式**：
+   \[
+   \cos \alpha + \cos \beta = 2 \cos\left(\frac{\alpha + \beta}{2}\right) \cos\left(\frac{\alpha - \beta}{2}\right)
+   \]
+   \[
+   \cos \alpha - \cos \beta = -2 \sin\left(\frac{\alpha + \beta}{2}\right) \sin\left(\frac{\alpha - \beta}{2}\right)
+   \]
+
+3. **正切和差化积公式**：
+   \[
+   \tan \alpha + \tan \beta = \frac{\sin(\alpha + \beta)}{\cos \alpha \cos \beta}
+   \]
+   \[
+   \tan \alpha - \tan \beta = \frac{\sin(\alpha - \beta)}{\cos \alpha \cos \beta}
+   \]
+
+这些公式在解决三角函数的问题时非常有用，希望对你有帮助。如果需要进一步解释或具体应用示例，请随时告知。

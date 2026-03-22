@@ -1,0 +1,25 @@
+看起来您可能想了解一些基本的三角函数公式，但“插挂机”的表述似乎有误或与三角函数无关，请确认您的需求是关于哪些具体的三角函数公式。
+
+以下是常见的三角函数公式：
+
+1. **同角三角函数的基本关系**：
+   - $\sin^2 \alpha + \cos^2 \alpha = 1$
+   - $1 + \tan^2 \alpha = \sec^2 \alpha$
+   - $1 + \cot^2 \alpha = \csc^2 \alpha$
+
+2. **和差角公式**：
+   - $\sin(\alpha \pm \beta) = \sin \alpha \cos \beta \pm \cos \alpha \sin \beta$
+   - $\cos(\alpha \pm \beta) = \cos \alpha \cos \beta \mp \sin \alpha \sin \beta$
+   - $\tan(\alpha \pm \beta) = \frac{\tan \alpha \pm \tan \beta}{1 \mp \tan \alpha \tan \beta}$
+
+3. **倍角公式**：
+   - $\sin 2\alpha = 2 \sin \alpha \cos \alpha$
+   - $\cos 2\alpha = \cos^2 \alpha - \sin^2 \alpha = 1 - 2 \sin^2 \alpha = 2 \cos^2 \alpha - 1$
+   - $\tan 2\alpha = \frac{2 \tan \alpha}{1 - \tan^2 \alpha}$
+
+4. **半角公式**：
+   - $\sin \frac{\alpha}{2} = \pm \sqrt{\frac{1 - \cos \alpha}{2}}$
+   - $\cos \frac{\alpha}{2} = \pm \sqrt{\frac{1 + \cos \alpha}{2}}$
+   - $\tan \frac{\alpha}{2} = \frac{1 - \cos \alpha}{\sin \alpha} = \frac{\sin \alpha}{1 + \cos \alpha}$
+
+如果您有具体的公式或问题需要进一步解释，请告知。

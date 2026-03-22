@@ -4,8 +4,6 @@ docs-history
 .env
 .env-local
 error.log
-error2.log
-test.log
 sftp_sync_config.yaml
 info.log
 数字员工知识库与AI接口.docx
@@ -43,10 +41,7 @@ response_*.json
 
 # 数据集不必上传
 Digital-Human-Disciplinary-Dataset
-
-# Test input directories
-ai-service/tests/test_input/
-demo_sentence_segment/
+error2.lo
 error2.log
 1.json
 2.json
@@ -63,4 +58,5 @@ model_deployment
 ai-service/graph_debug/crag_graph.mmd
 image.png
 qwen-math-7b-测试结果.md
-llama-rag-sdk/third_part_repo/llama_index/
+llama-rag-sdk/third_part_repo/
+es_code_bak

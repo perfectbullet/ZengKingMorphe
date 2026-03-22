@@ -1,0 +1,11 @@
+根据最新的天气信息，今天北京市的天气情况如下：
+
+- 天气状况：晴
+- 白天最高温度：11°C
+- 夜间最低温度：-2°C
+- 风向：北风
+- 风力等级：2级
+
+请注意防寒保暖，并且天气较为干燥，请适当增加饮水量。具体详情可以参考来源网站获取更多信息。
+
+信息来源: [北京市天气预报 - 墨迹天气](https://tianqi.moji.com/weather/china/beijing/beijing) 和 [北京, 北京市, 中國目前天氣 - AccuWeather](https://www.accuweather.com/zh/cn/beijing/101924/current-weather/101924)。

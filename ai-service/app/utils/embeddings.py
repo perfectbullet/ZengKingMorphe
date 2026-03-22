@@ -1,5 +1,7 @@
 """
 Custom embedding implementations for the Digital Employee AI Service.
+
+Note: embedding_cache has been removed since llama-rag-sdk handles caching internally.
 """
 
 from typing import List, Optional
@@ -8,9 +10,27 @@ import time
 from langchain_core.embeddings import Embeddings
 import numpy as np
 from app.core.logging import get_logger
-from app.services.embedding_cache import embedding_cache
 
 logger = get_logger(__name__)
+
+# Simple in-memory cache for non-RAG embeddings (FAQ, sensitive words, etc.)
+# RAG embeddings are cached by llama-rag-sdk
+_embedding_cache: dict[tuple[str, str], List[float]] = {}
+
+
+def _get_cache_key(text: str, model: str) -> tuple[str, str]:
+    """Get cache key for text and model."""
+    return (text, model)
+
+
+def _get_from_cache(text: str, model: str) -> List[float] | None:
+    """Get embedding from cache."""
+    return _embedding_cache.get(_get_cache_key(text, model))
+
+
+def _set_cache(text: str, model: str, embedding: List[float]) -> None:
+    """Set embedding in cache."""
+    _embedding_cache[_get_cache_key(text, model)] = embedding
 
 
 class TextTruncator:
@@ -120,7 +140,7 @@ class OllamaEmbeddings(Embeddings):
         """
 
         # Check cache first
-        cached = embedding_cache.get(text, self.model)
+        cached = _get_from_cache(text, self.model)
         if cached is not None:
             return cached
 
@@ -159,7 +179,7 @@ class OllamaEmbeddings(Embeddings):
                         raise ValueError(f"Empty embedding returned: {result}")
 
                     # Cache the result
-                    embedding_cache.set(text, self.model, embedding)
+                    _set_cache(text, self.model, embedding)
 
                     logger.info(
                         f"Ollama embedding successful: level={level}, "
@@ -254,7 +274,7 @@ class OllamaEmbeddings(Embeddings):
         cached_results = [None] * len(texts)
 
         for i, text in enumerate(texts):
-            cached = embedding_cache.get(text, self.model)
+            cached = _get_from_cache(text, self.model)
             if cached is not None:
                 cached_results[i] = np.array(cached, dtype=float)
             else:
@@ -309,7 +329,7 @@ class OllamaEmbeddings(Embeddings):
                         raise ValueError(f"Empty embedding returned: {result}")
 
                     # Cache the result
-                    embedding_cache.set(text, self.model, embedding)
+                    _set_cache(text, self.model, embedding)
                     batch_embeddings.append(embedding)
                     cached_results[idx] = np.array(embedding, dtype=float)
 
@@ -386,13 +406,13 @@ class OllamaEmbeddings(Embeddings):
             batch = texts[i:i + BATCH_SIZE]
 
             # Check cache for entire batch
-            uncached_count = sum(1 for t in batch if embedding_cache.get(t, self.model) is None)
+            uncached_count = sum(1 for t in batch if _get_from_cache(t, self.model) is None)
 
             if uncached_count == 0:
                 # All cached
                 cache_hits += len(batch)
                 for text in batch:
-                    cached = embedding_cache.get(text, self.model)
+                    cached = _get_from_cache(text, self.model)
                     embeddings.append(np.array(cached, dtype=float))
             else:
                 # Use batch request
@@ -404,14 +424,9 @@ class OllamaEmbeddings(Embeddings):
                 request_count += 1
 
                 # Track cache hits from batch result
-                cache_hits += sum(1 for t in batch if embedding_cache.get(t, self.model) is not None)
+                cache_hits += sum(1 for t in batch if _get_from_cache(t, self.model) is not None)
 
         logger.info(f"Ollama request successful: received {len(embeddings)} embeddings, cache_hits={cache_hits}, batch_requests={request_count}")
-
-        # Log cache stats periodically
-        stats = embedding_cache.get_stats()
-        if int(stats["hits"]) % 100 == 0:  # Every 100 cache hits
-            logger.info("Embedding cache statistics", **stats)
 
         return embeddings
 

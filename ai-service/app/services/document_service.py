@@ -1,57 +1,83 @@
 """
-Document processing service.
-"""
+Document processing service using llama-rag-sdk.
 
-import os
-import re
-import hashlib
-from pathlib import Path
-from typing import List, Dict, Any, Optional
-from datetime import datetime
+使用 llama-rag-sdk 进行文档处理：解析、分块、向量化、存储
+"""
 import aiofiles
-import aiohttp
+import os
+import sys
+from pathlib import Path
+from typing import Dict, Any, Optional
+from datetime import datetime
+
+# 添加 llama-rag-sdk 到路径
+sys.path.insert(0, '/home/zj/ZengKingMorphe/llama-rag-sdk')
+
 from fastapi import HTTPException
-from pypdf import PdfReader
-from docx import Document
-from bs4 import BeautifulSoup
-from langchain_text_splitters import RecursiveCharacterTextSplitter, Language
 from starlette import status
 
 from app.core.logging import get_logger
 from app.core.config import settings
 from app.core.database import get_database
-from app.core.chroma import chroma_db
-from app.core.elasticsearch import es_db
-from app.models.database import DocumentModel, DocumentChunkModel
-from app.models.schemas import ResponseResult
+from app.models.database import DocumentModel
+from app.services.sdk_adapter.config import setup_sdk_env
 
-# Import semantic chunking and hierarchical summarization
-from app.services.semantic_chunking import (
-    semantic_chunk_text,
-    create_hierarchical_summary,
-    SemanticChunk,
-)
+# 设置 SDK 环境变量
+setup_sdk_env()
 
 logger = get_logger(__name__)
 
-# 临时文件下载目录 (ai-service/upload_docs from project root)
+# 临时文件下载目录
 UPLOAD_DIR = Path(__file__).parent.parent.parent.parent / "upload_docs"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-logger.info("Upload directory configured", upload_dir=str(UPLOAD_DIR))
 
 
 class DocumentProcessor:
-    """Document processing service for RAG."""
+    """
+    文档处理服务（使用 llama-rag-sdk）
+
+    SDK 处理：
+    - PDF 解析（MinerU）
+    - 智能分块
+    - Embedding 生成
+    - 存储（ChromaDB + MongoDB DocStore）
+    """
 
     def __init__(self):
-        self.supported_formats = {
-            ".pdf": self._extract_pdf,
-            ".docx": self._extract_docx,
-            ".txt": self._extract_txt,
-            ".md": self._extract_markdown,
-            ".html": self._extract_html,
-            ".mp4": self._extract_mp4,
-        }
+        self._rag_system = None
+
+    @property
+    def rag_system(self):
+        """延迟初始化 llama-rag-sdk RAGSystem"""
+        if self._rag_system is None:
+            from src.rag_system import RAGSystem
+            self._rag_system = RAGSystem(
+                collection_name="rag_documents",
+                enable_image_description=False,
+                enable_summarization=True,
+            )
+        return self._rag_system
+
+    async def _extract_text(self, file_path: str, file_ext: str) -> str:
+        """提取文本（用于非 PDF 格式）"""
+        if file_ext == ".txt":
+            async with aiofiles.open(file_path, 'r', encoding='utf-8') as f:
+                return await f.read()
+        elif file_ext == ".md":
+            async with aiofiles.open(file_path, 'r', encoding='utf-8') as f:
+                return await f.read()
+        elif file_ext == ".docx":
+            from docx import Document
+            doc = Document(file_path)
+            return "\n".join([paragraph.text for paragraph in doc.paragraphs])
+        elif file_ext == ".html":
+            from bs4 import BeautifulSoup
+            async with aiofiles.open(file_path, 'r', encoding='utf-8') as f:
+                html_content = await f.read()
+            soup = BeautifulSoup(html_content, 'html.parser')
+            return soup.get_text()
+        else:
+            raise ValueError(f"Unsupported file format: {file_ext}")
 
     async def process_document(
         self,
@@ -61,43 +87,41 @@ class DocumentProcessor:
         enhance: int,
         category: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
-        task_id: Optional[str] = None,  # Add task_id for progress tracking
-        chunk_config: Optional[Dict[str, Any]] = None,  # Custom chunk configuration
-        doc_id: Optional[str] = None,  # Pre-generated doc_id (for immediate return)
-        resource_id: Optional[int] = None,  # External system resource ID
+        task_id: Optional[str] = None,
+        chunk_config: Optional[Dict[str, Any]] = None,
+        doc_id: Optional[str] = None,
+        resource_id: Optional[int] = None,
     ) -> str:
         """
-        Process a document: extract text, chunk, vectorize, and store.
+        处理文档：使用 llama-rag-sdk 完成解析、分块、向量化、存储
 
         Args:
-            file_path: Path to the document file
-            filename: Original filename
-            kb_id: Knowledge base ID
-            enhance: 设置文档或视频资源是否知识增强：0=不增强，1=增强
-            category: Document category (optional)
-            metadata: Additional metadata (optional)
-            task_id: Task ID for progress tracking (optional)
-            chunk_config: Custom chunking configuration (optional)
-            doc_id: Pre-generated document ID (optional, will be generated if not provided)
-            resource_id: External system resource ID (optional)
+            file_path: 文档文件路径
+            filename: 原始文件名
+            kb_id: 知识库 ID
+            enhance: 知识增强标记
+            category: 文档分类
+            metadata: 额外元数据
+            task_id: 任务 ID（用于进度跟踪）
+            chunk_config: 自定义分块配置（SDK 暂不支持，预留）
+            doc_id: 预生成的文档 ID
+            resource_id: 外部系统资源 ID
 
         Returns:
-            Document ID
+            文档 ID
         """
         try:
-            # Get file info
+            # 获取文件信息
             file_size = os.path.getsize(file_path)
             file_ext = os.path.splitext(filename)[1].lower()
 
-            # Merge metadata with resource_id
+            # 合并元数据
             doc_metadata = metadata.copy() if metadata else {}
             if resource_id:
                 doc_metadata["resource_id"] = resource_id
 
-            # 插入文档记录
+            # 插入文档记录到 MongoDB
             db = await get_database()
-
-            # 文档记录不存在则新建，否则更新（重现学习，修改增强）
             doc = await db.documents.find_one({"doc_id": doc_id})
 
             if not doc:
@@ -110,7 +134,7 @@ class DocumentProcessor:
                     size=file_size,
                     format=file_ext[1:].upper(),
                     status="processing",
-                    segment_config=chunk_config,  # Save segment configuration
+                    segment_config=chunk_config,
                     metadata=doc_metadata,
                 )
 
@@ -122,115 +146,65 @@ class DocumentProcessor:
                         doc_id=doc_id,
                         filename=filename,
                         kb_id=kb_id,
-                        custom_chunking=bool(chunk_config),
-                        resource_id=resource_id,
                     )
                 else:
                     logger.error(f"insert-document {doc_id} failed")
-
-            # Extract text (check if we should use MinerU for PDFs)
-            use_mineru = metadata.get("use_mineru", False) if metadata else False
-            mineru_structured_data = None  # 用于存储MinerU JSON结构化数据
-
-            # 检查是否有外部MinerU JSON文件
-            if settings.mineru_json_enabled:
-                json_file_path = await self._find_mineru_json_file(file_path)
-                if json_file_path:
-                    text_content, mineru_structured_data = await self._extract_text_from_mineru_json(json_file_path)
-                    if text_content:
-                        logger.info("Using external MinerU JSON for text extraction")
-                    else:
-                        # JSON提取失败，使用默认方式
-                        text_content = await self._extract_text(
-                            file_path, file_ext, use_mineru=use_mineru
-                        )
-                else:
-                    # 没有外部JSON，使用默认方式
-                    text_content = await self._extract_text(
-                        file_path, file_ext, use_mineru=use_mineru
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="Failed to create document record"
                     )
+
+            # 使用 llama-rag-sdk 索引文档
+            # SDK 会处理：
+            # 1. PDF 解析（MinerU）
+            # 2. 智能分块
+            # 3. Embedding 生成
+            # 4. 存储（ChromaDB + MongoDB DocStore）
+
+            if file_ext == ".pdf":
+                await self.rag_system.index_document(file_path)
             else:
-                # 未启用MinerU JSON，使用默认方式
-                # Auto-detect scanned PDFs and use MinerU for OCR
-                if file_ext == ".pdf" and not use_mineru:
-                    use_mineru = await self._detect_scanned_pdf(file_path)
-                    if use_mineru:
-                        logger.info(
-                            "Detected scanned PDF, will use MinerU for OCR",
-                            doc_id=doc_id,
-                            file_path=file_path,
+                # 非 PDF 格式：先读取文本，然后添加到索引
+                text_content = await self._extract_text(file_path, file_ext)
+
+                # 手动创建文档并索引
+                from src.document_parser.base import ParsedDocument, TextChunk
+
+                parsed_doc = ParsedDocument(
+                    title=filename,
+                    content=text_content,
+                    chunks=[
+                        TextChunk(
+                            text=text_content,
+                            page=0,
+                            chunk_index=0,
+                            metadata={
+                                "doc_id": doc_id,
+                                "kb_id": kb_id,
+                                "filename": filename,
+                            }
                         )
-
-                text_content = await self._extract_text(
-                    file_path, file_ext, use_mineru=use_mineru
+                    ]
                 )
 
-            # Preprocess text if chunk_config specifies
-            if chunk_config:
-                text_content = self._preprocess_text(text_content, chunk_config)
+                await self.rag_system.index_parsed_document(parsed_doc, source_path=file_path)
 
-            # Chunk document (async for semantic chunking)
-            # Returns (chunks, hierarchical_summary_data) tuple
-            chunk_result = await self._chunk_text(
-                text_content,
-                doc_id,
-                kb_id,
-                file_ext=file_ext,
-                chunk_config=chunk_config,
-                mineru_structured_data=mineru_structured_data,
+            # 更新文档状态
+            await db.documents.update_one(
+                {"doc_id": doc_id},
+                {"$set": {
+                    "status": "completed",
+                    "processed_at": datetime.utcnow(),
+                }}
             )
-
-            # Handle different return types: tuple (semantic) or list (traditional)
-            if isinstance(chunk_result, tuple):
-                chunks, hierarchical_summary_data = chunk_result
-            else:
-                chunks = chunk_result
-                hierarchical_summary_data = None
-
-            # Update total_chunks if task_id provided
-            if task_id:
-                await db.document_tasks.update_one(
-                    {"task_id": task_id},
-                    {"$set": {"total_chunks": len(chunks), "processed_chunks": 0}},
-                )
-
-            # Process chunks (vectorize and store)
-            await self._process_chunks(chunks, doc_id, kb_id, task_id=task_id)
-
-            # Build hierarchical summary data for storage
-            hierarchical_summary_to_save = {}
-            if hierarchical_summary_data:
-                # Convert HierarchicalSummary object to dict for storage
-                hierarchical_summary_to_save = {
-                    "document_summary": hierarchical_summary_data.document_summary
-                    or "",
-                    "section_summaries": [
-                        {"chunk_indices": s.chunk_indices, "summary": s.summary}
-                        for s in (hierarchical_summary_data.section_summaries or [])
-                    ],
-                }
-
-            # Update document status
-            update_data = {
-                "status": "completed",
-                "chunks_count": len(chunks),
-                "vectors_count": len(chunks),
-                "segment_config": chunk_config,  # Persist segment configuration
-                "processed_at": datetime.utcnow(),
-            }
-
-            # Add hierarchical summary if available
-            if hierarchical_summary_to_save:
-                update_data["hierarchical_summary"] = hierarchical_summary_to_save
-
-            await db.documents.update_one({"doc_id": doc_id}, {"$set": update_data})
 
             logger.info(
                 "Completed processing document",
                 doc_id=doc_id,
-                chunks_count=len(chunks),
-                has_hierarchical_summary=bool(hierarchical_summary_to_save),
+                filename=filename,
+                kb_id=kb_id,
             )
+
             return doc_id
 
         except Exception as e:
@@ -241,7 +215,7 @@ class DocumentProcessor:
                 exc_info=True,
             )
 
-            # Update document status to failed
+            # 更新文档状态为失败
             try:
                 db = await get_database()
                 await db.documents.update_one(
@@ -255,1038 +229,56 @@ class DocumentProcessor:
                     error=str(update_error),
                 )
 
-            raise
-
-    async def _extract_text(
-        self, file_path: str, file_ext: str, use_mineru: bool = False
-    ) -> str:
-        """
-        Extract text from document.
-
-        Args:
-            file_path: Path to file
-            file_ext: File extension
-            use_mineru: Whether to use MinerU API for PDF parsing (only for .pdf files)
-
-        Returns:
-            Extracted text content
-        """
-        if file_ext not in self.supported_formats:
-            raise ValueError(f"Unsupported file format: {file_ext}")
-
-        # Call extractor with use_mineru parameter for PDF files
-        if file_ext == ".pdf" and use_mineru:
-            return await self._extract_pdf(file_path, use_mineru=True)
-        else:
-            extractor = self.supported_formats[file_ext]
-            return await extractor(file_path)
-
-    async def _extract_pdf(self, file_path: str, use_mineru: bool = False) -> str:
-        """
-        Extract text from PDF.
-
-        Args:
-            file_path: Path to PDF file
-            use_mineru: Whether to use MinerU API for enhanced PDF parsing
-
-        Returns:
-            Extracted text content
-        """
-        if use_mineru:
-            return await self._extract_pdf_with_mineru(file_path)
-        else:
-            return await self._extract_pdf_basic(file_path)
-
-    async def _extract_pdf_basic(self, file_path: str) -> str:
-        """Extract text from PDF using basic PyPDF extraction."""
-        try:
-            reader = PdfReader(file_path)
-            text_parts = []
-            for page in reader.pages:
-                text = page.extract_text()
-                if text:
-                    text_parts.append(text)
-            return "\n\n".join(text_parts)
-        except Exception as e:
-            logger.error(
-                "Failed to extract PDF", file=file_path, error=str(e), exc_info=True
-            )
-            raise
-
-    async def _detect_scanned_pdf(
-        self, file_path: str, text_threshold: int = 100
-    ) -> bool:
-        """
-        Detect if a PDF is a scanned version (image-based without text layer).
-
-        Args:
-            file_path: Path to PDF file
-            text_threshold: Minimum character count to consider as having text content
-
-        Returns:
-            True if PDF appears to be scanned (needs OCR), False if text layer exists
-        """
-        try:
-            reader = PdfReader(file_path)
-            total_text = ""
-            # Check first 3 pages or all pages if fewer
-            pages_to_check = min(len(reader.pages), 3)
-            for i in range(pages_to_check):
-                page = reader.pages[i]
-                text = page.extract_text()
-                if text:
-                    total_text += text
-
-            # Clean whitespace for accurate check
-            clean_text = "".join(total_text.split())
-
-            # If extracted text is below threshold, likely a scanned PDF
-            is_scanned = len(clean_text) < text_threshold
-
-            logger.info(
-                "PDF scanned detection",
-                file=file_path,
-                pages_checked=pages_to_check,
-                text_length=len(clean_text),
-                threshold=text_threshold,
-                is_scanned=is_scanned,
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Document processing failed: {str(e)}"
             )
 
-            return is_scanned
-
-        except Exception as e:
-            logger.warning(
-                "Failed to detect scanned PDF, assuming scanned to be safe",
-                file=file_path,
-                error=str(e),
-            )
-            # On error, assume it's scanned so we try MinerU
-            return True
-
-    def _extract_content_from_result(self, content_items: list) -> list:
-        """Extract text content from MinerU result items."""
-        text_parts = []
-        if isinstance(content_items, list):
-            for item in content_items:
-                if isinstance(item, dict):
-                    text = item.get("text", "") or item.get("content", "")
-                    if text:
-                        text_parts.append(text)
-                elif isinstance(item, str):
-                    text_parts.append(item)
-        return text_parts
-
-    async def _extract_pdf_with_mineru(self, file_path: str) -> str:
+    async def delete_document(self, doc_id: str, kb_id: str) -> None:
         """
-        Extract text from PDF using MinerU API with enhanced parsing.
-
-        This method uses the MinerU client which provides:
-        - Better table extraction
-        - Formula parsing
-        - Multi-column layout handling
-        - Automatic caching for faster reprocessing
+        删除文档及其所有 chunks
 
         Args:
-            file_path: Path to PDF file
-
-        Returns:
-            Extracted text content
+            doc_id: 文档 ID
+            kb_id: 知识库 ID
         """
         try:
-            # Import here to avoid circular dependencies
-            from app.services.mineru_client import get_mineru_client
+            db = await get_database()
 
-            logger.info(f"Using MinerU API for PDF extraction: {file_path}")
+            # 先查询获取该文档的所有 chunk IDs
+            from app.core.chroma import chroma_db
+            results = await chroma_db.query_documents(
+                collection_name="doc",
+                query_texts=[""],  # 空查询获取所有文档
+                n_results=1000,  # 假设一个文档不超过 1000 个 chunk
+                where={"doc_id": doc_id}
+            )
 
-            # Get client and process PDF with MinerU
-            client = get_mineru_client()
-            async with client:
-                result = await client.process_pdf(file_path, use_cache=True)
+            # 提取 chunk IDs
+            chunk_ids = results.get("ids", [[]])[0] if results.get("ids") else []
 
-            # Extract text content from result
-            if result.get("status") == "success" and "content" in result:
-                content_items = result["content"]
-                text_parts = self._extract_content_from_result(content_items)
-                extracted_text = "\n\n".join(text_parts)
-
-                logger.info(
-                    "Successfully extracted text with MinerU",
-                    file=file_path,
-                    content_length=len(extracted_text),
+            # 删除 ChromaDB 中的向量
+            if chunk_ids:
+                await chroma_db.delete_documents(
+                    collection_name="doc",
+                    ids=chunk_ids
                 )
 
-                return extracted_text
-            else:
-                # Fallback to basic extraction if MinerU fails
-                logger.warning(
-                    "MinerU extraction failed or returned no content, falling back to basic extraction",
-                    file=file_path,
-                    status=result.get("status"),
-                )
-                return await self._extract_pdf_basic(file_path)
-
-        except ImportError:
-            logger.warning("MinerU client not available, using basic PDF extraction")
-            return await self._extract_pdf_basic(file_path)
-        except Exception as e:
-            logger.error(
-                f"Failed to extract PDF with MinerU: {file_path}",
-                error=str(e),
-                exc_info=True,
-            )
-            # Fallback to basic extraction
-            logger.info(f"Falling back to basic PDF extraction: {file_path}")
-            return await self._extract_pdf_basic(file_path)
-
-    async def _find_mineru_json_file(self, file_path: str) -> Optional[str]:
-        """
-        查找与文件同目录的MinerU JSON文件。
-
-        查找规则：
-        1. 同目录下同文件名的.json文件
-        2. 同目录下包含"MinerU"和原文件名的.json文件
-
-        Args:
-            file_path: 原文件路径
-
-        Returns:
-            MinerU JSON文件路径，如果未找到则返回None
-        """
-        import os
-        from pathlib import Path
-
-        file_dir = Path(file_path).parent
-        file_stem = Path(file_path).stem  # 不含扩展名的文件名
-
-        # 规则1: 同目录下同文件名的.json
-        json_path = file_dir / f"{file_stem}.json"
-        if json_path.exists():
-            logger.info(f"Found MinerU JSON file: {json_path}")
-            return str(json_path)
-
-        # 规则2: 查找包含MinerU和原文件名的JSON文件
-        for json_file in file_dir.glob("*.json"):
-            if "MinerU" in json_file.name and file_stem in json_file.name:
-                logger.info(f"Found MinerU JSON file: {json_file}")
-                return str(json_file)
-
-        return None
-
-    async def _extract_text_from_mineru_json(
-        self,
-        json_file_path: str
-    ) -> tuple[str, Optional[dict]]:
-        """
-        从MinerU JSON文件中提取文本内容。
-
-        Args:
-            json_file_path: MinerU JSON文件路径
-
-        Returns:
-            (文本内容, 结构化数据字典)
-        """
-        try:
-            from app.services.mineru_json_parser import MinerUJsonParser
-
-            parser = MinerUJsonParser()
-            doc = parser.parse_file(json_file_path)
-
-            # 生成增强Markdown（保留结构信息）
-            enhanced_md = doc.to_enhanced_markdown(include_images=False)
-
-            # 结构化数据用于分块
-            structured_data = {
-                "json_file_path": json_file_path,
-                "total_pages": doc.get_total_pages(),
-                "titles": doc.get_all_titles(),
-                "images": doc.get_all_images(),
-                "title_hierarchy": doc.get_title_hierarchy(),
-            }
-
-            logger.info(
-                "Extracted text from MinerU JSON",
-                json_file=json_file_path,
-                pages=doc.get_total_pages(),
-                titles=len(structured_data["titles"]),
-                images=len(structured_data["images"]),
-            )
-
-            return enhanced_md, structured_data
-
-        except Exception as e:
-            logger.error(
-                "Failed to extract text from MinerU JSON",
-                json_file=json_file_path,
-                error=str(e),
-                exc_info=True,
-            )
-            # 返回空字符串，让调用者使用fallback
-            return "", None
-
-    async def _extract_docx(self, file_path: str) -> str:
-        """Extract text from Word document."""
-        try:
-            doc = Document(file_path)
-            paragraphs = [para.text for para in doc.paragraphs if para.text.strip()]
-            return "\n\n".join(paragraphs)
-        except Exception as e:
-            logger.error(
-                "Failed to extract DOCX", file=file_path, error=str(e), exc_info=True
-            )
-            raise
-
-    async def _extract_txt(self, file_path: str) -> str:
-        """Extract text from TXT file."""
-        try:
-            async with aiofiles.open(file_path, "r", encoding="utf-8") as f:
-                return await f.read()
-        except Exception as e:
-            logger.error(
-                "Failed to extract TXT", file=file_path, error=str(e), exc_info=True
-            )
-            raise
-
-    async def _extract_markdown(self, file_path: str) -> str:
-        """Extract text from Markdown file."""
-        try:
-            async with aiofiles.open(file_path, "r", encoding="utf-8") as f:
-                md_content = await f.read()
-            # Convert to HTML then extract text
-            # html = markdown.markdown(md_content)
-            # soup = BeautifulSoup(html, 'html.parser')
-            return md_content
-        except Exception as e:
-            logger.error(
-                "Failed to extract Markdown",
-                file=file_path,
-                error=str(e),
-                exc_info=True,
-            )
-            raise
-
-    async def _extract_html(self, file_path: str) -> str:
-        """Extract text from HTML file."""
-        try:
-            async with aiofiles.open(file_path, "r", encoding="utf-8") as f:
-                html_content = await f.read()
-            soup = BeautifulSoup(html_content, "html.parser")
-            return soup.get_text()
-        except Exception as e:
-            logger.error(
-                "Failed to extract HTML", file=file_path, error=str(e), exc_info=True
-            )
-            raise
-
-    async def _extract_mp4(self, file_path: str) -> str:
-        """Extract text from MP4 file."""
-        try:
-            # 功能还未实现
-            return ""
-        except Exception as e:
-            logger.error(
-                "Failed to extract MP4", file=file_path, error=str(e), exc_info=True
-            )
-            raise
-
-    def _preprocess_text(self, text: str, chunk_config: Dict[str, Any]) -> str:
-        """
-        Preprocess text based on chunk configuration.
-
-        Args:
-            text: Raw text content
-            chunk_config: Chunk configuration with preprocessing flags
-
-        Returns:
-            Preprocessed text
-        """
-        # Remove consecutive spaces, newlines, tabs
-        if chunk_config.get("is_space_flag", 0) == 1:
-            # Replace multiple spaces with single space
-            text = re.sub(r" {2,}", " ", text)
-            # Replace multiple newlines with double newline (preserve paragraphs)
-            text = re.sub(r"\n{3,}", "\n\n", text)
-            # Replace tabs with space
-            text = re.sub(r"\t+", " ", text)
-            logger.info("Applied space/newline/tab preprocessing")
-
-        # Remove table of contents, headers, footers (basic heuristic)
-        if chunk_config.get("is_menu_flag", 0) == 1:
-            # Remove common TOC patterns
-            toc_patterns = [
-                r"目录.*?(?=\n\n|\Z)",  # Chinese TOC
-                r"Table of Contents.*?(?=\n\n|\Z)",  # English TOC
-                r"^第[一二三四五六七八九十\d]+章.*$",  # Chapter titles
-                r"^Chapter \d+.*$",  # English chapters
-                r"页眉|页脚|Page \d+",  # Headers/footers
-            ]
-            for pattern in toc_patterns:
-                text = re.sub(pattern, "", text, flags=re.MULTILINE | re.IGNORECASE)
-            logger.info("Applied TOC/header/footer removal")
-
-        return text.strip()
-
-    def _calculate_dynamic_chunk_params(
-        self, total_chars: int, file_ext: str = ".txt"
-    ) -> tuple[int, int]:
-        """
-        根据文档长度动态计算chunk_size和overlap。
-
-        策略:
-        - 短文档 (<1000字): 减少分段,保持完整性
-        - 中等文档 (1000-5000字): 标准分段
-        - 长文档 (5000-20000字): 加大overlap保证上下文连贯
-        - 超长文档 (>20000字): 更小的chunk,更大的overlap
-
-        Args:
-            total_chars: 文档总字符数
-            file_ext: 文件扩展名
-
-        Returns:
-            (chunk_size, chunk_overlap) 元组
-        """
-        # PDF使用MinerU时,由于markdown格式需要更大的chunk
-        is_markdown_based = file_ext in [".md", ".pdf"]
-
-        if total_chars < 1000:
-            # 短文档: 保持完整性,减少分段
-            if is_markdown_based:
-                return 600, 60
-            return 500, 50
-        elif total_chars < 5000:
-            # 中等文档: 标准分段
-            if is_markdown_based:
-                return 500, 80
-            return 400, 60
-        elif total_chars < 20000:
-            # 长文档: 加大overlap保证上下文连贯
-            if is_markdown_based:
-                return 400, 100
-            return 350, 80
-        else:
-            # 超长文档: 更小的chunk,更大的overlap
-            if is_markdown_based:
-                return 300, 120
-            return 256, 100
-
-    async def _chunk_text(
-        self,
-        text: str,
-        doc_id: str,
-        kb_id: str,
-        file_ext: Optional[str] = None,
-        chunk_config: Optional[Dict[str, Any]] = None,
-        mineru_structured_data: Optional[Dict[str, Any]] = None,
-    ) -> List[DocumentChunkModel]:
-        """
-        Split text into chunks using semantic chunking.
-
-        Note: chunk_config is saved for reference but semantic chunking is always used.
-        Hierarchical summary is generated separately after semantic chunking,
-        controlled by enable_hierarchical_summary setting.
-
-        Args:
-            text: Text content
-            doc_id: Document ID
-            kb_id: Knowledge base ID
-            file_ext: File extension (e.g., '.md', '.html', '.txt', '.pdf')
-            chunk_config: Custom chunking configuration (saved for reference only, not used)
-            mineru_structured_data: MinerU JSON结构化数据（用于结构化分块）
-
-        Returns:
-            List of document chunks
-        """
-        # 如果有MinerU结构化数据且启用结构化分块，使用结构化分块
-        if mineru_structured_data and settings.mineru_structure_aware_chunking:
-            return await self._mineru_aware_chunk_text(
-                text, doc_id, kb_id, mineru_structured_data
-            )
-
-        # Always use semantic chunking (chunk_config is saved but not used for splitting)
-        if settings.enable_semantic_chunking:
-            return await self._semantic_chunk_text(text, doc_id, kb_id, file_ext)
-
-        # Fallback to traditional chunking only if semantic chunking is disabled
-        # Determine chunk size and overlap for traditional chunking
-        if chunk_config:
-            chunk_size = chunk_config.get(
-                "segment_union_max_length", settings.chunk_size
-            )
-            chunk_overlap = min(chunk_size // 10, 50)  # 10% overlap, max 50
-            segment_type = chunk_config.get("segment_type", 0)
-        else:
-            # 使用动态分段策略
-            chunk_size, chunk_overlap = self._calculate_dynamic_chunk_params(
-                len(text), file_ext or ".txt"
-            )
-            segment_type = -1  # Use default logic
-
-            logger.info(
-                "Using dynamic chunking params",
-                doc_id=doc_id,
-                total_chars=len(text),
-                chunk_size=chunk_size,
-                chunk_overlap=chunk_overlap,
-            )
-
-        # Determine separators
-        separators = None
-
-        # Custom identifier-based splitting (segment_type=1)
-        if segment_type == 1:
-            identifier_type = chunk_config.get("segment_identifier_type", 0)
-
-            if identifier_type == 0:  # System default identifiers
-                # Parse identifier_default bitmap: "1111111" = [......, 。, ., ！, !, ？, ?]
-                bitmap = chunk_config.get("identifier_default", "1111111")
-                default_identifiers = ["......", "。", ".", "！", "!", "？", "?"]
-                separators = [
-                    default_identifiers[i]
-                    for i, bit in enumerate(bitmap)
-                    if bit == "1" and i < len(default_identifiers)
-                ]
-                # Add fallback separators
-                separators.extend(["\n\n", "\n", " ", ""])
-                logger.info(
-                    f"Using system default identifiers: separators={separators[:7]}"
-                )
-
-            elif identifier_type == 1:  # Custom identifiers
-                custom_str = chunk_config.get("identifier_customize", "")
-                if custom_str:
-                    # Parse custom identifiers (comma-separated or direct list)
-                    separators = [s.strip() for s in custom_str.split(",") if s.strip()]
-                    separators.extend(["\n\n", "\n", " ", ""])  # Add fallbacks
-                    logger.info(f"Using custom identifiers: separators={separators}")
-
-        # Newline splitting (segment_type=0) or default logic
-        if separators is None:
-            if file_ext in [".md", ".pdf"]:  # PDF converted to markdown
-                separators = RecursiveCharacterTextSplitter.get_separators_for_language(
-                    Language.MARKDOWN
-                )
-            elif file_ext == ".html":
-                separators = RecursiveCharacterTextSplitter.get_separators_for_language(
-                    Language.HTML
-                )
-            else:
-                # Default separators for plain text
-                separators = [
-                    "\n\n",  # Paragraph boundary
-                    "\n",  # Line break
-                    "。",  # Chinese period
-                    "！",  # Chinese exclamation
-                    "？",  # Chinese question
-                    ".",  # English period
-                    "!",  # English exclamation
-                    "?",  # English question
-                    ";",  # Semicolon
-                    ":",  # Colon
-                    " ",  # Space
-                    "",  # Character-level split (fallback)
-                ]
-
-        # Create text splitter with appropriate separators
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap,
-            separators=separators,
-            length_function=len,
-            is_separator_regex=False,
-        )
-
-        # Split text into chunks
-        chunk_texts = text_splitter.split_text(text)
-
-        # Convert to DocumentChunkModel objects
-        chunks = []
-        for chunk_index, chunk_text in enumerate(chunk_texts):
-            chunk_id = f"{doc_id}_chunk_{chunk_index}"
-
-            chunk_model = DocumentChunkModel(
-                chunk_id=chunk_id,
-                doc_id=doc_id,
-                kb_id=kb_id,
-                content=chunk_text,
-                chunk_index=chunk_index,
-            )
-            chunks.append(chunk_model)
-
-        logger.info(
-            "Chunked document with RecursiveCharacterTextSplitter",
-            doc_id=doc_id,
-            file_ext=file_ext,
-            chunks_count=len(chunks),
-            avg_chunk_size=sum(len(c.content) for c in chunks) / len(chunks)
-            if chunks
-            else 0,
-        )
-
-        return chunks
-
-    async def _mineru_aware_chunk_text(
-        self,
-        text: str,
-        doc_id: str,
-        kb_id: str,
-        mineru_structured_data: Dict[str, Any],
-    ) -> List[DocumentChunkModel]:
-        """
-        使用MinerU结构化数据进行智能分块。
-
-        Args:
-            text: 文本内容（实际上是增强Markdown）
-            doc_id: 文档ID
-            kb_id: 知识库ID
-            mineru_structured_data: MinerU JSON结构化数据
-
-        Returns:
-            文档分块列表
-        """
-        try:
-            from app.services.mineru_aware_chunking import (
-                MinerUAwareChunker,
-                MultiModalChunk,
-                ChunkingStrategy,
-            )
-
-            logger.info(
-                "Using MinerU-aware chunking",
-                doc_id=doc_id,
-                strategy=settings.mineru_chunking_strategy,
-            )
-
-            chunker = MinerUAwareChunker(
-                max_chunk_size=settings.chunk_size * 2,  # 结构化分块可以使用更大的chunk
-                strategy=settings.mineru_chunking_strategy
-            )
-
-            # 需要MinerUDocument对象，这里我们重新解析JSON文件
-            json_file_path = mineru_structured_data.get("json_file_path")
-            if not json_file_path:
-                logger.warning("No JSON file path in structured data, falling back to semantic chunking")
-                return await self._semantic_chunk_text(text, doc_id, kb_id, ".md")
-
-            from app.services.mineru_json_parser import MinerUJsonParser
-            parser = MinerUJsonParser()
-            doc = parser.parse_file(json_file_path)
-
-            # 生成图片描述（如果启用）
-            image_captions = None
-            if settings.mineru_image_captioning and settings.mineru_include_images:
-                from app.services.mineru_image_handler import MinerUImageHandler, VLMBackend
-                handler = MinerUImageHandler(
-                    vlm_backend=VLMBackend(settings.mineru_vlm_backend),
-                    vlm_api_key=settings.mineru_vlm_api_key,
-                    vlm_base_url=settings.mineru_vlm_base_url,
-                    vlm_model=settings.mineru_vlm_model,
-                )
-                images = []
-                for img_info in mineru_structured_data.get("images", []):
-                    from app.services.mineru_image_handler import ImageInfo
-                    images.append(ImageInfo(
-                        url=img_info["url"],
-                        page_idx=img_info["page_idx"],
-                        bbox=tuple(img_info["bbox"]),
-                    ))
-                if images:
-                    image_captions = await handler.generate_captions_batch(images)
-
-            # 进行结构化分块
-            multimodal_chunks = await chunker.chunk_document(
-                doc=doc,
-                doc_id=doc_id,
-                kb_id=kb_id,
-                image_captions=image_captions,
-            )
-
-            # 转换为DocumentChunkModel
-            chunks = []
-            for mm_chunk in multimodal_chunks:
-                # 构建metadata
-                metadata = {
-                    "chunk_type": "mineru_structured",
-                    "summary": "",
-                    "page_idx": mm_chunk.page_idx,
-                    "title_path": mm_chunk.title_path,
-                    "block_types": mm_chunk.block_types,
-                }
-
-                chunk_model = DocumentChunkModel(
-                    chunk_id=mm_chunk.chunk_id,
-                    doc_id=doc_id,
-                    kb_id=kb_id,
-                    content=mm_chunk.content,
-                    chunk_index=mm_chunk.chunk_index,
-                    metadata=metadata,
-                    # MinerU结构化字段
-                    page_idx=mm_chunk.page_idx,
-                    page_indices=mm_chunk.page_indices,
-                    block_types=mm_chunk.block_types,
-                    image_references=mm_chunk.image_references,
-                    image_captions=mm_chunk.image_captions,
-                    title_path=mm_chunk.title_path,
-                    structure_level=mm_chunk.structure_level,
-                )
-                chunks.append(chunk_model)
-
-            logger.info(
-                "MinerU-aware chunking completed",
-                doc_id=doc_id,
-                chunks_count=len(chunks),
-                chunks_with_images=sum(1 for c in chunks if c.image_references),
-            )
-
-            return chunks
-
-        except Exception as e:
-            logger.error(
-                "MinerU-aware chunking failed, falling back to semantic chunking",
-                doc_id=doc_id,
-                error=str(e),
-                exc_info=True,
-            )
-            return await self._semantic_chunk_text(text, doc_id, kb_id, ".md")
-
-    async def _semantic_chunk_text(
-        self, text: str, doc_id: str, kb_id: str, file_ext: Optional[str] = None
-    ) -> List[DocumentChunkModel]:
-        """
-        Split text into semantically coherent chunks using embeddings.
-
-        Args:
-            text: Text content
-            doc_id: Document ID
-            kb_id: Knowledge base ID
-            file_ext: File extension
-
-        Returns:
-            List of document chunks with summaries
-        """
-        logger.info(
-            "Using semantic chunking with hierarchical summarization",
-            doc_id=doc_id,
-            text_length=len(text),
-            file_ext=file_ext,
-        )
-
-        try:
-            # Use semantic chunking service with file_ext for auto-tuning chunk sizes
-            semantic_chunks = await semantic_chunk_text(text, file_ext=file_ext)
-
-            # Generate hierarchical summaries and capture the result
-            hierarchical_summary_data = None
-            if settings.enable_hierarchical_summary:
-                from app.services.semantic_chunking import HierarchicalSummary
-
-                hierarchical_summary_data = await create_hierarchical_summary(
-                    semantic_chunks, doc_id
-                )
-
-            # Convert to DocumentChunkModel objects
-            chunks = []
-            for semantic_chunk in semantic_chunks:
-                chunk_id = f"{doc_id}_chunk_{semantic_chunk.chunk_index}"
-
-                # Build metadata with summary
-                metadata = {
-                    "chunk_type": "semantic",
-                    "summary": semantic_chunk.summary or "",
-                }
-
-                chunk_model = DocumentChunkModel(
-                    chunk_id=chunk_id,
-                    doc_id=doc_id,
-                    kb_id=kb_id,
-                    content=semantic_chunk.content,
-                    chunk_index=semantic_chunk.chunk_index,
-                    metadata=metadata,
-                )
-                chunks.append(chunk_model)
-
-            logger.info(
-                "Semantic chunking completed",
-                doc_id=doc_id,
-                chunks_count=len(chunks),
-                with_summaries=settings.enable_hierarchical_summary,
-            )
-
-            # Return chunks with hierarchical summary data
-            # Store it as an attribute for later use in process_document
-            return chunks, hierarchical_summary_data
-
-        except Exception as e:
-            logger.error(
-                "Semantic chunking failed, falling back to traditional chunking",
-                doc_id=doc_id,
-                error=str(e),
-                exc_info=True,
-            )
-            # Fall back to traditional chunking
-            return await self._fallback_traditional_chunking(
-                text, doc_id, kb_id, file_ext
-            ), None
-
-    async def _fallback_traditional_chunking(
-        self, text: str, doc_id: str, kb_id: str, file_ext: Optional[str] = None
-    ) -> List[DocumentChunkModel]:
-        """
-        Fallback to traditional character-based chunking.
-
-        Args:
-            text: Text content
-            doc_id: Document ID
-            kb_id: Knowledge base ID
-            file_ext: File extension
-
-        Returns:
-            List of document chunks
-        """
-        chunk_size, chunk_overlap = self._calculate_dynamic_chunk_params(
-            len(text), file_ext or ".txt"
-        )
-
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap,
-            separators=[
-                "\n\n",
-                "\n",
-                "。",
-                "！",
-                "？",
-                ".",
-                "!",
-                "?",
-                ";",
-                ":",
-                " ",
-                "",
-            ],
-            length_function=len,
-            is_separator_regex=False,
-        )
-
-        chunk_texts = text_splitter.split_text(text)
-
-        chunks = []
-        for chunk_index, chunk_text in enumerate(chunk_texts):
-            chunk_id = f"{doc_id}_chunk_{chunk_index}"
-
-            chunk_model = DocumentChunkModel(
-                chunk_id=chunk_id,
-                doc_id=doc_id,
-                kb_id=kb_id,
-                content=chunk_text,
-                chunk_index=chunk_index,
-            )
-            chunks.append(chunk_model)
-
-        logger.info(
-            "Fallback traditional chunking completed",
-            doc_id=doc_id,
-            chunks_count=len(chunks),
-        )
-
-        return chunks
-
-    async def _process_chunks(
-        self,
-        chunks: List[DocumentChunkModel],
-        doc_id: str,
-        kb_id: str,
-        task_id: Optional[str] = None,  # Add task_id for progress tracking
-    ) -> None:
-        """
-        Process chunks: vectorize and store in vector DB and ElasticSearch.
-
-        Args:
-            chunks: List of document chunks
-            doc_id: Document ID
-            kb_id: Knowledge base ID
-            task_id: Task ID for progress tracking (optional)
-        """
-        db = await get_database()
-
-        # Filter out empty chunks to avoid embedding dimension errors
-        valid_chunks = [
-            chunk for chunk in chunks if chunk.content and chunk.content.strip()
-        ]
-
-        if not valid_chunks:
-            logger.warning("No valid chunks to store after filtering empty content")
-            return
-
-        if len(valid_chunks) < len(chunks):
-            logger.warning(
-                f"Filtered out {len(chunks) - len(valid_chunks)} empty chunks, "
-                f"remaining: {len(valid_chunks)}"
-            )
-
-        # Prepare data for batch operations
-        # For embedding: use enhanced content with title prefix if available
-        chunk_texts = []
-        for chunk in valid_chunks:
-            # Check if chunk has title_path (MinerU structured chunk)
-            if hasattr(chunk, 'title_path') and chunk.title_path:
-                # Use title-prefixed content for embedding
-                title_str = " > ".join(chunk.title_path)
-                chunk_texts.append(f"{title_str}\n\n{chunk.content}")
-            else:
-                # Regular chunk: use content as-is
-                chunk_texts.append(chunk.content)
-
-        chunk_ids = [chunk.chunk_id for chunk in valid_chunks]
-        chunk_metadatas = [
-            {
-                "doc_id": chunk.doc_id,
-                "kb_id": chunk.kb_id,
-                "chunk_index": chunk.chunk_index,
-                "summary": chunk.metadata.get("summary", "") if chunk.metadata else "",
-                # MinerU结构化元数据
-                "page_idx": chunk.page_idx,
-                "has_images": len(chunk.image_references) > 0 if chunk.image_references else False,
-                "block_types": "|".join(chunk.block_types) if chunk.block_types else "",
-                "structure_level": chunk.structure_level if chunk.structure_level else 0,
-            }
-            for chunk in valid_chunks
-        ]
-
-        # Store in Chroma (with vectorization)
-        await chroma_db.add_documents(
-            collection_name="doc",
-            documents=chunk_texts,
-            metadatas=chunk_metadatas,
-            ids=chunk_ids,
-        )
-
-        # Store in ElasticSearch
-        for i, chunk in enumerate(valid_chunks):
-            # 获取 summary：优先从 chunk.summary，其次从 chunk.metadata.summary
-            chunk_summary = chunk.summary if chunk.summary else ""
-            if not chunk_summary and chunk.metadata:
-                chunk_summary = chunk.metadata.get("summary", "")
-
-            es_document = {
-                "chunk_id": chunk.chunk_id,
-                "doc_id": doc_id,
-                "kb_id": kb_id,
-                "content": chunk.content,
-                "summary": chunk_summary,
-                "chunk_index": chunk.chunk_index,
-                "created_at": datetime.utcnow().isoformat(),
-                # MinerU结构化字段
-                "page_idx": chunk.page_idx,
-                "page_indices": chunk.page_indices,
-                "block_types": chunk.block_types,
-                "image_count": len(chunk.image_references) if chunk.image_references else 0,
-                "image_references": chunk.image_references if chunk.image_references else [],
-                "image_captions": chunk.image_captions if chunk.image_captions else [],
-                "title_path": chunk.title_path if chunk.title_path else [],
-                "structure_level": chunk.structure_level if chunk.structure_level else 0,
-            }
-
-            await es_db.index_document(
+            # 删除 Elasticsearch 中的文档
+            from app.core.elasticsearch import es_db
+            await es_db.delete_by_query(
                 index="doc",
-                doc_id=chunk.chunk_id,
-                document=es_document,
+                body={"query": {"term": {"doc_id": doc_id}}}
             )
 
-            # Update progress if task_id provided
-            if task_id:
-                processed = i + 1
-                progress = (processed / len(valid_chunks)) * 100.0
+            # 删除 MongoDB 中的 chunks
+            await db.document_chunks.delete_many({"doc_id": doc_id})
 
-                await db.document_tasks.update_one(
-                    {"task_id": task_id},
-                    {
-                        "$set": {
-                            "processed_chunks": processed,
-                            "progress": round(progress, 2),
-                        }
-                    },
-                )
+            # 删除 MongoDB 中的文档记录
+            await db.documents.delete_one({"doc_id": doc_id})
 
-            # Update chunk with vector_id
-            valid_chunks[i].vector_id = chunk.chunk_id
+            logger.info("Document deleted", doc_id=doc_id, kb_id=kb_id)
 
-        # Store chunks in MongoDB
-        chunk_docs = [chunk.model_dump() for chunk in valid_chunks]
-        await db.document_chunks.insert_many(chunk_docs)
-
-        logger.info(f"Stored chunks: doc_id={doc_id}, chunks_count={len(valid_chunks)}")
-
-
-def generate_doc_id(filename: str, kb_id: str) -> str:
-    """
-        Generate unique document ID.
-
-        Args:
-            filename: Document filename
-            kb_id: Knowledge base ID
-
-        Returns:
-            Unique document ID
-    """
-    timestamp = datetime.utcnow().timestamp()
-    content = f"{filename}_{kb_id}_{timestamp}"
-    hash_obj = hashlib.md5(content.encode())
-    return f"doc_{hash_obj.hexdigest()[:12]}"
-
-
-def generate_video_id(filename: str, kb_id: str) -> str:
-    """
-        Generate unique document ID.
-
-        Args:
-            filename: Document filename
-            kb_id: Knowledge base ID
-
-        Returns:
-            Unique document ID
-    """
-    timestamp = datetime.utcnow().timestamp()
-    content = f"{filename}_{kb_id}_{timestamp}"
-    hash_obj = hashlib.md5(content.encode())
-    return f"video_{hash_obj.hexdigest()[:12]}"
-
-
-async def download_file(
-        file_name: str,
-        resource_id: int,
-        resource_url: str) -> str:
-    try:
-        logger.info(f"download_file resource_id={resource_id} resource_url={resource_url}")
-
-        # Generate temporary file path (using pathlib)
-        file_ext = os.path.splitext(file_name)[1] or ".txt"
-        temp_filename = f"java_upload_{resource_id}_{datetime.utcnow().timestamp()}{file_ext}"
-        file_path = UPLOAD_DIR / temp_filename
-
-        # Download file with timeout
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                    resource_url, timeout=aiohttp.ClientTimeout(total=120)
-            ) as response:
-                if response.status != 200:
-                    return ResponseResult.error(status.HTTP_400_BAD_REQUEST,
-                                                f"download_file from URL={resource_url}", None)
-
-                # Save file to disk
-                with open(file_path, "wb") as f:
-                    async for chunk in response.content.iter_chunked(8192):
-                        f.write(chunk)
-
-        logger.info(f"download_file resource_id={resource_id} file_path={file_path}")
-
-        return str(file_path)
-
-    except aiohttp.ClientError as e:
-        logger.error(f"download_file exception resource_id={resource_id}, error={str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"download_file error",
-        )
-
-
-# Global document processor instance
-document_processor = DocumentProcessor()
+        except Exception as e:
+            logger.error("Failed to delete document", doc_id=doc_id, error=str(e), exc_info=True)
+            raise
