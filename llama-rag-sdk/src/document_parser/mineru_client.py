@@ -204,6 +204,55 @@ class MinerUParser(DocumentParser):
             metadata=metadata,
         )
 
+    def _try_load_cached_result(self, file_path: str) -> Optional["ZipResult"]:
+        """尝试加载已有的解析结果（缓存）
+
+        根据 file_path 生成 pdf_name，检查 output_dir/pdf_name/ 目录下
+        是否已有解析结果文件（.md, _content_list.json, images/）。
+
+        Args:
+            file_path: PDF 文件路径
+
+        Returns:
+            如果缓存存在且完整，返回 ZipResult；否则返回 None
+        """
+        # 从 file_path 提取文件名（不含扩展名），作为 pdf_name
+        pdf_name = Path(file_path).stem
+
+        # 构造预期的输出目录路径
+        result_dir = self.output_dir / pdf_name
+
+        # 检查关键文件是否存在
+        md_path = result_dir / f"{pdf_name}.md"
+        content_list_path = result_dir / f"{pdf_name}_content_list.json"
+        images_dir = result_dir / "images"
+
+        if not (md_path.exists() and content_list_path.exists() and images_dir.exists()):
+            logger.debug(f"缓存不完整或不存在: {result_dir}")
+            return None
+
+        try:
+            # 构造 ZipResult 对象（@property 会自动读取文件内容）
+            zip_result = ZipResult(
+                pdf_name=pdf_name,
+                output_dir=result_dir,
+                md_path=md_path,
+                middle_json_path=None,
+                content_list_path=content_list_path,
+                images_dir=images_dir,
+            )
+            # 验证文件可读（触发 @property 访问）
+            _ = zip_result.md_content
+            _ = zip_result.content_list
+            _ = zip_result.images
+
+            logger.info(f"使用缓存解析结果: {result_dir}")
+            return zip_result
+
+        except Exception as e:
+            logger.warning(f"读取缓存失败，将重新解析: {e}")
+            return None
+
     async def parse(
         self,
         file_path: str,
@@ -233,38 +282,42 @@ class MinerUParser(DocumentParser):
         """
         logger.info(f"开始解析文档: {file_path}")
 
-        try:
-            # 调用 SDK 解析（直接使用 SDK 选项）
-            zip_result = await self._sdk_client.parse_pdf(
-                file_path=file_path,
-                output_dir=str(self.output_dir),
-                parse_options=parse_options,
-                return_options=return_options,
-                progress_callback=progress_callback,
-            )
-            # 转换为 ParsedDocument
-            document = self._convert_to_parsed_document(
-                zip_result, file_path, parse_options
-            )
+        # 先尝试加载缓存
+        zip_result = self._try_load_cached_result(file_path)
 
-            logger.info(
-                f"文档解析完成: 标题={document.title}, 文本块={len(document.chunks)}, 图片={len(document.images)}"
-            )
+        if zip_result is None:
+            # 缓存不存在或不完整，调用 SDK 解析
+            try:
+                zip_result = await self._sdk_client.parse_pdf(
+                    file_path=file_path,
+                    output_dir=str(self.output_dir),
+                    parse_options=parse_options,
+                    return_options=return_options,
+                    progress_callback=progress_callback,
+                )
+            except SDKFileNotFoundError as e:
+                raise FileNotFoundError(f"文件不存在: {file_path}") from e
+            except SDKFileUploadError as e:
+                raise FileUploadError(f"文件上传失败: {e}") from e
+            except SDKParseError as e:
+                raise ParseError(f"服务器解析失败: {e}") from e
+            except SDKDownloadError as e:
+                raise DownloadError(f"ZIP 下载失败: {e}") from e
+            except SDKExtractionError as e:
+                raise ExtractionError(f"ZIP 解压失败: {e}") from e
+            except SDKTimeoutError as e:
+                raise TimeoutError(f"请求超时: {e}") from e
 
-            return document
+        # 转换为 ParsedDocument
+        document = self._convert_to_parsed_document(
+            zip_result, file_path, parse_options
+        )
 
-        except SDKFileNotFoundError as e:
-            raise FileNotFoundError(f"文件不存在: {file_path}") from e
-        except SDKFileUploadError as e:
-            raise FileUploadError(f"文件上传失败: {e}") from e
-        except SDKParseError as e:
-            raise ParseError(f"服务器解析失败: {e}") from e
-        except SDKDownloadError as e:
-            raise DownloadError(f"ZIP 下载失败: {e}") from e
-        except SDKExtractionError as e:
-            raise ExtractionError(f"ZIP 解压失败: {e}") from e
-        except SDKTimeoutError as e:
-            raise TimeoutError(f"请求超时: {e}") from e
+        logger.info(
+            f"文档解析完成: 标题={document.title}, 文本块={len(document.chunks)}, 图片={len(document.images)}"
+        )
+
+        return document
 
     async def parse_to_memory(
         self,
