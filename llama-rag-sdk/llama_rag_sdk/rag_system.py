@@ -334,9 +334,9 @@ class RAGSystem:
                 all_metadata.append(summary_metadata)
                 # 摘要条目不需要单独的 DocStore entry，关联到原文即可
 
-        # 添加到向量索引（全文 + 摘要）
-        doc_ids = await self.indexer.add_documents(
-            documents=all_chunks_text,
+        # 添加到向量索引（全文 + 摘要）- 使用预分块方法避免重复分块
+        doc_ids = await self.indexer.add_prechunked_documents(
+            chunks=all_chunks_text,
             collection_name=self.collection_name,
             metadata_list=all_metadata
         )

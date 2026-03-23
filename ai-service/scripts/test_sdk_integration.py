@@ -3,7 +3,7 @@
 llama-rag-sdk 集成测试脚本
 
 测试 SDK 集成后的基本功能：
-1. 文档上传 + 索引
+1. 文档上传 + 索引（使用 RAGSystem）
 2. 召回测试
 3. RAG 回复测试
 
@@ -17,12 +17,15 @@ from pathlib import Path
 
 # 添加项目路径
 sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / "llama-rag-sdk"))
 
 from app.core.logging import get_logger
 from app.services.rag_service import rag_retrieval
-from app.services.document_service import DocumentProcessor
 from app.core.config import settings
 from app.core.database import mongodb
+
+# 直接使用 RAGSystem
+from llama_rag_sdk.rag_system import RAGSystem
 
 logger = get_logger(__name__)
 
@@ -58,7 +61,7 @@ async def test_basic_import():
     print("\n=== 测试 1: 基本导入 ===")
     try:
         from app.services.rag_service import rag_retrieval
-        from app.services.document_service import DocumentProcessor
+        from llama_rag_sdk.rag_system import RAGSystem
         print("✅ 导入成功")
         return True
     except Exception as e:
@@ -67,25 +70,28 @@ async def test_basic_import():
 
 
 async def test_document_index(file_path: str, kb_id: str, doc_id: str):
-    """测试 2: 文档索引"""
+    """测试 2: 文档索引（使用 RAGSystem）"""
     print(f"\n=== 测试 2: 文档索引 ===")
     print(f"文件: {file_path}")
     print(f"KB ID: {kb_id}")
 
     try:
-        processor = DocumentProcessor()
+        # 使用 RAGSystem 直接索引文档
+        async with RAGSystem(
+            collection_name="rag_documents",
+            enable_summarization=False,  # 测试时关闭摘要生成
+        ) as rag:
+            # RAGSystem 使用 MinerU 解析 PDF + 结构感知分块
+            result_doc_ids = await rag.index_document(
+                file_path,
+                metadata={
+                    "doc_id": doc_id,
+                    "kb_id": kb_id,
+                }
+            )
 
-        # 处理文档
-        result_doc_id = await processor.process_document(
-            file_path=file_path,
-            filename=Path(file_path).name,
-            kb_id=kb_id,
-            enhance=0,
-            doc_id=doc_id,
-        )
-
-        print(f"✅ 文档索引成功: {result_doc_id}")
-        return True
+            print(f"✅ 文档索引成功: {len(result_doc_ids)} 个 chunk")
+            return True
     except Exception as e:
         print(f"❌ 文档索引失败: {e}")
         import traceback

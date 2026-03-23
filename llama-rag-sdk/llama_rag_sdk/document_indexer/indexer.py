@@ -302,6 +302,52 @@ class DocumentIndexer(Indexer):
         logger.info(f"文档添加完成: {len(doc_ids)} 个块")
         return doc_ids
 
+    async def add_prechunked_documents(
+        self,
+        chunks: List[str],
+        collection_name: str,
+        metadata_list: Optional[List[Dict[str, Any]]] = None
+    ) -> List[str]:
+        """
+        添加预分块的文档到索引（跳过分块步骤）
+
+        用于已经分好块的文档（如 MinerU 结构化分块），避免重复分块。
+
+        Args:
+            chunks: 预分块的文本列表
+            collection_name: 集合名称
+            metadata_list: 元数据列表
+
+        Returns:
+            文档 ID 列表
+        """
+        self._ensure_collection(collection_name)
+
+        logger.info(f"添加预分块文档，数量: {len(chunks)}")
+        logger.debug(f"使用结构感知分块: 共 {len(chunks)} 块")
+
+        # 跳过分块，直接使用预分块的文本
+        embeddings = self._generate_embeddings(chunks)
+        doc_ids = [str(uuid.uuid4()) for _ in chunks]
+
+        # 准备元数据
+        if metadata_list is None:
+            metadata_list = [{} for _ in chunks]
+        else:
+            # 确保 metadata_list 长度匹配
+            if len(metadata_list) < len(chunks):
+                metadata_list = list(metadata_list) + [{} for _ in range(len(chunks) - len(metadata_list))]
+
+        self.vector_store.add(
+            ids=doc_ids,
+            embeddings=embeddings,
+            documents=chunks,
+            metadatas=metadata_list
+        )
+
+        logger.info(f"预分块文档添加完成: {len(doc_ids)} 个块")
+        return doc_ids
+
     async def delete_documents(
         self,
         document_ids: List[str],
