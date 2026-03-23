@@ -20,7 +20,7 @@ from app.api.middleware.error_handler import (
     validation_exception_handler,
     general_exception_handler
 )
-from app.api.endpoints import chat, session, employee, conversation, mineru, dataset_video, thesaurus_sensitive, \
+from app.api.endpoints import chat, session, employee, conversation, mineru, thesaurus_sensitive, \
     thesaurus_major, dataset_faq
 from app.api.endpoints import knowledge_base_kb, documents, metrics, websocket, websocket_view
 
@@ -130,7 +130,7 @@ app.include_router(employee.router, prefix="/api/employee", tags=["employee 数�
 # Knowledge base endpoints (split into two files)
 app.include_router(knowledge_base_kb.router, prefix="/api/knowledge_base", tags=["knowledge_base RAG文档库"])
 app.include_router(documents.router, prefix="/api/knowledge_base/documents", tags=["documents RAG文档"])
-app.include_router(dataset_video.router, prefix="/api/knowledge_base/video", tags=["video 视频资源"])
+# app.include_router(dataset_video.router, prefix="/api/knowledge_base/video", tags=["video 视频资源"])
 app.include_router(conversation.router, prefix="/api/conversation", tags=["Conversation 数字员工对话记录"])
 app.include_router(mineru.router, prefix="/api/mineru", tags=["MinerU"])
 app.include_router(metrics.router, prefix="/api/metrics", tags=["Metrics"])
