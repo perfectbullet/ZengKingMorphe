@@ -227,7 +227,7 @@ class MinerUParser(DocumentParser):
         content_list_path = result_dir / f"{pdf_name}_content_list.json"
         images_dir = result_dir / "images"
 
-        if not (md_path.exists() and content_list_path.exists() and images_dir.exists()):
+        if not (content_list_path.exists() and images_dir.exists()):
             logger.debug(f"缓存不完整或不存在: {result_dir}")
             return None
 
@@ -256,8 +256,6 @@ class MinerUParser(DocumentParser):
     async def parse(
         self,
         file_path: str,
-        parse_options: Optional[ParseOptions] = None,
-        return_options: Optional[ReturnOptions] = None,
         progress_callback: Optional[Callable[[str, float], None]] = None,
     ) -> ParsedDocument:
         """
@@ -265,8 +263,6 @@ class MinerUParser(DocumentParser):
 
         Args:
             file_path: PDF 文件路径
-            parse_options: 解析选项
-            return_options: 返回内容选项
             progress_callback: 进度回调函数
 
         Returns:
@@ -281,7 +277,18 @@ class MinerUParser(DocumentParser):
             TimeoutError: 请求超时
         """
         logger.info(f"开始解析文档: {file_path}")
-
+        # 配置解析选项
+        parse_options = ParseOptions(
+            backend="pipeline",
+            lang="ch",
+            formula_enable=True,
+            table_enable=True,
+        )
+        return_options = ReturnOptions(
+            return_md=True,
+            return_content_list=True,
+            return_images=True,
+        )
         # 先尝试加载缓存
         zip_result = self._try_load_cached_result(file_path)
 

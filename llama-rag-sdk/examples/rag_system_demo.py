@@ -129,24 +129,10 @@ async def parse_and_evaluate_pdf(
     start_time = time.time()
 
     try:
-        # 配置解析选项
-        parse_options = ParseOptions(
-            backend="pipeline",
-            lang="ch",
-            formula_enable=True,
-            table_enable=True,
-        )
-        return_options = ReturnOptions(
-            return_md=True,
-            return_content_list=True,
-            return_images=True,
-        )
 
         # 解析文档
         document = await rag.parser.parse(
             file_path=pdf_path,
-            parse_options=parse_options,
-            return_options=return_options,
         )
         json_path = document.save_to_json(
             pdf_filename=pdf_name,

@@ -119,7 +119,7 @@ class MongoDBDocStore:
         collection = await self._get_collection()
         try:
             # 使用 bulk_write 提高性能
-            from motor.motor_asyncio import UpdateOne
+            from pymongo import UpdateOne
 
             operations = [
                 UpdateOne(

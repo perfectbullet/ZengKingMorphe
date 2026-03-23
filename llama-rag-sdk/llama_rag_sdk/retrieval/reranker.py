@@ -2,11 +2,13 @@
 BGE Reranker 客户端
 
 调用 BGE Reranker API 对检索结果进行重排序
+使用 OpenAI SDK 风格调用 vLLM Rerank API
+
 API 地址: http://192.168.8.233:8091/v1/rerank
 """
 
-import requests
-from typing import List, Tuple, Union, Optional
+from openai import OpenAI
+from typing import List, Tuple, Optional
 from loguru import logger
 
 
@@ -15,13 +17,13 @@ class BGERerankerClientError(Exception):
 
 
 class BGERerankerClient:
-    """BGE Reranker 客户端"""
+    """BGE Reranker 客户端 (OpenAI SDK 风格)"""
 
     def __init__(
         self,
         base_url: str = "http://192.168.8.233:8091",
         api_key: str = "not-needed",
-        model: str = "bge-reranker-m3",
+        model: str = "bge-reranker-v2-m3",
         timeout: int = 120,
     ):
         """
@@ -34,9 +36,16 @@ class BGERerankerClient:
             timeout: 请求超时时间（秒）
         """
         self.base_url = base_url.rstrip("/")
-        self.api_key = api_key
         self.model = model
         self.timeout = timeout
+        self.api_key = api_key
+
+        # 初始化 OpenAI 客户端（用于统一风格）
+        self.client = OpenAI(
+            api_key=api_key,
+            base_url=f"{self.base_url}/v1",
+            timeout=timeout,
+        )
 
         # 检查服务健康状态
         self._check_health()
@@ -49,21 +58,28 @@ class BGERerankerClient:
             BGERerankerClientError: 服务不可用时抛出异常
         """
         try:
-            # 尝试 /health 端点
-            resp = requests.get(f"{self.base_url}/health", timeout=5)
-            if resp.status_code == 200:
+            # 使用 OpenAI 客户端的低级 HTTP 接口
+            response = self.client._client.get(
+                f"{self.base_url}/health",
+                timeout=5.0,
+            )
+            if response.status_code == 200:
                 logger.info(f"BGE Reranker 服务连接成功: {self.base_url}")
                 return
-        except requests.RequestException:
+        except Exception:
             pass
 
         try:
             # 尝试 /v1/models 端点
-            resp = requests.get(f"{self.base_url}/v1/models", timeout=5)
-            resp.raise_for_status()
-            model_id = resp.json().get('data', [{}])[0].get('id', 'unknown')
+            response = self.client._client.get(
+                f"{self.base_url}/v1/models",
+                timeout=5.0,
+            )
+            response.raise_for_status()
+            data = response.json()
+            model_id = data.get('data', [{}])[0].get('id', 'unknown')
             logger.info(f"BGE Reranker 服务连接成功: {self.base_url}, 模型: {model_id}")
-        except requests.RequestException as e:
+        except Exception as e:
             raise BGERerankerClientError(
                 f"BGE Reranker 服务连接失败: {e}\n"
                 f"请确认服务已启动: {self.base_url}"
@@ -80,10 +96,13 @@ class BGERerankerClient:
             BGERerankerClientError: 获取失败时抛出异常
         """
         try:
-            resp = requests.get(f"{self.base_url}/v1/models", timeout=10)
-            resp.raise_for_status()
-            return resp.json()
-        except requests.RequestException as e:
+            response = self.client._client.get(
+                f"{self.base_url}/v1/models",
+                timeout=10.0,
+            )
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
             raise BGERerankerClientError(f"获取模型信息失败: {e}")
 
     def rerank(
@@ -120,14 +139,14 @@ class BGERerankerClient:
         }
 
         try:
-            # 使用正确的端点: /v1/rerank
-            resp = requests.post(
+            # 使用 OpenAI 客户端的低级 HTTP 接口
+            response = self.client._client.post(
                 f"{self.base_url}/v1/rerank",
                 json=payload,
-                timeout=self.timeout,
+                timeout=float(self.timeout),
             )
-            resp.raise_for_status()
-            result = resp.json()
+            response.raise_for_status()
+            result = response.json()
 
             # vLLM rerank API 返回格式: {"results": [{"index": 0, "relevance_score": 8.5}, ...]}
             ranked = []
@@ -140,12 +159,38 @@ class BGERerankerClient:
             logger.debug(f"Rerank 完成: query='{query[:50]}...', 返回 {len(ranked)} 个结果")
             return ranked
 
-        except requests.RequestException as e:
+        except Exception as e:
             raise BGERerankerClientError(
                 f"Rerank 请求失败: {e}\n"
                 f"查询: {query[:100]}...\n"
                 f"文档数量: {len(documents)}"
             )
+
+    def rerank_batch(
+        self,
+        queries: List[str],
+        documents: List[str],
+        top_k: Optional[int] = None,
+    ) -> List[List[Tuple[int, str, float]]]:
+        """
+        批量重排序（多个查询，同一文档集）
+
+        Args:
+            queries: 查询文本列表
+            documents: 文档列表
+            top_k: 每个查询返回前 K 个结果
+
+        Returns:
+            每个查询的重排序结果列表
+        """
+        all_results = []
+
+        for i, query in enumerate(queries):
+            logger.debug(f"处理查询 {i + 1}/{len(queries)}: {query[:30]}...")
+            ranked = self.rerank(query, documents, top_n)
+            all_results.append(ranked)
+
+        return all_results
 
     def compute_relevance(
         self,
@@ -168,4 +213,4 @@ class BGERerankerClient:
         results = self.rerank(query, [document], top_n=1)
         if results:
             return results[0][2]
-        return 0.0
+        return -10.0
