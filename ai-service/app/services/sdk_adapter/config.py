@@ -47,9 +47,18 @@ def setup_sdk_env() -> None:
     os.environ["SIMILARITY_THRESHOLD"] = str(settings.relevance_threshold or 0.6)
 
     # 功能开关
-    os.environ["ENABLE_IMAGE_DESCRIPTION"] = "false"
+    enable_image_desc = getattr(settings, 'enable_image_description', False)
+    os.environ["ENABLE_IMAGE_DESCRIPTION"] = str(enable_image_desc).lower()
     os.environ["ENABLE_SUMMARIZATION"] = "true"
     os.environ["QUERY_EXPANSION_ENABLED"] = "false"
+
+    # 图片描述配置（可选）
+    qwen_vl_model = getattr(settings, 'qwen_vl_model', None)
+    if qwen_vl_model:
+        os.environ["QWEN_VL_MODEL"] = qwen_vl_model
+    qwen_vl_base_url = getattr(settings, 'qwen_vl_base_url', None)
+    if qwen_vl_base_url:
+        os.environ["QWEN_VL_BASE_URL"] = qwen_vl_base_url
 
     # MinerU 配置
     os.environ["MINERU_API_URL"] = settings.mineru_api_url

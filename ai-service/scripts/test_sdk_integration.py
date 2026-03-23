@@ -1,0 +1,168 @@
+#!/home/zj/miniconda3/envs/morphe/bin/python
+"""
+llama-rag-sdk 集成测试脚本
+
+测试 SDK 集成后的基本功能：
+1. 文档上传 + 索引
+2. 召回测试
+3. RAG 回复测试
+
+使用方法:
+    conda activate morphe
+    python scripts/test_sdk_integration.py
+"""
+import asyncio
+import sys
+from pathlib import Path
+
+# 添加项目路径
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from app.core.logging import get_logger
+from app.services.rag_service import rag_retrieval
+from app.services.document_service import DocumentProcessor
+from app.core.config import settings
+
+logger = get_logger(__name__)
+
+
+async def test_basic_import():
+    """测试 1: 基本导入测试"""
+    print("\n=== 测试 1: 基本导入 ===")
+    try:
+        from app.services.rag_service import rag_retrieval
+        from app.services.document_service import DocumentProcessor
+        print("✅ 导入成功")
+        return True
+    except Exception as e:
+        print(f"❌ 导入失败: {e}")
+        return False
+
+
+async def test_document_index(file_path: str, kb_id: str, doc_id: str):
+    """测试 2: 文档索引"""
+    print(f"\n=== 测试 2: 文档索引 ===")
+    print(f"文件: {file_path}")
+    print(f"KB ID: {kb_id}")
+
+    try:
+        processor = DocumentProcessor()
+
+        # 处理文档
+        result_doc_id = await processor.process_document(
+            file_path=file_path,
+            filename=Path(file_path).name,
+            kb_id=kb_id,
+            enhance=0,
+            doc_id=doc_id,
+        )
+
+        print(f"✅ 文档索引成功: {result_doc_id}")
+        return True
+    except Exception as e:
+        print(f"❌ 文档索引失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+async def test_retrieve(query: str, kb_id: str):
+    """测试 3: 召回测试"""
+    print(f"\n=== 测试 3: 召回测试 ===")
+    print(f"查询: {query}")
+    print(f"KB ID: {kb_id}")
+
+    try:
+        results = await rag_retrieval.search(
+            query=query,
+            kb_ids=[kb_id],
+            top_k=3,
+        )
+
+        print(f"✅ 召回成功，结果数: {len(results)}")
+        for i, doc in enumerate(results):
+            print(f"  [{i+1}] score={doc['score']:.4f}, content={doc['content'][:100]}...")
+
+        return True
+    except Exception as e:
+        print(f"❌ 召回失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+async def test_faq_search(query: str, employee_id: str):
+    """测试 4: FAQ 搜索"""
+    print(f"\n=== 测试 4: FAQ 搜索 ===")
+    print(f"查询: {query}")
+    print(f"Employee ID: {employee_id}")
+
+    try:
+        results = await rag_retrieval.faq_search(
+            query=query,
+            employee_id=employee_id,
+            faq_top_k=3,
+        )
+
+        print(f"✅ FAQ 搜索成功，结果数: {len(results)}")
+        for i, faq in enumerate(results):
+            print(f"  [{i+1}] score={faq['score']:.4f}, faq_id={faq.get('faq_id')}, question={faq.get('question_name', 'N/A')[:50]}...")
+
+        return True
+    except Exception as e:
+        print(f"❌ FAQ 搜索失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+async def main():
+    """主测试流程"""
+    import argparse
+
+    parser = argparse.ArgumentParser(description="SDK 集成测试")
+    parser.add_argument("--test", choices=["import", "index", "retrieve", "faq", "all"], default="all",
+                        help="测试类型")
+    parser.add_argument("--file", type=str, help="测试文件路径")
+    parser.add_argument("--kb-id", type=str, default="kb_test", help="知识库 ID")
+    parser.add_argument("--doc-id", type=str, default="doc_test_001", help="文档 ID")
+    parser.add_argument("--query", type=str, default="测试查询", help="查询内容")
+    parser.add_argument("--employee-id", type=str, default="hutao", help="员工 ID")
+
+    args = parser.parse_args()
+
+    print("=" * 60)
+    print("llama-rag-sdk 集成测试")
+    print("=" * 60)
+
+    results = {}
+
+    if args.test in ["import", "all"]:
+        results["import"] = await test_basic_import()
+
+    if args.test in ["index", "all"] and args.file:
+        results["index"] = await test_document_index(args.file, args.kb_id, args.doc_id)
+
+    if args.test in ["retrieve", "all"]:
+        results["retrieve"] = await test_retrieve(args.query, args.kb_id)
+
+    if args.test in ["faq", "all"]:
+        results["faq"] = await test_faq_search(args.query, args.employee_id)
+
+    # 总结
+    print("\n" + "=" * 60)
+    print("测试总结")
+    print("=" * 60)
+    for name, passed in results.items():
+        status = "✅ 通过" if passed else "❌ 失败"
+        print(f"{name}: {status}")
+
+    all_passed = all(results.values())
+    print(f"\n总体结果: {'✅ 全部通过' if all_passed else '❌ 部分失败'}")
+
+    return all_passed
+
+
+if __name__ == "__main__":
+    success = asyncio.run(main())
+    sys.exit(0 if success else 1)

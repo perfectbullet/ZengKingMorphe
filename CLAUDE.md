@@ -19,15 +19,15 @@ A LangGraph-based conversational AI service providing RAG (Retrieval-Augmented G
 ## Essential Development Commands
 
 ### Python Environment (Critical!)
-**ALL Python commands MUST use the project virtual environment** - dependencies are installed in `.venv` virtual environment.
+**ALL Python commands MUST use the project virtual environment** - dependencies are installed in conda environment `morphe`.
 
 **WSL/Ubuntu**:
 ```bash
-# Activate virtual environment
-source .venv/bin/activate
+# Activate conda environment
+conda activate morphe
 
 # Or run directly
-/home/zj/ZengKingMorphe/.venv/bin/python script.py
+/home/zj/miniconda3/envs/morphe/bin/python script.py
 ```
 
 ### Docker Commands
@@ -62,7 +62,7 @@ docker-compose up -d mongodb elasticsearch chroma
 
 # Run AI service locally
 cd ai-service
-source .venv/bin/activate
+conda activate morphe
 uvicorn main:app --reload --port 8000
 
 # Access API docs at http://localhost:8000/docs
@@ -72,7 +72,7 @@ uvicorn main:app --reload --port 8000
 
 ```bash
 cd ai-service
-source .venv/bin/activate
+conda activate morphe
 
 # Run all tests (pytest)
 python -m pytest tests/
@@ -647,7 +647,7 @@ View the workflow graph at `graph_debug/crag_graph.mmd`.
 
 **Issue**: "No module named" errors
 - **Cause**: Not using virtual environment
-- **Fix**: Always activate venv with `source .venv/bin/activate` or use full python path
+- **Fix**: Always activate conda environment with `conda activate morphe` or use full python path `/home/zj/miniconda3/envs/morphe/bin/python`
 
 **Issue**: Test failures with database connection
 - **Cause**: Test fixtures not properly isolated

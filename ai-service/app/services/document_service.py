@@ -5,13 +5,9 @@ Document processing service using llama-rag-sdk.
 """
 import aiofiles
 import os
-import sys
 from pathlib import Path
 from typing import Dict, Any, Optional
 from datetime import datetime
-
-# 添加 llama-rag-sdk 到路径
-sys.path.insert(0, '/home/zj/ZengKingMorphe/llama-rag-sdk')
 
 from fastapi import HTTPException
 from starlette import status
@@ -162,7 +158,15 @@ class DocumentProcessor:
             # 4. 存储（ChromaDB + MongoDB DocStore）
 
             if file_ext == ".pdf":
-                await self.rag_system.index_document(file_path)
+                # 传递元数据给 SDK
+                await self.rag_system.index_document(
+                    file_path,
+                    metadata={
+                        "doc_id": doc_id,
+                        "kb_id": kb_id,
+                        "filename": filename,
+                    }
+                )
             else:
                 # 非 PDF 格式：先读取文本，然后添加到索引
                 text_content = await self._extract_text(file_path, file_ext)

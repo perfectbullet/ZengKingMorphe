@@ -438,10 +438,9 @@ class ConversationNodes:
         FAQ Fast-Path Matching - Direct answer for common questions.
 
         Process:
-        1. Hybrid search (vector + keyword) with RRF fusion
-        2. Filter by faq_sim_threshold
+        1. SDK FAQ search (vector + built-in Reranker)
+        2. Quality check: score >= 1.0 (BGE reranker threshold)
         3. Randomly select from multiple answers
-        4. Skip if RRF score < 0.02 (avoid false positives)
 
         If matched: Skip RAG pipeline, use FAQ answer directly
         If not matched: Continue to intent recognition
@@ -466,40 +465,37 @@ class ConversationNodes:
                     state["faq_matched"] = None
                     return state
 
-                faq_sim_threshold = digital_config.get("faq_sim_threshold", 0.7)
                 faq_top_k = digital_config.get("faq_top_k", 3)
 
                 logger.info(
                     "FAQ matching started",
                     employee_id=employee_id,
-                    threshold=faq_sim_threshold,
                     top_k=faq_top_k
                 )
 
-                # Perform FAQ hybrid search
-                faq_results = await rag_retrieval.faq_hybrid_search(
+                # Perform FAQ search (using SDK)
+                faq_results = await rag_retrieval.faq_search(
                     query=query,
                     employee_id=employee_id,
-                    faq_sim_threshold=faq_sim_threshold,
                     faq_top_k=faq_top_k
                 )
 
                 if not faq_results:
-                    logger.info("No FAQ matched above threshold")
+                    logger.info("No FAQ matched")
                     state["faq_matched"] = None
                     return state
 
                 # Get best FAQ result
                 best_faq_result = faq_results[0]
                 faq_id = best_faq_result["faq_id"]
-                rrf_score = best_faq_result["rrf_score"]
+                score = best_faq_result["score"]  # BGE reranker score
 
-                # Quality check: skip if RRF score too low
-                if rrf_score < 0.02:
+                # Quality check: BGE score >= 1.0 indicates meaningful relevance
+                if score < 1.0:
                     logger.warning(
-                        "FAQ RRF score too low, skipping",
+                        "FAQ score too low, skipping",
                         faq_id=faq_id,
-                        rrf_score=rrf_score
+                        score=score
                     )
                     state["faq_matched"] = None
                     return state
@@ -523,14 +519,13 @@ class ConversationNodes:
 
                 # Set FAQ match state
                 state["final_answer"] = selected_answer
-                state["confidence"] = min(0.95, rrf_score)
+                # BGE score -> confidence (1-10 maps to 0-1)
+                state["confidence"] = min(0.95, score / 10.0)
                 state["intent"] = "faq_match"
                 state["faq_matched"] = {
                     "faq_id": faq_id,
                     "question_name": faq_doc.get("question_name"),
-                    "rrf_score": rrf_score,
-                    "vector_score": best_faq_result.get("vector_score"),
-                    "keyword_score": best_faq_result.get("keyword_score"),
+                    "score": score,
                     "selected_answer": selected_answer,
                     "total_answers": len(answers)
                 }
@@ -538,7 +533,7 @@ class ConversationNodes:
                 logger.info(
                     "FAQ answer selected",
                     faq_id=faq_id,
-                    rrf_score=rrf_score
+                    score=score
                 )
 
             except Exception as e:

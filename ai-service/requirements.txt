@@ -58,6 +58,3 @@ prometheus-client==0.19.0
 loguru==0.7.2
 
 aiofiles
-
-# llama-rag-sdk (editable install)
--e ../llama-rag-sdk
