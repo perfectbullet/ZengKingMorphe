@@ -568,7 +568,7 @@ def get_embedding(settings=None) -> Embeddings:
     """
     根据配置创建 Embedding 实例的工厂函数。
 
-    默认使用 Ollama embeddings（EMBEDDING_OLLAMA_MODEL）。
+    使用 SDK 的 vLLM embeddings 配置（VLLM_EMBEDDING_BASE_URL 等）。
 
     Args:
         settings: 应用配置对象（可选，默认使用全局配置）
@@ -576,15 +576,21 @@ def get_embedding(settings=None) -> Embeddings:
     Returns:
         Embeddings 实例
     """
+    import os
     from app.core.config import settings as app_settings
 
     if not settings:
         settings = app_settings
 
-    # Default to Ollama embeddings
-    logger.info(f"Creating Ollama embeddings: model={settings.embedding_ollama_model}")
-    return OllamaEmbeddings(
-        model=settings.embedding_ollama_model,
-        base_url=settings.ollama_base_url,
-        max_tokens=1024  # 统一 max_tokens=1024
+    # 使用 SDK 的 vLLM embeddings 配置
+    base_url = os.getenv("VLLM_EMBEDDING_BASE_URL", settings.embedding_base_url)
+    model = os.getenv("VLLM_EMBEDDING_MODEL", settings.embedding_model)
+    api_key = os.getenv("VLLM_API_KEY", settings.embedding_api_key or "not-needed")
+
+    logger.info(f"Creating vLLM embeddings: model={model}, base_url={base_url}")
+    return OpenAIStyleEmbeddings(
+        model=model,
+        base_url=base_url,
+        api_key=api_key,
+        timeout=30.0,
     )

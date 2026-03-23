@@ -41,7 +41,7 @@ from app.core.elasticsearch import es_db
 from app.core.database import get_database, mongodb
 from app.core.config import settings
 from app.services.rag_service import RAGRetrieval
-from app.utils.embeddings import OllamaEmbeddings, get_embedding
+from app.utils.embeddings import get_embedding
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -410,14 +410,7 @@ class ChunkImporter:
 
         try:
             # Get embedder
-            if self.embedding_url:
-                embedder = OllamaEmbeddings(
-                    model=settings.embedding_ollama_model,
-                    base_url=self.embedding_url,
-                    max_tokens=2048,
-                )
-            else:
-                embedder = get_embedding()
+            embedder = get_embedding()
 
             print(f"  📝 Using embedder: {type(embedder).__name__}")
             print(f"  📝 Model: {getattr(embedder, 'model', 'N/A')}")

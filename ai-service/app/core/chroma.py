@@ -2,15 +2,14 @@
 Chroma vector database connection and operations.
 """
 
+import os
 from typing import List, Dict, Any, Optional
 import chromadb
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.utils.embeddings import (
     OpenAIStyleEmbeddings,
-    SiliconFlowEmbeddings,
     ChromaEmbeddingWrapper,
-    OllamaEmbeddings,
 )
 
 logger = get_logger(__name__)
@@ -43,41 +42,25 @@ class ChromaDB:
                 database="default_database",
             )
 
-            # Create embedding function based on configuration
+            # Create embedding function based on SDK configuration
+            # SDK 使用 vLLM embeddings (OpenAI 兼容 API)
+            base_url = os.getenv("VLLM_EMBEDDING_BASE_URL", settings.embedding_base_url)
+            model = os.getenv("VLLM_EMBEDDING_MODEL", settings.embedding_model)
+            api_key = os.getenv("VLLM_API_KEY", settings.embedding_api_key or "not-needed")
+
             logger.info(
-                f"Creating embedding function: embedding_type={settings.embedding_type}, embedding_model={settings.embedding_model}, embedding_base_url={settings.embedding_base_url}, embedding_api_url={settings.embedding_api_url}"
+                f"Creating embedding function: model={model}, base_url={base_url}"
             )
-            
-            if settings.embedding_type == "siliconflow":
-                embedder = SiliconFlowEmbeddings(
-                    model=settings.embedding_model,
-                    api_key=settings.embedding_api_key,
-                    base_url=settings.siliconflow_embedding_api_url,
-                    max_tokens=8192  # BGE-M3 supports 8192 tokens
-                )
-                logger.info(
-                    f"Using SiliconFlow embeddings: model={settings.embedding_model}, base_url={settings.siliconflow_embedding_api_url}, has_api_key={bool(settings.siliconflow_api_key or settings.embedding_api_key)}"
-                )
-            elif settings.embedding_type == "ollama":
-                embedder = OllamaEmbeddings(
-                    model=settings.embedding_ollama_model,
-                    base_url=settings.ollama_base_url,
-                    max_tokens=1024  # 统一 max_tokens=1024
-                )
-                logger.info(
-                    f"Using Ollama embeddings: model={settings.embedding_ollama_model}, base_url={settings.ollama_base_url}"
-                )
-            else:
-                # Default to OpenAI-style embeddings
-                embedder = OpenAIStyleEmbeddings(
-                    model=settings.embedding_model,
-                    base_url=settings.embedding_base_url,
-                    api_key=settings.embedding_api_key,
-                    timeout=30.0,
-                )
-                logger.info(
-                    f"Using OpenAI-style embeddings: model={settings.embedding_model}, base_url={settings.embedding_base_url}, has_api_key={bool(settings.embedding_api_key)}"
-                )
+
+            embedder = OpenAIStyleEmbeddings(
+                model=model,
+                base_url=base_url,
+                api_key=api_key,
+                timeout=30.0,
+            )
+            logger.info(
+                f"Using vLLM embeddings: model={model}, base_url={base_url}"
+            )
 
             embedding_function = ChromaEmbeddingWrapper(embedder)
 

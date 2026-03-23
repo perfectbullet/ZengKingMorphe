@@ -354,7 +354,8 @@ class RAGSystem:
     async def index_document(
         self,
         file_path: str,
-        generate_image_descriptions: Optional[bool] = None
+        generate_image_descriptions: Optional[bool] = None,
+        metadata: Optional[Dict[str, Any]] = None
     ) -> list[str]:
         """
         索引文档
@@ -362,12 +363,19 @@ class RAGSystem:
         Args:
             file_path: 文档文件路径
             generate_image_descriptions: 是否生成图片描述
+            metadata: 额外的元数据，会添加到每个 chunk 的 metadata 中
 
         Returns:
             文档 ID 列表
         """
         # 解析文档
         document = await self.parse_document(file_path, generate_image_descriptions)
+
+        # 如果有额外的元数据，添加到每个 chunk
+        if metadata:
+            for chunk in document.chunks:
+                chunk.metadata.update(metadata)
+
         return await self.index_parsed_document(document, source_path=file_path)
 
     async def index_documents_batch(

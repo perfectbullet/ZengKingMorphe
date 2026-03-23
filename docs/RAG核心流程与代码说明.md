@@ -1181,7 +1181,6 @@ mineru_chunking_strategy: "hybrid"  # by_title, by_page, hybrid
 
 ```python
 # Ollama配置
-embedding_ollama_model: "bge-large-zh-v1.5:2k"
 ollama_base_url: "http://localhost:11434"
 
 # 字符限制

@@ -6,11 +6,7 @@ RAG retrieval service using llama-rag-sdk.
 from typing import List, Dict, Any, Optional
 
 from app.core.logging import get_logger
-from app.services.sdk_adapter.config import setup_sdk_env
 from llama_rag_sdk.rag_system import RAGSystem
-
-# 设置 SDK 环境变量
-setup_sdk_env()
 
 logger = get_logger(__name__)
 
@@ -100,7 +96,7 @@ class RAGRetrieval:
             ]
 
         except Exception as e:
-            logger.error(f"SDK RAG search failed: query={query}, error={str(e)}", exc_info=True)
+            logger.error(f"SDK RAG search failed: query={query[:50]}, error={e}", exc_info=True)
             raise
 
     async def faq_search(
@@ -149,7 +145,7 @@ class RAGRetrieval:
             return faq_results
 
         except Exception as e:
-            logger.error(f"FAQ search failed: query={query}, error={str(e)}", exc_info=True)
+            logger.error(f"FAQ search failed: query={query[:50]}, error={e}", exc_info=True)
             return []
 
 

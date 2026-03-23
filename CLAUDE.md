@@ -407,7 +407,6 @@ OLLAMA_REVISE_MODEL=qwen2.5:7b
 **配置**:
 ```bash
 OLLAMA_BASE_URL=http://192.168.8.233:11434
-EMBEDDING_OLLAMA_MODEL=bge-large-zh-v1.5:2k  # 或其他 embedding 模型
 ```
 
 **字符限制**:

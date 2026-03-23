@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     """RAG SDK 配置类"""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=None,  # 不使用固定路径的 env_file，从已加载的环境变量读取
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore"
@@ -120,12 +120,12 @@ class Settings(BaseSettings):
         description="文本分块重叠大小（需在环境变量中配置）"
     )
     top_k: int = Field(
-        ...,
-        description="检索返回的文档数量（需在环境变量中配置）"
+        default=5,
+        description="检索返回的文档数量"
     )
     similarity_threshold: float = Field(
-        ...,
-        description="相似度阈值（需在环境变量中配置）"
+        default=0.6,
+        description="相似度阈值"
     )
 
     # ========== 目录过滤配置 ==========

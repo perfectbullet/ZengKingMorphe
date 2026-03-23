@@ -16,10 +16,6 @@ from app.core.logging import get_logger
 from app.core.config import settings
 from app.core.database import get_database
 from app.models.database import DocumentModel
-from app.services.sdk_adapter.config import setup_sdk_env
-
-# 设置 SDK 环境变量
-setup_sdk_env()
 
 logger = get_logger(__name__)
 

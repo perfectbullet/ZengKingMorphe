@@ -12,34 +12,13 @@ from pydantic import Field
 # Load environment variables before importing settings
 from dotenv import load_dotenv
 
-# 智能环境变量加载：根据运行环境选择合适的 .env 文件
+# 加载项目根目录的 .env 文件
 def _load_env_file():
-    """
-    根据运行环境自动加载对应的环境变量文件。
-
-    优先级：
-    1. 如果显式指定了 ENV_FILE 环境变量，使用该文件
-    2. 本地开发：尝试加载 .env-local
-    3. Docker/容器环境：使用 .env
-    """
-    # 检查是否显式指定了环境文件
-    env_file = os.getenv("ENV_FILE")
-    if env_file and os.path.exists(env_file):
-        load_dotenv(env_file, override=True)
-        print(f"[OK] Loaded environment from: {env_file}")
-        return
-
-    # 本地开发：尝试 .env-local
-    env_local_path = os.path.join(os.path.dirname(__file__), "..", "..", ".env-local")
-    env_local_path = os.path.abspath(env_local_path)
-    if os.path.exists(env_local_path):
-        load_dotenv(env_local_path, override=True)
-        print(f"[OK] Loaded environment from .env-local")
-        return
-
-    # 默认加载 .env (Docker/容器环境)
-    load_dotenv()
-    print(f"[OK] Loaded default .env file")
+    """加载项目根目录的 .env 文件"""
+    load_dotenv(
+        dotenv_path=os.path.join(os.path.dirname(__file__), "..", "..", ".env"),
+        override=True  # 覆盖已存在的环境变量
+    )
 
 # 加载环境变量
 _load_env_file()
@@ -125,12 +104,6 @@ class Settings(BaseSettings):
     )
     siliconflow_embedding_model: str = Field(
         default="BAAI/bge-large-zh-v1.5", description="SiliconFlow Embedding Model"
-    )
-
-    # Ollama Embedding Configuration
-    embedding_ollama_model: str = Field(
-        default="bge-large-zh-v1.5-2k:latest",
-        description="Ollama embedding model name",
     )
 
     # Web Search Configuration
