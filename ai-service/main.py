@@ -20,8 +20,7 @@ from app.api.middleware.error_handler import (
     validation_exception_handler,
     general_exception_handler
 )
-from app.api.endpoints import chat, session, employee, conversation, mineru, thesaurus_sensitive, \
-    thesaurus_major, dataset_faq
+from app.api.endpoints import chat, session, employee, conversation, mineru, thesaurus_sensitive, thesaurus_major, dataset_faq
 from app.api.endpoints import knowledge_base_kb, documents, metrics, websocket, websocket_view
 
 # Setup logging
