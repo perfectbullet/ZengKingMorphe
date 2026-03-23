@@ -8,15 +8,15 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from loguru import logger
 
-from src.config import settings
-from src.document_indexer.storage import VectorStore
-from src.embedding_factory import EmbeddingFactory
-from src.retrieval.base import RetrievedDocument
-from src.retrieval.reranker import BGERerankerClientError
-from src.retrieval.strategies import HybridRerankRetrieval
+from llama_rag_sdk.config import settings
+from llama_rag_sdk.document_indexer.storage import VectorStore
+from llama_rag_sdk.embedding_factory import EmbeddingFactory
+from llama_rag_sdk.retrieval.base import RetrievedDocument
+from llama_rag_sdk.retrieval.reranker import BGERerankerClientError
+from llama_rag_sdk.retrieval.strategies import HybridRerankRetrieval
 
 if TYPE_CHECKING:
-    from src.retrieval.query_expansion import QueryExpander
+    from llama_rag_sdk.retrieval.query_expansion import QueryExpander
 
 
 class Retriever:
@@ -77,8 +77,8 @@ class Retriever:
             return None
 
         try:
-            from src.retrieval.query_expansion import QueryExpander
-            from src.retrieval.llm_client import create_llm_client
+            from llama_rag_sdk.retrieval.query_expansion import QueryExpander
+            from llama_rag_sdk.retrieval.llm_client import create_llm_client
 
             # 创建 LLM 客户端
             llm_client = create_llm_client(
@@ -127,7 +127,7 @@ class Retriever:
             RuntimeError: 当 Reranker 服务不可用时抛出异常
         """
         # 创建 Reranker 客户端
-        from src.retrieval.reranker import BGERerankerClient
+        from llama_rag_sdk.retrieval.reranker import BGERerankerClient
 
         try:
             rerank_client = BGERerankerClient(

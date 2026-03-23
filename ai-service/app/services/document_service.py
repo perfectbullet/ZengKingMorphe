@@ -46,7 +46,7 @@ class DocumentProcessor:
     def rag_system(self):
         """延迟初始化 llama-rag-sdk RAGSystem"""
         if self._rag_system is None:
-            from src.rag_system import RAGSystem
+            from llama_rag_sdk.rag_system import RAGSystem
             self._rag_system = RAGSystem(
                 collection_name="rag_documents",
                 enable_image_description=False,
@@ -172,7 +172,7 @@ class DocumentProcessor:
                 text_content = await self._extract_text(file_path, file_ext)
 
                 # 手动创建文档并索引
-                from src.document_parser.base import ParsedDocument, TextChunk
+                from llama_rag_sdk.document_parser.base import ParsedDocument, TextChunk
 
                 parsed_doc = ParsedDocument(
                     title=filename,

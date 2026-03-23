@@ -3,8 +3,8 @@ MinerU 结构感知分块器测试
 """
 
 import pytest
-from src.document_parser.mineru_structure_aware_chunker import MinerUStructureAwareChunker
-from src.document_parser.base import TextChunk
+from llama_rag_sdk.document_parser.mineru_structure_aware_chunker import MinerUStructureAwareChunker
+from llama_rag_sdk.document_parser.base import TextChunk
 
 
 @pytest.fixture

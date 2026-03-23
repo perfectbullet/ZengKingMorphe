@@ -12,8 +12,8 @@ from typing import List, Optional
 import aiohttp
 from loguru import logger
 
-from src.document_parser.base import ImageInfo
-from src.config import settings
+from llama_rag_sdk.document_parser.base import ImageInfo
+from llama_rag_sdk.config import settings
 
 
 class ImageDescriptor:

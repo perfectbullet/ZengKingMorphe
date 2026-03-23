@@ -7,13 +7,13 @@ LlamaRAG SDK 基本使用示例
 import asyncio
 from pathlib import Path
 
-from src.config import settings
-from src.document_parser.mineru_client import MinerUParser
-from src.document_parser.image_processor import ImageDescriptor
-from src.document_indexer.indexer import DocumentIndexer
-from src.retrieval.retriever import Retriever
-from src.document_indexer.storage import VectorStore
-from src.utils import setup_logger
+from llama_rag_sdk.config import settings
+from llama_rag_sdk.document_parser.mineru_client import MinerUParser
+from llama_rag_sdk.document_parser.image_processor import ImageDescriptor
+from llama_rag_sdk.document_indexer.indexer import DocumentIndexer
+from llama_rag_sdk.retrieval.retriever import Retriever
+from llama_rag_sdk.document_indexer.storage import VectorStore
+from llama_rag_sdk.utils import setup_logger
 
 
 async def main():

@@ -4,10 +4,10 @@
 
 import asyncio
 
-from src.config import settings
-from src.document_indexer.indexer import DocumentIndexer
-from src.document_indexer.storage import VectorStore
-from src.utils import setup_logger
+from llama_rag_sdk.config import settings
+from llama_rag_sdk.document_indexer.indexer import DocumentIndexer
+from llama_rag_sdk.document_indexer.storage import VectorStore
+from llama_rag_sdk.utils import setup_logger
 
 
 async def main():
@@ -25,8 +25,8 @@ async def main():
     # 1. 测试不同分块策略
     print("\n=== 测试 1: 不同分块策略 ===")
 
-    from src.document_indexer.base import ChunkStrategy
-    from src.document_indexer.chunker import FixedSizeChunker, SemanticChunker, HybridChunker
+    from llama_rag_sdk.document_indexer.base import ChunkStrategy
+    from llama_rag_sdk.document_indexer.chunker import FixedSizeChunker, SemanticChunker, HybridChunker
 
     test_text = """
 # 第一章 函数

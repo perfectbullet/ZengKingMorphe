@@ -292,5 +292,30 @@ class Settings(BaseSettings):
         self.log_file_path.mkdir(parents=True, exist_ok=True)
 
 
-# 全局配置实例
-settings = Settings()
+# 延迟初始化 settings 实例
+_settings: Settings | None = None
+
+
+def get_settings() -> Settings:
+    """获取全局配置实例（延迟初始化）"""
+    global _settings
+    if _settings is None:
+        _settings = Settings()
+    return _settings
+
+
+# 向后兼容：访问 settings 属性时自动初始化
+class _SettingsProxy:
+    """Settings 代理类，支持延迟初始化"""
+
+    def __getattr__(self, name: str):
+        return getattr(get_settings(), name)
+
+    def __setattr__(self, name: str, value):
+        if name == "_settings":
+            super().__setattr__(name, value)
+        else:
+            setattr(get_settings(), name, value)
+
+
+settings = _SettingsProxy()

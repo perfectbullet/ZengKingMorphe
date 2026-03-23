@@ -7,8 +7,8 @@ LlamaRAG SDK - 基于 LlamaIndex 的 RAG 检索增强生成系统
 __version__ = "0.1.0"
 __author__ = "ZengKing"
 
-from src.config import Settings, settings
-from src.rag_system import RAGSystem
+from llama_rag_sdk.config import Settings, settings
+from llama_rag_sdk.rag_system import RAGSystem
 
 __all__ = [
     "Settings",

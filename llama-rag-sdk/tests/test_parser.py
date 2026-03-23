@@ -5,14 +5,14 @@
 import pytest
 from pathlib import Path
 
-from src.document_parser.base import ParsedDocument, TextChunk, ImageInfo
-from src.document_parser import (
+from llama_rag_sdk.document_parser.base import ParsedDocument, TextChunk, ImageInfo
+from llama_rag_sdk.document_parser import (
     MinerUParser,
     ParseOptions,
     ReturnOptions,
 )
-from src.document_parser.image_processor import ImageDescriptor
-from src.document_parser.mineru_structure_aware_chunker import MinerUStructureAwareChunker
+from llama_rag_sdk.document_parser.image_processor import ImageDescriptor
+from llama_rag_sdk.document_parser.mineru_structure_aware_chunker import MinerUStructureAwareChunker
 
 
 @pytest.fixture

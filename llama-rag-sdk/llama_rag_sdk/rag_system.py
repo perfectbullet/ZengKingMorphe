@@ -9,21 +9,21 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
-from src.config import settings
-from src.document_indexer.docstore import (
+from llama_rag_sdk.config import settings
+from llama_rag_sdk.document_indexer.docstore import (
     DocStoreDocument,
     MongoDBDocStore,
     create_docstore,
 )
-from src.document_indexer.indexer import DocumentIndexer
-from src.document_indexer.storage import VectorStore
-from src.document_indexer.summarizer import DocumentSummarizer
-from src.document_parser.base import ParsedDocument
-from src.document_parser.image_processor import ImageDescriptor
-from src.document_parser.mineru_client import MinerUParser
-from src.retrieval.base import RetrievedDocument
-from src.retrieval.context_expander import ContextExpander
-from src.retrieval.retriever import Retriever
+from llama_rag_sdk.document_indexer.indexer import DocumentIndexer
+from llama_rag_sdk.document_indexer.storage import VectorStore
+from llama_rag_sdk.document_indexer.summarizer import DocumentSummarizer
+from llama_rag_sdk.document_parser.base import ParsedDocument
+from llama_rag_sdk.document_parser.image_processor import ImageDescriptor
+from llama_rag_sdk.document_parser.mineru_client import MinerUParser
+from llama_rag_sdk.retrieval.base import RetrievedDocument
+from llama_rag_sdk.retrieval.context_expander import ContextExpander
+from llama_rag_sdk.retrieval.retriever import Retriever
 
 
 class RAGSystem:
@@ -143,7 +143,7 @@ class RAGSystem:
     def summarizer(self) -> "DocumentSummarizer":
         """获取文档摘要生成器"""
         if self._summarizer is None:
-            from src.document_indexer.summarizer import DocumentSummarizer
+            from llama_rag_sdk.document_indexer.summarizer import DocumentSummarizer
             self._summarizer = DocumentSummarizer()
         return self._summarizer
 

@@ -4,9 +4,9 @@
 
 import pytest
 
-from src.document_indexer.base import ChunkStrategy
-from src.document_indexer.chunker import FixedSizeChunker, SemanticChunker, HybridChunker
-from src.document_indexer.indexer import DocumentIndexer
+from llama_rag_sdk.document_indexer.base import ChunkStrategy
+from llama_rag_sdk.document_indexer.chunker import FixedSizeChunker, SemanticChunker, HybridChunker
+from llama_rag_sdk.document_indexer.indexer import DocumentIndexer
 
 
 @pytest.fixture

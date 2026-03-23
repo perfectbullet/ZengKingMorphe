@@ -9,8 +9,8 @@ from typing import List, Optional, Dict, Any, Callable
 
 from loguru import logger
 
-from src.document_parser.base import DocumentParser, ParsedDocument, TextChunk, ImageInfo
-from src.config import settings
+from llama_rag_sdk.document_parser.base import DocumentParser, ParsedDocument, TextChunk, ImageInfo
+from llama_rag_sdk.config import settings
 
 # SDK 导入（直接使用 SDK 类，保持向后兼容）
 from mineru_client import (
@@ -168,7 +168,7 @@ class MinerUParser(DocumentParser):
         # 转换 content_list 为 TextChunk（使用结构感知分块）
         chunks = []
         if zip_result.content_list:
-            from src.document_parser.mineru_structure_aware_chunker import MinerUStructureAwareChunker
+            from llama_rag_sdk.document_parser.mineru_structure_aware_chunker import MinerUStructureAwareChunker
             chunker = MinerUStructureAwareChunker()
             chunks = chunker.chunk_content_list(
                 content_list=zip_result.content_list,

@@ -4,11 +4,11 @@
 
 import pytest
 
-from src.retrieval.base import RetrievedDocument
-from src.retrieval.strategies import HybridRerankRetrieval
-from src.retrieval.retriever import Retriever
-from src.retrieval.reranker import BGERerankerClient, BGERerankerClientError
-from src.document_indexer.storage import VectorStore
+from llama_rag_sdk.retrieval.base import RetrievedDocument
+from llama_rag_sdk.retrieval.strategies import HybridRerankRetrieval
+from llama_rag_sdk.retrieval.retriever import Retriever
+from llama_rag_sdk.retrieval.reranker import BGERerankerClient, BGERerankerClientError
+from llama_rag_sdk.document_indexer.storage import VectorStore
 
 
 @pytest.fixture
@@ -167,7 +167,7 @@ class TestRetriever:
 
     def test_retriever_fails_without_reranker_service(self, vector_store):
         """测试没有 Reranker 服务时初始化失败"""
-        from src.config import settings
+        from llama_rag_sdk.config import settings
         original_url = settings.rerank_base_url
 
         try:

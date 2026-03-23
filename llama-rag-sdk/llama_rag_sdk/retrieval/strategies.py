@@ -8,14 +8,14 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from loguru import logger
 
-from src.config import settings
-from src.document_indexer.storage import VectorStore
-from src.embedding_factory import EmbeddingFactory
-from src.retrieval.base import RetrievedDocument, RetrievalStrategy
-from src.retrieval.reranker import BGERerankerClientError
+from llama_rag_sdk.config import settings
+from llama_rag_sdk.document_indexer.storage import VectorStore
+from llama_rag_sdk.embedding_factory import EmbeddingFactory
+from llama_rag_sdk.retrieval.base import RetrievedDocument, RetrievalStrategy
+from llama_rag_sdk.retrieval.reranker import BGERerankerClientError
 
 if TYPE_CHECKING:
-    from src.retrieval.query_expansion import QueryExpander
+    from llama_rag_sdk.retrieval.query_expansion import QueryExpander
 
 
 class HybridRerankRetrieval(RetrievalStrategy):

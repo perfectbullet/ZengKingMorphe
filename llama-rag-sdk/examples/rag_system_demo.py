@@ -10,10 +10,10 @@ import time
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
-from src.rag_system import RAGSystem
-from src.document_parser import ParseOptions, ReturnOptions
-from src.retrieval.base import RetrievedDocument
-from src.utils import setup_logger
+from llama_rag_sdk.rag_system import RAGSystem
+from llama_rag_sdk.document_parser import ParseOptions, ReturnOptions
+from llama_rag_sdk.retrieval.base import RetrievedDocument
+from llama_rag_sdk.utils import setup_logger
 from mineru_client import  ZipResult
 
 class RAGEvaluator:

@@ -4,13 +4,13 @@ MongoDB DocStore 和上下文扩展测试
 
 import pytest
 
-from src.document_indexer.docstore import (
+from llama_rag_sdk.document_indexer.docstore import (
     DocStoreDocument,
     MongoDBDocStore,
     create_docstore
 )
-from src.retrieval.context_expander import ContextExpander, AutoMergingRetriever
-from src.retrieval.base import RetrievedDocument
+from llama_rag_sdk.retrieval.context_expander import ContextExpander, AutoMergingRetriever
+from llama_rag_sdk.retrieval.base import RetrievedDocument
 
 
 class TestDocStoreDocument:
@@ -185,7 +185,7 @@ class TestContextExpander:
     @pytest.fixture
     async def setup_store(self):
         """设置测试用的 DocStore"""
-        from src.document_indexer.docstore import MongoDBDocStore
+        from llama_rag_sdk.document_indexer.docstore import MongoDBDocStore
         store = MongoDBDocStore(
             uri="mongodb://funasr:funasr2026@192.168.8.233:27017/funasr?authSource=admin",
             db_name="funasr",
@@ -297,7 +297,7 @@ class TestAutoMergingRetriever:
     @pytest.fixture
     async def setup_store(self):
         """设置测试用的 DocStore"""
-        from src.document_indexer.docstore import MongoDBDocStore
+        from llama_rag_sdk.document_indexer.docstore import MongoDBDocStore
         store = MongoDBDocStore(
             uri="mongodb://funasr:funasr2026@192.168.8.233:27017/funasr?authSource=admin",
             db_name="funasr",

@@ -12,15 +12,15 @@
 import asyncio
 from pathlib import Path
 
-from src.config import settings
-from src.document_parser import (
+from llama_rag_sdk.config import settings
+from llama_rag_sdk.document_parser import (
     MinerUParser,
     ParseOptions,
     ReturnOptions,
     STAGE_NAMES,
 )
-from src.document_parser.image_processor import ImageDescriptor
-from src.utils import setup_logger
+from llama_rag_sdk.document_parser.image_processor import ImageDescriptor
+from llama_rag_sdk.utils import setup_logger
 
 
 async def example_basic_parse():

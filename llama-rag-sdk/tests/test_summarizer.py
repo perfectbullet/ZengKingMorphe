@@ -4,7 +4,7 @@
 
 import pytest
 
-from src.document_indexer.summarizer import DocumentSummarizer
+from llama_rag_sdk.document_indexer.summarizer import DocumentSummarizer
 
 
 @pytest.mark.asyncio

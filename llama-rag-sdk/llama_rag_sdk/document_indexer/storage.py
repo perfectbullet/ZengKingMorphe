@@ -10,7 +10,7 @@ import chromadb
 from chromadb.config import Settings as ChromaSettings
 from loguru import logger
 
-from src.config import settings
+from llama_rag_sdk.config import settings
 
 
 class VectorStore:

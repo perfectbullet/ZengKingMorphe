@@ -8,8 +8,8 @@ from typing import Optional, List
 import asyncio
 from loguru import logger
 
-from src.retrieval.llm_client import create_llm_client
-from src.config import settings
+from llama_rag_sdk.retrieval.llm_client import create_llm_client
+from llama_rag_sdk.config import settings
 
 
 class DocumentSummarizer:

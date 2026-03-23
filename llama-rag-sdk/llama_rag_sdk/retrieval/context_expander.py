@@ -9,8 +9,8 @@ from typing import Any, Optional
 
 from loguru import logger
 
-from src.document_indexer.docstore import MongoDBDocStore
-from src.retrieval.base import RetrievedDocument
+from llama_rag_sdk.document_indexer.docstore import MongoDBDocStore
+from llama_rag_sdk.retrieval.base import RetrievedDocument
 
 
 class ContextExpander:

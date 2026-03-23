@@ -80,7 +80,11 @@ all = [
 ]
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["."]
+include = ["llama_rag_sdk*"]
+
+[tool.setuptools.package-data]
+llama_rag_sdk = ["py.typed"]
 
 [tool.black]
 line-length = 88

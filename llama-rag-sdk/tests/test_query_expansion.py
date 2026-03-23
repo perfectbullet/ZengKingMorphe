@@ -7,8 +7,8 @@
 import pytest
 import asyncio
 from unittest.mock import AsyncMock
-from src.retrieval.query_expansion import QueryExpander
-from src.retrieval.llm_client import OllamaLLMClient
+from llama_rag_sdk.retrieval.query_expansion import QueryExpander
+from llama_rag_sdk.retrieval.llm_client import OllamaLLMClient
 
 
 class TestQueryExpander:

@@ -13,11 +13,11 @@
 
 import asyncio
 
-from src.config import settings
-from src.document_indexer.indexer import DocumentIndexer
-from src.document_indexer.storage import VectorStore
-from src.retrieval.retriever import Retriever
-from src.utils import setup_logger
+from llama_rag_sdk.config import settings
+from llama_rag_sdk.document_indexer.indexer import DocumentIndexer
+from llama_rag_sdk.document_indexer.storage import VectorStore
+from llama_rag_sdk.retrieval.retriever import Retriever
+from llama_rag_sdk.utils import setup_logger
 
 
 async def setup_test_data():

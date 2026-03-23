@@ -7,6 +7,7 @@ from typing import List, Dict, Any, Optional
 
 from app.core.logging import get_logger
 from app.services.sdk_adapter.config import setup_sdk_env
+from llama_rag_sdk.rag_system import RAGSystem
 
 # 设置 SDK 环境变量
 setup_sdk_env()
@@ -32,7 +33,7 @@ class RAGRetrieval:
     def rag_system(self):
         """文档检索用 RAGSystem（延迟初始化）"""
         if self._rag_system is None:
-            from src.rag_system import RAGSystem
+            
             self._rag_system = RAGSystem(
                 collection_name="rag_documents",
                 enable_image_description=False,
@@ -44,7 +45,7 @@ class RAGRetrieval:
     def faq_system(self):
         """FAQ 检索用 RAGSystem（独立 collection，延迟初始化）"""
         if self._faq_system is None:
-            from src.rag_system import RAGSystem
+            from llama_rag_sdk.rag_system import RAGSystem
             self._faq_system = RAGSystem(
                 collection_name="rag_faq",
                 enable_image_description=False,

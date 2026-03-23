@@ -7,7 +7,7 @@ Embedding 模型工厂
 from typing import Optional
 from loguru import logger
 
-from src.config import settings
+from llama_rag_sdk.config import settings
 
 try:
     from llama_index.embeddings.openai import OpenAIEmbedding

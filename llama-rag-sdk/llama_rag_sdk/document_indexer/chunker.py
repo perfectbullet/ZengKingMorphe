@@ -9,7 +9,7 @@ from typing import List
 
 from loguru import logger
 
-from src.document_indexer.base import ChunkStrategy
+from llama_rag_sdk.document_indexer.base import ChunkStrategy
 
 
 class BaseChunker(ABC):

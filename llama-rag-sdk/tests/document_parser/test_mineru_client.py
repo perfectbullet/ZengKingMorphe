@@ -3,7 +3,7 @@ MinerU 客户端测试
 """
 
 import pytest
-from src.document_parser import (
+from llama_rag_sdk.document_parser import (
     MinerUParser,
     ParseOptions,
     ReturnOptions,

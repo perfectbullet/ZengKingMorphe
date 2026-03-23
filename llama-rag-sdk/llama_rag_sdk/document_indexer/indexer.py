@@ -8,17 +8,17 @@ import uuid
 from typing import List, Dict, Any, Optional, TYPE_CHECKING
 from loguru import logger
 
-from src.document_indexer.base import Indexer, ChunkStrategy, ChunkStrategyType
-from src.document_indexer.chunker import (
+from llama_rag_sdk.document_indexer.base import Indexer, ChunkStrategy, ChunkStrategyType
+from llama_rag_sdk.document_indexer.chunker import (
     FixedSizeChunker,
     SemanticChunker,
     HybridChunker,
     BaseChunker,
 )
-from src.document_indexer.storage import VectorStore
-from src.config import settings
-from src.embedding_factory import EmbeddingFactory
-from src.constants import EmbeddingDefaults, TextDefaults, MinerUChunkingDefaults
+from llama_rag_sdk.document_indexer.storage import VectorStore
+from llama_rag_sdk.config import settings
+from llama_rag_sdk.embedding_factory import EmbeddingFactory
+from llama_rag_sdk.constants import EmbeddingDefaults, TextDefaults, MinerUChunkingDefaults
 
 if TYPE_CHECKING:
     try:

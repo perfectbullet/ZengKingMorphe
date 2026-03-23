@@ -13,7 +13,7 @@ MinerU Structure-Aware Chunker - 基于 MinerU content_list 的结构感知分�
 - 支持多模态检索（图片描述 + 文本）
 
 使用示例:
-    >>> from src.document_parser.mineru_structure_aware_chunker import MinerUStructureAwareChunker
+    >>> from llama_rag_sdk.document_parser.mineru_structure_aware_chunker import MinerUStructureAwareChunker
     >>> chunker = MinerUStructureAwareChunker()
     >>> chunks = await chunker.chunk_content_list(content_list, "document.pdf")
     >>> for chunk in chunks:
@@ -27,8 +27,8 @@ from typing import Any, Optional
 
 from loguru import logger
 
-from src.constants import ChunkingStrategy, MinerUChunkingDefaults
-from src.document_parser.base import TextChunk
+from llama_rag_sdk.constants import ChunkingStrategy, MinerUChunkingDefaults
+from llama_rag_sdk.document_parser.base import TextChunk
 
 
 class MinerUStructureAwareChunker:
@@ -60,7 +60,7 @@ class MinerUStructureAwareChunker:
         """
         # 导入配置（延迟导入避免循环依赖）
         try:
-            from src.config import settings
+            from llama_rag_sdk.config import settings
             self.max_chunk_size = settings.chunk_size
             self.chunk_overlap = settings.chunk_overlap
             # 目录过滤配置
