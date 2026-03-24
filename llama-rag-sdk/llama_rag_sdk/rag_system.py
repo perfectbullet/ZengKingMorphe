@@ -41,6 +41,7 @@ class RAGSystem:
     def __init__(
         self,
         collection_name: Optional[str] = None,
+        kb_id: Optional[str] = None,
         enable_image_description: Optional[bool] = None,
         enable_summarization: Optional[bool] = None,
     ):
@@ -48,11 +49,23 @@ class RAGSystem:
         初始化 RAG 系统
 
         Args:
-            collection_name: 集合名称
+            collection_name: 集合名称（优先级高于 kb_id）
+            kb_id: 知识库 ID（自动生成集合名：rag_documents_<kb_id>）
             enable_image_description: 是否启用图片描述
             enable_summarization: 是否启用文档摘要生成
         """
-        self.collection_name = collection_name or settings.chroma_collection_name
+        # collection_name 优先，否则用 kb_id 生成，最后用默认值
+        if collection_name:
+            self.collection_name = collection_name
+        elif kb_id:
+            # kb_id 自动添加前缀
+            if kb_id.startswith("kb_"):
+                self.collection_name = f"rag_documents_{kb_id}"
+            else:
+                self.collection_name = f"rag_documents_kb_{kb_id}"
+        else:
+            self.collection_name = settings.chroma_collection_name
+
         self.enable_image_description = (
             enable_image_description if enable_image_description is not None
             else settings.enable_image_description

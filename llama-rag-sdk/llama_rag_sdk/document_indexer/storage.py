@@ -28,13 +28,22 @@ class VectorStore:
         初始化向量存储
 
         Args:
-            collection_name: 集合名称
+            collection_name: 集合名称（支持 kb_id，自动添加 rag_documents_ 前缀）
             host: ChromaDB 主机地址
             port: ChromaDB 端口
             persist_dir: 本地持久化目录
             use_remote: 是否使用远程服务
         """
-        self.collection_name = collection_name or settings.chroma_collection_name
+        # 如果传入的是 kb_id（以 kb_ 开头），则添加前缀生成集合名
+        if collection_name and collection_name.startswith("kb_"):
+            self.collection_name = f"rag_documents_{collection_name}"
+        elif collection_name and collection_name.startswith("rag_documents_"):
+            # 已经是完整的集合名，直接使用
+            self.collection_name = collection_name
+        else:
+            # 使用默认集合名
+            self.collection_name = collection_name or settings.chroma_collection_name
+
         self.host = host or settings.chroma_host
         self.port = port or settings.chroma_port
         self.persist_dir = persist_dir or settings.chroma_persist_dir

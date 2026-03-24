@@ -59,4 +59,23 @@ async def search_math_textbook(
 
 
 # 全局实例（向后兼容）
-math_textbook_retrieval = None  # 不再使用单独的实例，直接用函数
+class MathTextbookRetrieval:
+    """数学教材检索服务类（包装函数）"""
+
+    async def search(
+        self,
+        query: str,
+        kb_ids: List[str],
+        top_k: int = 5,
+        use_hybrid: bool = True,
+        enable_rerank: Optional[bool] = None,
+    ) -> List[Dict[str, Any]]:
+        """检索数学教材（忽略 kb_ids，使用 MATH_KB_ID）"""
+        return await search_math_textbook(
+            query=query,
+            top_k=top_k,
+            enable_rerank=enable_rerank,
+        )
+
+
+math_textbook_retrieval = MathTextbookRetrieval()

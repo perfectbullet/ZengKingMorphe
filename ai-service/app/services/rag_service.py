@@ -2,6 +2,11 @@
 RAG retrieval service using llama-rag-sdk.
 
 使用 llama-rag-sdk 进行向量检索和 FAQ 检索。
+
+架构说明：
+- 每个 kb_id 使用独立的 ChromaDB 集合（rag_documents_<kb_id>）
+- 支持多知识库联合查询（分别查询后合并结果）
+- FAQ 仍使用共享集合（rag_faq）
 """
 from typing import List, Dict, Any, Optional
 
@@ -18,28 +23,41 @@ class RAGRetrieval:
     使用 SDK 的 RAGSystem 进行：
     - 标准文档检索（向量 + 内置 Reranker）
     - FAQ 检索
+
+    集合架构：
+    - 文档检索：每个 kb_id 独立集合（rag_documents_<kb_id>）
+    - FAQ 检索：共享集合（rag_faq）
     """
 
     def __init__(self):
         """Initialize RAGRetrieval."""
-        self._rag_system = None
+        self._rag_systems: Dict[str, RAGSystem] = {}  # kb_id -> RAGSystem 缓存
         self._faq_system = None
 
-    @property
-    def rag_system(self):
-        """文档检索用 RAGSystem（延迟初始化）"""
-        if self._rag_system is None:
-            
-            self._rag_system = RAGSystem(
-                collection_name="rag_documents",
+    def _get_rag_system(self, kb_id: str) -> RAGSystem:
+        """
+        获取或创建指定 kb_id 的 RAGSystem
+
+        每个 kb_id 使用独立的 ChromaDB 集合（rag_documents_<kb_id>）
+
+        Args:
+            kb_id: 知识库 ID
+
+        Returns:
+            对应的 RAGSystem 实例
+        """
+        if kb_id not in self._rag_systems:
+            logger.info(f"创建 RAGSystem for kb_id={kb_id}, 集合名=rag_documents_{kb_id}")
+            self._rag_systems[kb_id] = RAGSystem(
+                kb_id=kb_id,  # 自动生成集合名 rag_documents_<kb_id>
                 enable_image_description=False,
                 enable_summarization=True,
             )
-        return self._rag_system
+        return self._rag_systems[kb_id]
 
     @property
     def faq_system(self):
-        """FAQ 检索用 RAGSystem（独立 collection，延迟初始化）"""
+        """FAQ 检索用 RAGSystem（共享 collection，延迟初始化）"""
         if self._faq_system is None:
             from llama_rag_sdk.rag_system import RAGSystem
             self._faq_system = RAGSystem(
@@ -60,6 +78,8 @@ class RAGRetrieval:
         """
         使用 SDK 进行文档检索（向量 + 内置 Reranker）
 
+        支持多知识库联合查询：为每个 kb_id 分别检索，然后合并 + rerank
+
         Args:
             query: 搜索查询
             kb_ids: 知识库 ID 列表
@@ -71,15 +91,37 @@ class RAGRetrieval:
             相关文档列表
         """
         try:
-            # 构建过滤条件
-            filters = {"kb_id": {"$in": kb_ids}} if kb_ids else None
+            if not kb_ids:
+                logger.warning("RAG search called without kb_ids, returning empty")
+                return []
 
-            # 调用 SDK 检索（向量 + Reranker）
-            results = await self.rag_system.retrieve(
-                query=query,
-                top_k=top_k,
-                filters=filters,
-            )
+            # 多知识库联合查询
+            if len(kb_ids) == 1:
+                # 单个知识库，直接查询
+                kb_id = kb_ids[0]
+                rag_system = self._get_rag_system(kb_id)
+                results = await rag_system.retrieve(
+                    query=query,
+                    top_k=top_k,
+                    filters=None,  # 独立集合无需过滤
+                )
+            else:
+                # 多个知识库，分别查询后合并
+                logger.info(f"多知识库联合查询: kb_ids={kb_ids}")
+                all_results = []
+                for kb_id in kb_ids:
+                    rag_system = self._get_rag_system(kb_id)
+                    kb_results = await rag_system.retrieve(
+                        query=query,
+                        top_k=top_k,
+                        filters=None,
+                    )
+                    all_results.extend(kb_results)
+
+                # 按分数排序并限制数量
+                all_results.sort(key=lambda x: x.score, reverse=True)
+                results = all_results[:top_k]
+                logger.info(f"多知识库查询结果: 总数={len(all_results)}, 返回={len(results)}")
 
             # 转换为 ai-service 格式
             return [
@@ -88,11 +130,11 @@ class RAGRetrieval:
                     "score": doc.score,
                     "doc_id": doc.metadata.get("doc_id"),
                     "kb_id": doc.metadata.get("kb_id"),
-                    "chunk_id": doc.metadata.get("chunk_id"),  # 添加 chunk_id
+                    "chunk_id": doc.metadata.get("chunk_id"),
                     "chunk_index": doc.metadata.get("chunk_index"),
                     "content_type": doc.metadata.get("content_type", "text"),
                     "context_text": doc.metadata.get("context_text", ""),
-                    "teaching_script_tts": doc.metadata.get("teaching_script_tts"),  # 添加语音播报字段
+                    "teaching_script_tts": doc.metadata.get("teaching_script_tts"),
                 }
                 for doc in results
             ]
@@ -149,6 +191,27 @@ class RAGRetrieval:
         except Exception as e:
             logger.error(f"FAQ search failed: query={query[:50]}, error={e}", exc_info=True)
             return []
+
+    async def delete_kb_collection(self, kb_id: str) -> bool:
+        """
+        删除指定知识库的 ChromaDB 集合
+
+        Args:
+            kb_id: 知识库 ID
+
+        Returns:
+            是否删除成功
+        """
+        try:
+            if kb_id in self._rag_systems:
+                await self._rag_systems[kb_id].clear_collection()
+                del self._rag_systems[kb_id]
+                logger.info(f"已删除知识库集合: rag_documents_{kb_id}")
+                return True
+            return False
+        except Exception as e:
+            logger.error(f"删除知识库集合失败: kb_id={kb_id}, error={e}", exc_info=True)
+            return False
 
 
 # Global RAG retrieval instance

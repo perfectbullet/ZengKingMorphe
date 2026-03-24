@@ -62,3 +62,5 @@ llama-rag-sdk/third_part_repo/
 es_code_bak
 ai-service/data/output
 data/output/
+ai-service/.env-for-233
+*.pyc
