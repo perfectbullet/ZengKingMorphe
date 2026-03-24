@@ -13,10 +13,11 @@ from typing import Dict, Optional, List
 
 from app.core.logging import get_logger
 from app.core.database import get_database
-from app.models.database import DocumentModel
+from app.models.database import DocumentModel, DocumentTaskModel
 from app.services.dataset_faq_service import faq_processor
 from app.services.thesaurus_major_service import thesaurus_major_processor
 from app.services.thesaurus_sensitive_service import thesaurus_sensitive_processor
+from app.services.document_service import generate_doc_id
 
 logger = get_logger(__name__)
 
@@ -105,7 +106,6 @@ class DocumentTaskProcessor:
     async def submit_task(
         self,
         kb_id: str,
-        enhance: int,
         filename: str,
         file_path: str,
         category: Optional[str] = None,
@@ -118,7 +118,6 @@ class DocumentTaskProcessor:
 
         Args:
             kb_id: Knowledge base ID
-            enhance: 设置文档或视频资源是否知识增强：0=不增强，1=增强
             filename: Original filename
             file_path: Path to uploaded file
             category: Document category
@@ -136,7 +135,7 @@ class DocumentTaskProcessor:
         task_model = DocumentTaskModel(
             task_id=task_id,
             kb_id=kb_id,
-            enhance=enhance,
+            enhance=1,  # 保持默认值以兼容现有数据
             filename=filename,
             file_path=file_path,
             category=category,
@@ -161,7 +160,6 @@ class DocumentTaskProcessor:
         await self.task_queue.put({
             "task_id": task_id,
             "kb_id": kb_id,
-            "enhance": enhance,
             "filename": filename,
             "file_path": file_path,
             "category": category,
@@ -180,7 +178,6 @@ class DocumentTaskProcessor:
         self,
         task_id: str,
         kb_id: str,
-        enhance: str,
         filename: str,
         file_path: str,
         category: Optional[str] = None,
@@ -192,7 +189,6 @@ class DocumentTaskProcessor:
         await self.task_queue.put({
             "task_id": task_id,
             "kb_id": kb_id,
-            "enhance": enhance,
             "filename": filename,
             "file_path": file_path,
             "category": category,
@@ -536,9 +532,8 @@ class DocumentTaskProcessor:
         file_path = task_data["file_path"]
         filename = task_data["filename"]
         kb_id = task_data["kb_id"]
-        enhance = task_data["enhance"]
         category = task_data.get("category")
-        doc_id = task_data.get("doc_id")
+        doc_id = task_data.get("doc_id") or generate_doc_id(filename, kb_id)
         resource_id = task_data.get("resource_id")
 
         # 获取文件信息
@@ -559,7 +554,6 @@ class DocumentTaskProcessor:
                 doc_id=doc_id,
                 filename=filename,
                 kb_id=kb_id,
-                enhance=enhance,
                 category=category,
                 size=file_size,
                 format=file_ext[1:].upper(),

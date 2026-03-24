@@ -70,7 +70,7 @@ async def create_knowledge_base(
         # Insert into knowledge_bases collection
         result = await db.knowledge_bases.insert_one(kb_doc)
 
-        if result and result.inserted_id == 1:
+        if result and result.inserted_id:
             data = {
                 "kb_id": kb_id
             }

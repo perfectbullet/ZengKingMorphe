@@ -98,7 +98,6 @@ class DocumentModel(BaseModel):
     doc_id: str
     filename: str
     kb_id: str
-    enhance: int = 1  # 0=不增强，1=增强
     category: Optional[str] = None
     size: int = 0
     format: str  # PDF/DOCX/TXT/MD/HTML/MP4

@@ -530,7 +530,6 @@ async def create_rag_document_with_segment(
         # 添加到文档任务列表中
         task_id = await task_processor.submit_task(
             kb_id=kb_id,
-            enhance=request.enhance,
             filename=request.document_name,
             file_path=str(file_path),
             category=None,

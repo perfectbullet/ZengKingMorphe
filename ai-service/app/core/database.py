@@ -29,7 +29,7 @@ class MongoDB:
             
             # Test connection
             await self.client.admin.command('ping')
-            logger.info(f"Connected to MongoDB: database={settings.mongodb_db_name}")
+            logger.info(f"Connected to MongoDB: database={settings.mongodb_db_name}, at {settings.mongodb_url}")
             
             # Create indexes
             await self._create_indexes()

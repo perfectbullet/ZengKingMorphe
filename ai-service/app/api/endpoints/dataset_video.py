@@ -152,13 +152,14 @@ async def restart_task(
                                         f"restart_task task not found task_id={task_id}")
 
         await task_processor.re_submit_task(
+            task_id=task_id,
             kb_id=task["kb_id"],
             filename=task["filename"],
             file_path=task["file_path"],
             category=task["category"],
-            chunk_config=task["metadata"]["chunk_config"],
+            chunk_config=task["metadata"].get("chunk_config"),
             doc_id=task["doc_id"],
-            resource_id=task["metadata"]["resource_id"],
+            resource_id=task["metadata"].get("resource_id"),
         )
 
         return ResponseResult.success(None)
@@ -219,13 +220,14 @@ async def set_enhance(
                                             f"set_enhance task not found doc_id={doc_id}")
 
             await task_processor.re_submit_task(
+                task_id=task["task_id"],
                 kb_id=task["kb_id"],
                 filename=task["filename"],
                 file_path=task["file_path"],
                 category=task["category"],
-                chunk_config=task["metadata"]["chunk_config"],
+                chunk_config=task["metadata"].get("chunk_config"),
                 doc_id=task["doc_id"],
-                resource_id=task["metadata"]["resource_id"],
+                resource_id=task["metadata"].get("resource_id"),
             )
 
             return ResponseResult.success(None)
