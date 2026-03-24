@@ -83,25 +83,35 @@ class DocumentTaskProcessor:
         self.running = False
         self.worker_task: Optional[asyncio.Task] = None
         self.active_tasks: Dict[str, bool] = {}  # task_id -> cancellation flag
-        self._rag_system = None  # 延迟初始化 RAGSystem
+        self._rag_systems: Dict[str, "RAGSystem"] = {}  # kb_id -> RAGSystem 缓存
 
-    @property
-    def rag_system(self):
-        """获取 RAGSystem 实例（延迟初始化）"""
-        if self._rag_system is None:
+    def _get_rag_system(self, kb_id: str):
+        """
+        获取或创建指定 kb_id 的 RAGSystem
+
+        每个 kb_id 使用独立的 ChromaDB 集合（rag_documents_<kb_id>）
+
+        Args:
+            kb_id: 知识库 ID
+
+        Returns:
+            对应的 RAGSystem 实例
+        """
+        if kb_id not in self._rag_systems:
             from llama_rag_sdk.rag_system import RAGSystem
-            self._rag_system = RAGSystem(
-                collection_name="rag_documents",
+            logger.info(f"创建 RAGSystem for kb_id={kb_id}, 集合名=rag_documents_{kb_id}")
+            self._rag_systems[kb_id] = RAGSystem(
+                kb_id=kb_id,  # 自动生成集合名 rag_documents_<kb_id>
                 enable_image_description=False,
                 enable_summarization=True,
             )
-        return self._rag_system
+        return self._rag_systems[kb_id]
 
     async def close(self):
-        """关闭资源"""
-        if self._rag_system:
-            await self._rag_system.close()
-            self._rag_system = None
+        """关闭所有 RAGSystem 资源"""
+        for rag_system in self._rag_systems.values():
+            await rag_system.close()
+        self._rag_systems.clear()
 
     async def submit_task(
         self,
@@ -578,7 +588,7 @@ class DocumentTaskProcessor:
             # 使用 RAGSystem 索引文档
             if file_ext == ".pdf":
                 # PDF: 使用 MinerU 解析 + 结构感知分块
-                await self.rag_system.index_document(
+                await self._get_rag_system(kb_id).index_document(
                     file_path,
                     metadata={
                         "doc_id": doc_id,
@@ -609,7 +619,7 @@ class DocumentTaskProcessor:
                     ]
                 )
 
-                await self.rag_system.index_parsed_document(parsed_doc, source_path=file_path)
+                await self._get_rag_system(kb_id).index_parsed_document(parsed_doc, source_path=file_path)
 
             # 更新文档状态为完成
             await db.documents.update_one(
