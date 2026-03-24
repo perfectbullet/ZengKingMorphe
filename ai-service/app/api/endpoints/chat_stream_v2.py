@@ -516,22 +516,8 @@ async def generate_openai_stream_v2(
                     await conversation_workflow.save_conversation(final_state)
 
                     # 这里的输出会发生给语音合成服务
-                    # 优先使用 teaching_script_tts，如果为空或查询不到则走 LLM 转换逻辑
-                    chunk_id = direct_match.get("chunk_id")
-                    teaching_script_tts = None
-                    # 从 MongoDB 查询 teaching_script_tts
-                    if chunk_id:
-                        try:
-                            tts_chunk = await db.document_chunks.find_one(
-                                {"chunk_id": chunk_id},
-                                {"teaching_script_tts": 1}
-                            )
-                            if tts_chunk:
-                                teaching_script_tts = tts_chunk.get("teaching_script_tts")
-                                logger.info(f"Found teaching_script_tts for chunk_id={chunk_id}, length={len(teaching_script_tts) if teaching_script_tts else 0}")
-                                logger.info(f"teaching_script_tts content: {teaching_script_tts}")
-                        except Exception as e:
-                            logger.warning(f"Failed to query teaching_script_tts: {e}")
+                    # 优先使用 teaching_script_tts，如果为空则走 LLM 转换逻辑
+                    teaching_script_tts = direct_match.get("teaching_script_tts")
                     # 如果 teaching_script_tts 存在且非空，直接流式输出；否则走 LLM 转换
                     if teaching_script_tts and teaching_script_tts.strip():
                         # 直接输出 teaching_script_tts，合并单独的标点 segment

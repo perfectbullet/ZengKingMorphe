@@ -88,9 +88,11 @@ class RAGRetrieval:
                     "score": doc.score,
                     "doc_id": doc.metadata.get("doc_id"),
                     "kb_id": doc.metadata.get("kb_id"),
+                    "chunk_id": doc.metadata.get("chunk_id"),  # 添加 chunk_id
                     "chunk_index": doc.metadata.get("chunk_index"),
                     "content_type": doc.metadata.get("content_type", "text"),
                     "context_text": doc.metadata.get("context_text", ""),
+                    "teaching_script_tts": doc.metadata.get("teaching_script_tts"),  # 添加语音播报字段
                 }
                 for doc in results
             ]

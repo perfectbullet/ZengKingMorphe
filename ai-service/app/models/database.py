@@ -113,7 +113,18 @@ class DocumentModel(BaseModel):
 
 
 class DocumentChunkModel(BaseModel):
-    """Document chunk model."""
+    """
+    Document chunk model.
+
+    NOTE: 此集合现在仅用于查询功能（如 GET /{doc_id}/chunks API）。
+    RAG 检索的核心功能已迁移到 llama-rag-sdk：
+    - 向量存储: ChromaDB (collection_name="rag_documents")
+    - 文档存储: SDK DocStore (collection="docstore")
+
+    保留此集合用于：
+    1. 文档分块列表查询 (documents.py)
+    2. 知识库详情展示 (knowledge_base_kb.py)
+    """
     chunk_id: str
     doc_id: str
     kb_id: str
@@ -125,7 +136,7 @@ class DocumentChunkModel(BaseModel):
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: Optional[datetime] = None
 
-    # MinerU结构化字段（新增）
+    # MinerU结构化字段
     page_idx: Optional[int] = None                      # 起始页码
     page_indices: List[int] = Field(default_factory=list)  # 包含的所有页码
     block_types: List[str] = Field(default_factory=list)   # 包含的块类型 ['text', 'title']
@@ -133,6 +144,9 @@ class DocumentChunkModel(BaseModel):
     image_captions: List[str] = Field(default_factory=list)    # 图片描述列表
     title_path: List[str] = Field(default_factory=list)  # 标题路径（面包屑）
     structure_level: int = 0            # 在文档结构中的层级
+
+    # 语音播报字段（数学教材）
+    teaching_script_tts: Optional[str] = None  # 预生成的语音播报文本
 
 
 class IntentLogModel(BaseModel):

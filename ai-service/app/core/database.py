@@ -101,14 +101,7 @@ class MongoDB:
                 IndexModel([("kb_id", ASCENDING), ("status", ASCENDING)]),
                 IndexModel([("uploaded_at", DESCENDING)]),
             ])
-            
-            # Document chunks collection indexes
-            await self.db.document_chunks.create_indexes([
-                IndexModel([("chunk_id", ASCENDING)], unique=True),
-                IndexModel([("doc_id", ASCENDING), ("chunk_index", ASCENDING)]),
-                IndexModel([("kb_id", ASCENDING)]),
-            ])
-            
+
             # Intent logs collection indexes
             await self.db.intent_logs.create_indexes([
                 IndexModel([("conversation_id", ASCENDING)]),

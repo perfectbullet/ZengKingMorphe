@@ -763,9 +763,10 @@ class ConversationNodes:
                         state["direct_match"] = {
                             "content_type": content_type,
                             "doc_id": top_doc.get("doc_id"),
-                            "chunk_id": top_doc.get("chunk_id"),  # 添加 chunk_id 用于查询 teaching_script_tts
+                            "chunk_id": top_doc.get("chunk_id"),
                             "rerank_score": float(rerank_score) if rerank_score else 0.0,
-                            "content_snippet": direct_content[:100]
+                            "content_snippet": direct_content[:100],
+                            "teaching_script_tts": top_doc.get("teaching_script_tts"),  # 添加语音播报字段
                         }
                         logger.info(
                             f"{content_type.upper()} direct match triggered - skipping LLM generation",
