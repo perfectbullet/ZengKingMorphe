@@ -59,7 +59,6 @@ class RAGRetrieval:
     def faq_system(self):
         """FAQ 检索用 RAGSystem（共享 collection，延迟初始化）"""
         if self._faq_system is None:
-            from llama_rag_sdk.rag_system import RAGSystem
             self._faq_system = RAGSystem(
                 collection_name="rag_faq",
                 enable_image_description=False,

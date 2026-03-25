@@ -633,6 +633,7 @@ async def generate_openai_stream_v1(
                     f"intent={final_state.get('intent')} | "
                     f"faq_matched={bool(final_state.get('faq_matched'))} | "
                     f"web_search_used={final_state.get('web_search_used', False)}"
+                    f"messages={messages}"
                 )
 
                 first_token_received = False
