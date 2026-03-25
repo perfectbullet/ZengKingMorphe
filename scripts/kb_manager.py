@@ -6,6 +6,7 @@
 1. 创建知识库
 2. 上传文档到知识库
 3. 绑定知识库到数字员工
+4. 检索知识库文档
 
 使用示例：
     # 创建知识库
@@ -16,6 +17,9 @@
 
     # 绑定到员工
     python scripts/kb_manager.py bind-employee --kb-id kb_abc123 --employee-id 29
+
+    # 检索文档
+    python scripts/kb_manager.py search-docs --kb-id kb_abc123 --query "产品功能"
 
     # 查看知识库列表
     python scripts/kb_manager.py list-kb
@@ -28,6 +32,22 @@
 
     # 查看任务状态
     python scripts/kb_manager.py task-status --task-id task_abc123
+    
+    # 基本检索
+    python scripts/kb_manager.py search-docs --kb-id kb_12ad113e4c80 --query "请帮我介绍集合的概念"
+
+    # 指定返回数量
+    python scripts/kb_manager.py search-docs \
+    --kb-id kb_12ad113e4c80 \
+    --query "首饰制作工艺" \
+    --top-k 10
+
+    # 仅向量检索（不使用混合检索）
+    python scripts/kb_manager.py search-docs \
+    --kb-id kb_12ad113e4c80 \
+    --query "雕蜡工艺步骤" \
+    --no-hybrid
+
 """
 import argparse
 import json
@@ -279,6 +299,71 @@ class KBManager:
             self.console.print(f"[red]获取失败: {result}[/red]")
             return {}
 
+    def search_documents(
+        self,
+        kb_id: str,
+        query: str,
+        top_k: int = 5,
+        use_hybrid: bool = True
+    ) -> dict:
+        """在知识库中检索文档"""
+        self.console.print(f"[cyan]在知识库 {kb_id} 中检索: {query}[/cyan]")
+
+        payload = {
+            "kb_id": kb_id,
+            "query": query,
+            "top_k": top_k,
+            "use_hybrid": use_hybrid
+        }
+
+        result = self._request("POST", "/api/knowledge_base/search", json=payload)
+
+        if result.get("code") == 200:
+            return result.get("data", {})
+        else:
+            self.console.print(f"[red]检索失败: {result}[/red]")
+            return {}
+
+    def display_search_results(self, search_data: dict):
+        """显示检索结果表格"""
+        if not search_data or not search_data.get("results"):
+            self.console.print("[yellow]未找到相关文档[/yellow]")
+            return
+
+        query = search_data.get("query", "")
+        total = search_data.get("total", 0)
+        results = search_data.get("results", [])
+
+        self.console.print(f"\n[bold]查询:[/bold] {query}")
+        self.console.print(f"[bold]知识库:[/bold] {search_data.get('kb_id')}")
+        self.console.print(f"[bold]找到 {total} 个相关文档[/bold]\n")
+
+        table = Table(title="检索结果")
+        table.add_column("排名", style="cyan", width=6)
+        table.add_column("分数", style="magenta", width=8)
+        table.add_column("文档ID", style="dim", no_wrap=True)
+        table.add_column("内容片段", style="green")
+        table.add_column("页码", style="blue", width=6)
+
+        for item in results:
+            # 内容截断显示
+            content = item.get("content", "")[:100]
+            if len(item.get("content", "")) > 100:
+                content += "..."
+
+            metadata = item.get("metadata", {})
+            page = metadata.get("page") if metadata.get("page") is not None else "N/A"
+
+            table.add_row(
+                str(item.get("rank", "")),
+                f"{item.get('score', 0):.4f}",
+                item.get("doc_id", ""),
+                content,
+                str(page)
+            )
+
+        self.console.print(table)
+
     def display_knowledge_bases(self, kbs: List[dict]):
         """显示知识库列表表格"""
         if not kbs:
@@ -410,6 +495,13 @@ def main():
     get_emp_parser = subparsers.add_parser("get-employee", help="获取员工配置")
     get_emp_parser.add_argument("--employee-id", required=True, help="员工ID")
 
+    # search-docs 命令
+    search_parser = subparsers.add_parser("search-docs", help="检索知识库文档")
+    search_parser.add_argument("--kb-id", required=True, help="知识库ID")
+    search_parser.add_argument("--query", required=True, help="查询文本")
+    search_parser.add_argument("--top-k", type=int, default=5, help="返回结果数量")
+    search_parser.add_argument("--no-hybrid", action="store_true", help="禁用混合检索")
+
     args = parser.parse_args()
 
     if not args.command:
@@ -466,6 +558,15 @@ def main():
         config = manager.get_employee_config(args.employee_id)
         if config:
             manager.console.print(json.dumps(config, ensure_ascii=False, indent=2))
+
+    elif args.command == "search-docs":
+        results = manager.search_documents(
+            args.kb_id,
+            args.query,
+            top_k=args.top_k,
+            use_hybrid=not args.no_hybrid
+        )
+        manager.display_search_results(results)
 
 
 if __name__ == "__main__":

@@ -267,6 +267,44 @@ class UpdateKnowledgeBaseRequest(BaseModel):
     tags: List[str] = Field(default_factory=list)
 
 
+class SearchDocumentsRequest(BaseModel):
+    """Search documents in knowledge base request schema."""
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "kb_id": "kb_12ad113e4c80",
+                "query": "失蜡铸造的原理",
+                "top_k": 5,
+                "use_hybrid": True
+            }
+        }
+    )
+
+    kb_id: str = Field(..., description="Knowledge base ID")
+    query: str = Field(..., description="Search query", max_length=500)
+    top_k: int = Field(default=5, ge=1, le=20, description="Number of results to return")
+    use_hybrid: bool = Field(default=True, description="Use hybrid search (vector + rerank)")
+    enable_rerank: Optional[bool] = Field(default=None, description="Enable reranking (default: True)")
+
+
+class SearchResultItem(BaseModel):
+    """Single search result item."""
+    rank: int = Field(..., description="Result ranking")
+    doc_id: str = Field(..., description="Document ID")
+    chunk_id: Optional[str] = Field(None, description="Chunk ID")
+    content: str = Field(..., description="Document content snippet")
+    score: float = Field(..., description="Relevance score")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
+
+
+class SearchDocumentsResponse(BaseModel):
+    """Search documents response schema."""
+    query: str = Field(..., description="Original search query")
+    kb_id: str = Field(..., description="Knowledge base ID")
+    total: int = Field(..., description="Total number of results")
+    results: List[SearchResultItem] = Field(default_factory=list, description="Search results")
+
+
 # Document API Schemas
 class DocumentUploadResponse(BaseModel):
     """Document upload response schema."""

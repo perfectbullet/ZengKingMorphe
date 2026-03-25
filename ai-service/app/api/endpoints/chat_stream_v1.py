@@ -586,7 +586,7 @@ async def generate_openai_stream_v1(
 
                     for char in existing_answer:
                         segment = sentence_buffer.add(char)
-                        logger.info(f"segment={segment!r}")
+                        # logger.info(f"segment={segment!r}")
                         if segment:
                             chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
                                 segment, revise_llm, chat_id, created, request.model,
@@ -648,7 +648,7 @@ async def generate_openai_stream_v1(
                         full_answer += token
 
                         segment = sentence_buffer.add(token)
-                        logger.info(f"segment={segment!r}")
+                        # logger.info(f"segment={segment!r}")
 
                         token_len = len(token)
                         buffer_len = sentence_buffer.get_buffer_length()

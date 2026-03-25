@@ -93,7 +93,7 @@ class ConversationNodes:
 
             employee.pop("_id", None)
             state["employee_config"] = employee
-            kb_ids = employee.get("kb_ids", [])
+            kb_ids = employee.get("knowledge", []).get("kb_ids", [])
             logger.info(
                 f"Employee config loaded: employee_id={state['employee_id']}, "
                 f"name={employee.get('name')}, kb_ids={kb_ids}, kb_count={len(kb_ids)}"

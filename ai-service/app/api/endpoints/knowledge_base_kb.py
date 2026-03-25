@@ -16,8 +16,13 @@ from app.core.database import get_database
 from app.core.config import settings
 from app.models.schemas import (
     CreateKnowledgeBaseRequest,
-    UpdateKnowledgeBaseRequest, ResponseResult,
+    UpdateKnowledgeBaseRequest,
+    SearchDocumentsRequest,
+    SearchDocumentsResponse,
+    SearchResultItem,
+    ResponseResult,
 )
+from app.services.rag_service import rag_retrieval
 
 logger = get_logger(__name__)
 
@@ -499,4 +504,91 @@ async def get_knowledge_base_detail(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to get knowledge base detail"
+        )
+
+
+@router.post("/search")
+async def search_documents(
+    request: SearchDocumentsRequest,
+    api_key: str = Depends(get_api_key),
+    db=Depends(get_database)
+):
+    """
+    在指定知识库中检索相关文档
+
+    Args:
+        - request: search_documents request
+            - kb_id: 知识库 ID
+            - query: 查询文本
+            - top_k: 返回结果数量（默认 5）
+            - use_hybrid: 是否使用混合检索（默认 True）
+            - enable_rerank: 是否启用重排序（默认 True）
+        - api_key: API key from auth
+        - db: Database instance
+
+    Returns:
+        - 检索结果列表，按相关性排序
+    """
+    try:
+        logger.info(f"search_documents request: kb_id={request.kb_id}, query={request.query[:100]}")
+
+        # 验证知识库是否存在
+        kb = await db.knowledge_bases.find_one({"kb_id": request.kb_id})
+        if not kb:
+            return ResponseResult.error(
+                status.HTTP_404_NOT_FOUND,
+                "error",
+                f"Knowledge base not found: kb_id={request.kb_id}"
+            )
+
+        # 调用 RAG 检索服务
+        results = await rag_retrieval.search(
+            query=request.query,
+            kb_ids=[request.kb_id],
+            top_k=request.top_k,
+            use_hybrid=request.use_hybrid,
+            enable_rerank=request.enable_rerank,
+        )
+
+        # 转换为响应格式
+        search_results = []
+        for i, result in enumerate(results, 1):
+            search_results.append(SearchResultItem(
+                rank=i,
+                doc_id=result.get("doc_id", ""),
+                chunk_id=result.get("chunk_id"),
+                content=result.get("content", ""),
+                score=result.get("score", 0.0),
+                metadata={
+                    "chunk_index": result.get("chunk_index"),
+                    "content_type": result.get("content_type"),
+                    "page": result.get("metadata", {}).get("page"),
+                    "title": result.get("metadata", {}).get("title"),
+                    "section": result.get("metadata", {}).get("section"),
+                }
+            ))
+
+        response_data = SearchDocumentsResponse(
+            query=request.query,
+            kb_id=request.kb_id,
+            total=len(search_results),
+            results=search_results
+        )
+
+        logger.info(
+            f"search_documents success: kb_id={request.kb_id}, "
+            f"results={len(search_results)}"
+        )
+
+        return ResponseResult.success(response_data.model_dump())
+
+    except Exception as e:
+        logger.error(
+            f"search_documents error: kb_id={request.kb_id}, "
+            f"query={request.query[:50]}, error={str(e)}",
+            exc_info=True
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to search documents"
         )
