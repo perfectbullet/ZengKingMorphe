@@ -559,7 +559,7 @@ async def generate_openai_stream_v1(
             if final_state:
                 log_state = {
                     k: v for k, v in final_state.items()
-                    if k not in ["retrieved_docs", "web_search_results", "context"]
+                    if k not in []
                 }
             logger.info(f'final_state: {log_state}')
 

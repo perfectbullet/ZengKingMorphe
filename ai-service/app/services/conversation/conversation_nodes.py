@@ -88,7 +88,7 @@ class ConversationNodes:
 
             if not employee:
                 error_msg = f"Employee config not found: employee_id={state['employee_id']}"
-                logger.error(error_msg)
+                logger.error(f"{error_msg}", exc_info=False)
                 raise ValueError(error_msg)
 
             employee.pop("_id", None)
@@ -229,7 +229,7 @@ class ConversationNodes:
             # 4. 默认为一般查询
             state["is_realtime_query"] = False
             state["intent"] = "general_query"
-            logger.debug("Query classified: general")
+            logger.debug("Query classified as general")
         return state
 
     @staticmethod
@@ -328,9 +328,7 @@ class ConversationNodes:
                     state["complexity_reason"] = reason
 
                     logger.info(
-                        f"Complexity evaluated: {score}/10 - {reason}",
-                        score=score,
-                        reason=reason
+                        f"Complexity evaluated: {score}/10 - {reason}"
                     )
 
                 except json.JSONDecodeError:
@@ -369,7 +367,7 @@ class ConversationNodes:
             # Check if query rewriting is enabled
             rewrite_enabled = getattr(settings, 'query_rewrite_enabled', False)
             if not rewrite_enabled:
-                logger.debug("Query rewriting disabled")
+                logger.debug("Query rewriting is disabled")
                 return state
 
             query = state["user_query"].strip()
@@ -414,14 +412,11 @@ class ConversationNodes:
                     state["rewritten_query"] = rewritten
                     state["query_rewritten"] = True
                     logger.info(
-                        "Query rewritten successfully",
-                        original=query[:50],
-                        rewritten=rewritten[:50]
+                        f"Query rewritten successfully: original={query[:50]}, rewritten={rewritten[:50]}"
                     )
                 else:
                     logger.warning(
-                        "Query rewrite result invalid, using original",
-                        rewritten=rewritten[:50] if rewritten else "empty"
+                        f"Query rewrite result invalid, using original: rewritten={rewritten[:50] if rewritten else 'empty'}"
                     )
 
             except Exception as e:
@@ -468,9 +463,7 @@ class ConversationNodes:
                 faq_top_k = digital_config.get("faq_top_k", 3)
 
                 logger.info(
-                    "FAQ matching started",
-                    employee_id=employee_id,
-                    top_k=faq_top_k
+                    f"FAQ matching started: employee_id={employee_id}, top_k={faq_top_k}"
                 )
 
                 # Perform FAQ search (using SDK)
@@ -493,9 +486,7 @@ class ConversationNodes:
                 # Quality check: BGE score >= 1.0 indicates meaningful relevance
                 if score < 1.0:
                     logger.warning(
-                        "FAQ score too low, skipping",
-                        faq_id=faq_id,
-                        score=score
+                        f"FAQ score too low, skipping: faq_id={faq_id}, score={score}"
                     )
                     state["faq_matched"] = None
                     return state
@@ -531,9 +522,7 @@ class ConversationNodes:
                 }
 
                 logger.info(
-                    "FAQ answer selected",
-                    faq_id=faq_id,
-                    score=score
+                    f"FAQ answer selected: faq_id={faq_id}, score={score}"
                 )
 
             except Exception as e:
@@ -572,9 +561,7 @@ class ConversationNodes:
                             "matched_keyword": keyword
                         }
                         logger.info(
-                            "Greeting detected",
-                            category=category,
-                            keyword=keyword
+                            f"Greeting detected: category={category}, keyword={keyword}"
                         )
                         return state
 
@@ -610,15 +597,13 @@ class ConversationNodes:
         """
         async with time_node("knowledge_retrieval", state):
             try:
-                kb_ids = state["employee_config"].get("kb_ids", [])
+                kb_ids = state["employee_config"].get("knowledge", {}).get("kb_ids", [])
                 search_query = state.get("rewritten_query", state["user_query"])
 
                 logger.info(
-                    "Knowledge retrieval started",
-                    employee_id=state["employee_id"],
-                    kb_count=len(kb_ids),
-                    kb_ids=kb_ids,
-                    query_rewritten=state.get("query_rewritten", False)
+                    f"Knowledge retrieval started: employee_id={state['employee_id']}, "
+                    f"kb_count={len(kb_ids)}, kb_ids={kb_ids}, "
+                    f"query_rewritten={state.get('query_rewritten', False)}"
                 )
 
                 all_results = []
@@ -626,8 +611,7 @@ class ConversationNodes:
                 # Case 1: Math textbook knowledge base present
                 if MATH_KB_ID in kb_ids:
                     logger.info(
-                        "Math textbook knowledge base detected, using specialized retrieval",
-                        kb_id=MATH_KB_ID
+                        f"Math textbook knowledge base detected, using specialized retrieval: kb_id={MATH_KB_ID}"
                     )
 
                     # Math textbook specialized retrieval (returns context_text/answers)
@@ -640,8 +624,7 @@ class ConversationNodes:
                     )
                     all_results.extend(math_results)
                     logger.info(
-                        "Math textbook retrieval completed",
-                        math_results_count=len(math_results)
+                        f"Math textbook retrieval completed: math_results_count={len(math_results)}"
                     )
 
                     # Other knowledge bases use standard retrieval (exclude math kb)
@@ -656,9 +639,8 @@ class ConversationNodes:
                         )
                         all_results.extend(standard_results)
                         logger.info(
-                            "Standard retrieval completed for other KBs",
-                            other_kb_count=len(standard_results),
-                            other_kb_ids=other_kb_ids
+                            f"Standard retrieval completed for other KBs: other_kb_count={len(standard_results)}, "
+                            f"other_kb_ids={other_kb_ids}"
                         )
 
                 # Case 2: No math textbook knowledge base
@@ -681,15 +663,13 @@ class ConversationNodes:
                 ]))
                 if all_results:
                     logger.info(
-                        "Knowledge retrieval completed",
-                        total_results_1=all_results[:1],
-                        kb_used=state["kb_used"]
+                        f"Knowledge retrieval completed: total_results_1={len(all_results[:1])}, "
+                        f"kb_used={state['kb_used']}"
                     )
                 else:
                     logger.info(
-                        "Knowledge retrieval completed, all result is empty, ",
-                        total_results=all_results,
-                        kb_used=state["kb_used"]
+                        f"Knowledge retrieval completed, all result is empty: "
+                        f"total_results={len(all_results)}, kb_used={state['kb_used']}"
                     )
             except Exception as e:
                 logger.error(f"Knowledge retrieval failed: {str(e)}", exc_info=True)
@@ -732,10 +712,8 @@ class ConversationNodes:
                     state["relevance_score"] = max(0.0, min(1.0, float(top_doc.get("score", 0.0))))
 
                 logger.info(
-                    "Document grading completed",
-                    relevance_score=state["relevance_score"],
-                    rerank_score=top_doc.get("rerank_score"),
-                    docs_count=len(docs)
+                    f"Document grading completed: relevance_score={state['relevance_score']}, "
+                    f"rerank_score={top_doc.get('rerank_score')}, docs_count={len(docs)}"
                 )
 
                 # Direct match: 仅对数学教材知识库，如果 content_type 是 'qa' 或 'teaching_script'
@@ -745,13 +723,10 @@ class ConversationNodes:
                 is_math_kb = MATH_KB_ID in kb_used
 
                 logger.info(
-                    "Direct match check",
-                    content_type=content_type,
-                    relevance_score=state["relevance_score"],
-                    is_math_kb=is_math_kb,
-                    kb_used=kb_used,
-                    has_context_text="context_text" in top_doc,
-                    context_text_len=len(top_doc.get("context_text", "")),
+                    f"Direct match check: content_type={content_type}, "
+                    f"relevance_score={state['relevance_score']}, is_math_kb={is_math_kb}, "
+                    f"kb_used={kb_used}, has_context_text={'context_text' in top_doc}, "
+                    f"context_text_len={len(top_doc.get('context_text', ''))}"
                 )
                 # 只对数学教材知识库触发 direct match
                 if state["relevance_score"] > 0.8 and content_type in ("qa", "teaching_script") and is_math_kb:
@@ -769,12 +744,10 @@ class ConversationNodes:
                             "teaching_script_tts": top_doc.get("teaching_script_tts"),  # 添加语音播报字段
                         }
                         logger.info(
-                            f"{content_type.upper()} direct match triggered - skipping LLM generation",
-                            content_type=content_type,
-                            rerank_score=float(rerank_score) if rerank_score else 0.0,
-                            doc_id=top_doc.get("doc_id"),
-                            chunk_id=top_doc.get("chunk_id"),
-                            answer_length=len(direct_content)
+                            f"{content_type.upper()} direct match triggered - skipping LLM generation: "
+                            f"content_type={content_type}, rerank_score={float(rerank_score) if rerank_score else 0.0}, "
+                            f"doc_id={top_doc.get('doc_id')}, chunk_id={top_doc.get('chunk_id')}, "
+                            f"answer_length={len(direct_content)}"
                         )
 
         return state
@@ -801,7 +774,7 @@ class ConversationNodes:
 
             compression_enabled = getattr(settings, 'context_compression_enabled', False)
             if not compression_enabled:
-                logger.debug("Context compression disabled")
+                logger.debug("Context compression is disabled")
                 return state
 
             # Calculate total context length
@@ -849,10 +822,9 @@ class ConversationNodes:
                 if 100 < len(compressed) < total_length:
                     state["compressed_context"] = compressed
                     logger.info(
-                        "Context compressed successfully",
-                        original_length=total_length,
-                        compressed_length=len(compressed),
-                        compression_ratio=f"{(1 - len(compressed) / total_length) * 100:.1f}%"
+                        f"Context compressed successfully: original_length={total_length}, "
+                        f"compressed_length={len(compressed)}, "
+                        f"compression_ratio={(1 - len(compressed) / total_length) * 100:.1f}%"
                     )
 
             except Exception as e:
@@ -886,14 +858,14 @@ class ConversationNodes:
             try:
                 # Check if web search is enabled
                 if not settings.web_search_enabled:
-                    logger.info("Web search disabled in settings")
+                    logger.info("Web search is disabled in settings")
                     state["web_search_results"] = []
                     state["web_search_used"] = False
                     state["web_search_error"] = None
                     return state
 
                 if not settings.tavily_api_key:
-                    logger.warning("Tavily API key not configured")
+                    logger.warning("Tavily API key is not configured")
                     state["web_search_results"] = []
                     state["web_search_used"] = False
                     state["web_search_error"] = "Tavily API key not configured"
@@ -911,9 +883,8 @@ class ConversationNodes:
 
                 query = state["user_query"]
                 logger.info(
-                    "Web search started",
-                    query=query[:100],
-                    is_realtime=state.get('is_realtime_query')
+                    f"Web search started: query={query[:100]}, "
+                    f"is_realtime={state.get('is_realtime_query')}"
                 )
 
                 # Perform search
@@ -932,9 +903,8 @@ class ConversationNodes:
                         if "401" in results_str or "Unauthorized" in results_str or "authentication" in results_str.lower():
                             api_error_message = "当前无法进行网络检索（API Key 可能过期或无效）"
                             logger.warning(
-                                "Web search API error",
-                                error_type=type(search_results).__name__,
-                                error=results_str[:200]
+                                f"Web search API error: error_type={type(search_results).__name__}, "
+                                f"error={results_str[:200]}"
                             )
                     else:
                         # 是列表，检查每个元素
@@ -944,8 +914,7 @@ class ConversationNodes:
                                 if "401" in result_str or "Unauthorized" in result_str or "authentication" in result_str.lower():
                                     api_error_message = "当前无法进行网络检索（API Key 可能过期或无效）"
                                     logger.warning(
-                                        "Web search API error in result",
-                                        error=result_str[:200]
+                                        f"Web search API error in result: error={result_str[:200]}"
                                     )
                                     break
 
@@ -954,9 +923,8 @@ class ConversationNodes:
                             for i, result in enumerate(search_results[:settings.web_search_max_results], 1):
                                 if not isinstance(result, dict):
                                     logger.warning(
-                                        "Invalid search result type",
-                                        result_type=type(result).__name__,
-                                        result=str(result)[:200]
+                                        f"Invalid search result type: result_type={type(result).__name__}, "
+                                        f"result={str(result)[:200]}"
                                     )
                                     continue
 
@@ -973,9 +941,8 @@ class ConversationNodes:
                 state["web_search_error"] = api_error_message
 
                 logger.info(
-                    "Web search completed",
-                    results_count=len(formatted_results),
-                    has_error=api_error_message is not None
+                    f"Web search completed: results_count={len(formatted_results)}, "
+                    f"has_error={api_error_message is not None}"
                 )
 
             except Exception as e:
@@ -1009,8 +976,7 @@ class ConversationNodes:
             # If final_answer is already set (direct match), skip placeholder
             if state.get("final_answer"):
                 logger.info(
-                    "Direct match answer already set, skipping LLM generation",
-                    answer_length=len(state["final_answer"])
+                    f"Direct match answer already set, skipping LLM generation: answer_length={len(state['final_answer'])}"
                 )
                 return state
 
@@ -1035,11 +1001,10 @@ class ConversationNodes:
             state["final_answer"] = ""  # Placeholder for streaming
 
             logger.info(
-                "Ready for answer generation",
-                confidence=confidence,
-                intent=state.get("intent"),
-                web_search_used=state.get('web_search_used'),
-                kb_docs_count=len(state.get('retrieved_docs', []))
+                f"Ready for answer generation: confidence={confidence}, "
+                f"intent={state.get('intent')}, web_search_used={state.get('web_search_used')}, "
+                f"kb_docs_count={len(state.get('retrieved_docs', []))}"
+                f"kb_docs={state.get('retrieved_docs', [])}"
             )
 
         return state
