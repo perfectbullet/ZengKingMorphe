@@ -15,7 +15,6 @@ Removed nodes: intent_recognition, knowledge_retrieval, grade_documents,
                compress_context, match_faq, rewrite_query
 """
 import hashlib
-import json
 import time
 from datetime import datetime
 
@@ -30,6 +29,7 @@ from app.services.conversation.conversation_helpers import (
     time_node,
     heuristic_complexity
 )
+from app.services.conversation.conversation_helpers import build_generation_messages
 
 logger = get_logger(__name__)
 
@@ -287,53 +287,25 @@ class ConversationNodes:
 
             # 问候语检测已在 classify_query_type 节点中处理，此处无需重复
 
-            try:
-                # 使用本地 Ollama 模型评估复杂度（快速调用）
-                complexity_prompt = f"""请评估以下用户查询的复杂度（0-10分）。
+            # 快速启发式评估（跳过 LLM 调用以提高响应速度）
+            # LLM 评估虽然更准确，但会增加 15+ 秒延迟，影响用户体验
+            score = heuristic_complexity(query)
 
-用户查询: {query}
+            # 根据查询特征优化 reason 分类
+            reason = "heuristic"
+            if any(kw in query for kw in ["集合", "函数", "定理", "公式", "定义", "什么是"]):
+                reason = "数学概念"
+            elif any(kw in query for kw in ["证明", "推导", "为什么"]):
+                reason = "数学推理"
+            elif any(kw in query for kw in ["分析", "比较", "总结"]):
+                reason = "综合分析"
 
-评分标准：
-- 0-3分（简单）：直接的事实问答、天气/价格查询、问候语、简单常识
-- 4-6分（中等）：概念解释、定义问题、需要一定推理的知识问答
-- 7-10分（复杂）：需要多步推理、模糊问题、需要深度分析或综合多个知识点
+            state["complexity_score"] = score
+            state["complexity_reason"] = reason
 
-特别注意：
-- 数学概念定义类问题（如"什么是xxx定理"、"xxx公式是什么"）通常评 4-5 分, 在 "reason"的值为 `数学概念`
-- 数学证明推导类问题（如"证明xxx"、"为什么xxx成立"）评 6-8 分， 在 "reason"的值为 `数学概念`
-- 数学相关的问题，在 "reason"的值为 `数学相关`
-
-请以JSON格式返回：
-{{"score": 分数0-10, "reason": "简短原因说明"}}
-
-只返回JSON，不要有其他内容："""
-
-                response = await self.workflow.local_llm.ainvoke(complexity_prompt)
-                response_text = response.content.strip()
-
-                try:
-                    result = json.loads(response_text)
-                    score = float(result.get("score", 3.0))
-                    reason = result.get("reason", "unknown")
-
-                    # 确保分数在合理范围内
-                    score = max(0.0, min(10.0, score))
-                    state["complexity_score"] = score
-                    state["complexity_reason"] = reason
-
-                    logger.info(
-                        f"Complexity evaluated: {score}/10 - {reason}"
-                    )
-
-                except json.JSONDecodeError:
-                    # JSON 解析失败，使用启发式规则
-                    state["complexity_score"] = heuristic_complexity(query)
-                    state["complexity_reason"] = "heuristic_fallback"
-
-            except Exception as e:
-                logger.warning(f"LLM complexity evaluation failed: {e}, using heuristic")
-                state["complexity_score"] = heuristic_complexity(query)
-                state["complexity_reason"] = "heuristic_fallback"
+            logger.info(
+                f"Complexity evaluated (heuristic): {score}/10 - {reason}"
+            )
 
         return state
 
@@ -531,30 +503,25 @@ class ConversationNodes:
             # 根据意图和数据源配置流式输出
             if intent == "greeting" or web_search_used:
                 # 使用 LangChain LLM（原有逻辑）
-                from app.services.conversation.conversation_helpers import build_generation_messages
-
                 messages = build_generation_messages(state)
                 streaming_llm, model_name = self.workflow.get_streaming_llm(state)
-
                 state["streaming_llm"] = streaming_llm
                 state["streaming_messages"] = messages
                 state["streaming_type"] = "langchain_llm"
-
                 logger.info(
                     f"Streaming configured: type=langchain_llm, intent={intent}, "
                     f"web_search_used={web_search_used}, model={model_name}"
                 )
-
-            else:  # normal - 需要召回文档
-                # 使用 RAGAnything 流式
-                state["streaming_llm"] = None  # 标记使用 RAGAnything
+            else:  # normal - 需要召回文档，使用 RAGAnything
+                state["streaming_llm"] = None
                 state["streaming_messages"] = None
                 state["streaming_type"] = "raganything_stream"
                 state["raganything_query"] = state["user_query"]
                 state["raganything_mode"] = "hybrid"
 
                 logger.info(
-                    f"Streaming configured: type=raganything_stream, intent={intent}, mode=hybrid"
+                    f"Streaming configured: type=raganything_stream, intent={intent}, "
+                    f"mode=hybrid, query={state['user_query'][:50]}..."
                 )
 
             state["confidence"] = confidence

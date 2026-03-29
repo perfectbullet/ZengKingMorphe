@@ -325,6 +325,12 @@ def _build_initial_state(request: OpenAIChatRequest, session_id: str, user_query
         "llm_tools": [tool.model_dump() for tool in request.tools] if request.tools else None,
         "channel_name": request.channel_name,
         "team_id": request.team_id,
+        # Streaming output configuration
+        "streaming_type": None,
+        "streaming_llm": None,
+        "streaming_messages": None,
+        "raganything_query": None,
+        "raganything_mode": None,
     }
 
 def _build_finish_chunk_data(
@@ -511,6 +517,9 @@ async def generate_openai_stream_v1(
             node_name = list(event.keys())[0] if event else None
             state_update = event.get(node_name, {}) if node_name else {}
 
+            # DEBUG: 打印事件结构
+            logger.debug(f"Event | node={node_name} | state_update_keys={list(state_update.keys())}")
+
             if state_update:
                 current_state.update(state_update)
 
@@ -518,6 +527,14 @@ async def generate_openai_stream_v1(
             if node_name == "generate_answer":
                 streaming_type = current_state.get("streaming_type")
                 revise_llm = await get_revise_llm()
+
+                # DEBUG: 打印当前状态中的关键字段
+                logger.debug(
+                    f"generate_answer state | streaming_type={streaming_type} | "
+                    f"has_streaming_llm={current_state.get('streaming_llm') is not None} | "
+                    f"intent={current_state.get('intent')} | "
+                    f"all_keys={list(current_state.keys())}"
+                )
 
                 logger.info(
                     f"Streaming configured | type={streaming_type} | "
@@ -528,44 +545,8 @@ async def generate_openai_stream_v1(
                 # 检查是否有预生成的答案（direct_match）
                 existing_answer = current_state.get("final_answer", "")
                 direct_match = current_state.get("direct_match")
-
-                if existing_answer and direct_match:
-                    existing_answer = normalize_latex_formulas(existing_answer)
-
-                    ttfb_ms = int((time.time() - initial_state["workflow_start_time"]) * 1000)
-                    final_state["ttfb_ms"] = ttfb_ms
-
-                    logger.info(
-                        "Revising pre-generated answer for voice output | "
-                        f"content_type={direct_match.get('content_type')} | "
-                        f"rerank_score={direct_match.get('rerank_score')} | "
-                        f"original_length={len(existing_answer)} | ttfb_ms={ttfb_ms}"
-                    )
-
-                    for char in existing_answer:
-                        segment = sentence_buffer.add(char)
-                        if segment:
-                            chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
-                                segment, revise_llm, chat_id, created, request.model,
-                                db, chunk_sequence, session_id, request.user_id,
-                                request.employee_id, final_state.get("conversation_id"),
-                                log_prefix="DirectMatch"
-                            )
-                            yield json.dumps(chunk_data)
-
-                    final_segment = await sentence_buffer.flush(is_final=True)
-                    if final_segment:
-                        chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
-                            final_segment.content, revise_llm, chat_id, created, request.model,
-                            db, chunk_sequence, session_id, request.user_id,
-                            request.employee_id, final_state.get("conversation_id"),
-                            log_prefix="DirectMatch FinalSegment"
-                        )
-                        yield json.dumps(chunk_data)
-
-                    # 不在这里 break，让 workflow 继续到 save_conversation
-                    continue
-
+                # 先不做预生产答案
+                
                 # 根据 streaming_type 选择不同的流式输出方式
                 if streaming_type == "raganything_stream":
                     # RAGAnything 流式输出
@@ -579,34 +560,47 @@ async def generate_openai_stream_v1(
                     first_token_received = False
                     full_answer = ""
 
-                    async for chunk in get_raganything_stream(query, mode=mode):
-                        if chunk["type"] == "chunk":
-                            content = chunk["content"]
+                    try:
+                        async for chunk in get_raganything_stream(query, mode=mode):
+                            if chunk["type"] == "chunk":
+                                content = chunk["content"]
 
-                            if not first_token_received:
-                                first_token_received = True
-                                ttfb_ms = int((time.time() - initial_state["workflow_start_time"]) * 1000)
-                                current_state["ttfb_ms"] = ttfb_ms
-                                logger.info(f"First RAGAnything token received | ttfb_ms={ttfb_ms}")
+                                # 跳过 None 内容
+                                if content is None:
+                                    continue
 
-                            full_answer += content
-                            segment = sentence_buffer.add(content)
+                                if not first_token_received:
+                                    first_token_received = True
+                                    ttfb_ms = int((time.time() - initial_state["workflow_start_time"]) * 1000)
+                                    current_state["ttfb_ms"] = ttfb_ms
+                                    logger.info(f"First RAGAnything token received | ttfb_ms={ttfb_ms}")
 
-                            if segment:
-                                chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
-                                    segment, revise_llm, chat_id, created, request.model,
-                                    db, chunk_sequence, session_id, request.user_id,
-                                    request.employee_id, current_state.get("conversation_id"),
-                                    log_prefix="RAGAnything"
-                                )
-                                yield json.dumps(chunk_data)
+                                full_answer += content
+                                segment = sentence_buffer.add(content)
 
-                        elif chunk["type"] == "sources_info":
-                            logger.info(f"RAGAnything sources info | {chunk['content']}")
-                        elif chunk["type"] == "sources":
-                            logger.info(f"RAGAnything sources received | entities={len(chunk['content'].get('entities', []))}")
-                        elif chunk["type"] == "error":
-                            logger.error(f"RAGAnything error | {chunk['content']}")
+                                if segment:
+                                    chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
+                                        segment, revise_llm, chat_id, created, request.model,
+                                        db, chunk_sequence, session_id, request.user_id,
+                                        request.employee_id, current_state.get("conversation_id"),
+                                        log_prefix="RAGAnything"
+                                    )
+                                    yield json.dumps(chunk_data)
+
+                            elif chunk["type"] == "sources_info":
+                                logger.info(f"RAGAnything sources info | {chunk['content']}")
+                            elif chunk["type"] == "sources":
+                                logger.info(f"RAGAnything sources received | entities={len(chunk['content'].get('entities', []))}")
+                            elif chunk["type"] == "error":
+                                logger.error(f"RAGAnything error | {chunk['content']}")
+
+                    except Exception as e:
+                        logger.error(f"RAGAnything streaming error | error={str(e)}", exc_info=True)
+                        # 如果 RAGAnything 失败，记录错误但继续处理
+                        full_answer = f"[RAGAnything 服务暂时不可用，错误：{str(e)}]"
+                        # 添加一个占位符响应
+                        chunk_data = _build_token_chunk_data(chat_id, created, request.model, full_answer)
+                        yield json.dumps(chunk_data)
 
                     # 刷新 buffer 中剩余内容
                     final_segment = await sentence_buffer.flush(is_final=True)

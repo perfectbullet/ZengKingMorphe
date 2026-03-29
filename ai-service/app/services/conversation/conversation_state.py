@@ -104,3 +104,9 @@ class ConversationState(TypedDict):
     # Additional context from client
     channel_name: Optional[str]
     team_id: Optional[str]
+    # Streaming output configuration for RAGAnything integration
+    streaming_type: Optional[str]  # "langchain_llm" or "raganything_stream"
+    streaming_llm: Optional[Any]  # LLM instance (for langchain_llm)
+    streaming_messages: Optional[List]  # Messages (for langchain_llm)
+    raganything_query: Optional[str]  # Query for RAGAnything
+    raganything_mode: Optional[str]  # RAGAnything mode (hybrid, local, global, naive)
