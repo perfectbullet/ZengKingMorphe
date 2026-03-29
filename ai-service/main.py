@@ -11,16 +11,15 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.core.config import settings
 from app.core.logging import setup_logging, get_logger
 from app.core.database import mongodb
-from app.core.chroma import chroma_db
 from app.core.elasticsearch import es_db
-from app.services.task_processor import task_processor
+# from app.services.task_processor import task_processor
 from app.services.ollama_keepalive import ollama_keep_alive
 from app.api.middleware.error_handler import (
     http_exception_handler,
     validation_exception_handler,
     general_exception_handler
 )
-from app.api.endpoints import chat, session, employee, conversation, mineru, thesaurus_sensitive, thesaurus_major, dataset_faq
+from app.api.endpoints import chat, session, employee, conversation, mineru, thesaurus_sensitive, thesaurus_major
 from app.api.endpoints import knowledge_base_kb, documents, metrics, websocket, websocket_view
 
 # Setup logging
@@ -53,11 +52,10 @@ async def lifespan(app: FastAPI):
     try:
         # Connect to databases
         await mongodb.connect()
-        chroma_db.connect()
         await es_db.connect()
         
         # Start task processor
-        await task_processor.start()
+        # await task_processor.start()
 
         # Start Ollama keep-alive service
         await ollama_keep_alive.start()
@@ -75,7 +73,7 @@ async def lifespan(app: FastAPI):
 
     try:
         # Stop task processor first (停止任务处理器)
-        await task_processor.stop()
+        # await task_processor.stop()
         logger.debug("Task processor stopped")
 
         # Stop Ollama keep-alive service (停止 Ollama 保活服务)
@@ -85,9 +83,6 @@ async def lifespan(app: FastAPI):
         # Disconnect databases in reverse order (按相反顺序断开数据库连接)
         await mongodb.disconnect()
         logger.debug("MongoDB disconnected")
-
-        chroma_db.disconnect()
-        logger.debug("ChromaDB disconnected")
 
         await es_db.disconnect()
         logger.debug("ElasticSearch disconnected")
@@ -135,7 +130,7 @@ app.include_router(mineru.router, prefix="/api/mineru", tags=["MinerU"])
 app.include_router(metrics.router, prefix="/api/metrics", tags=["Metrics"])
 app.include_router(websocket.router, prefix="/api/chat", tags=["WebSocket 数字员工对话"])
 app.include_router(websocket_view.router, prefix="/api/chat", tags=["WebSocket 数字员工对话v2"])
-app.include_router(dataset_faq.router, prefix="/api/dataset_faq", tags=["dataset_faq FAQ问答库"])
+# app.include_router(dataset_faq.router, prefix="/api/dataset_faq", tags=["dataset_faq FAQ问答库"])
 app.include_router(thesaurus_major.router, prefix="/api/thesaurus_major", tags=["thesaurus_major 专业词库"])
 app.include_router(thesaurus_sensitive.router, prefix="/api/thesaurus_sensitive", tags=["thesaurus_sensitive 敏感词库"])
 

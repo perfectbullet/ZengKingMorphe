@@ -14,7 +14,7 @@ from typing import Dict, Optional, List
 from app.core.logging import get_logger
 from app.core.database import get_database
 from app.models.database import DocumentModel, DocumentTaskModel
-from app.services.dataset_faq_service import faq_processor
+# from app.services.dataset_faq_service import faq_processor
 from app.services.thesaurus_major_service import thesaurus_major_processor
 from app.services.thesaurus_sensitive_service import thesaurus_sensitive_processor
 from app.services.document_service import generate_doc_id
@@ -676,10 +676,10 @@ class DocumentTaskProcessor:
 
             logger.info(f"_execute_faq_vectorization task task_id={task_id}, task_data={task_data}")
 
-            faq_id = await faq_processor.faq_vectorization(
-                    task_id=task_id,
-                    faq_id=task_data["faq_id"]
-                )
+            # faq_id = await faq_processor.faq_vectorization(
+            #         task_id=task_id,
+            #         faq_id=task_data["faq_id"]
+            #     )
 
             # Check if task was cancelled
             if self.active_tasks.get(task_id, False):

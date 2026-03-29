@@ -23,7 +23,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.core.database import mongodb
-from app.core.chroma import chroma_db
+# from app.core.chroma import chroma_db
 from app.core.elasticsearch import es_db
 from app.core.config import settings
 from app.core.logging import get_logger

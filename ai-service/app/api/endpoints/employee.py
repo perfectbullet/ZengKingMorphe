@@ -10,10 +10,10 @@ from app.models.schemas import CreateEmployeeRequest, UpdateEmployeeRequest, Res
 from app.api.middleware.auth import get_api_key
 from app.core.database import get_database
 from app.core.logging import get_logger
-from app.services.dataset_faq_service import faq_processor
-from app.services.task_processor import task_processor
-from app.services.thesaurus_major_service import thesaurus_major_processor
-from app.services.thesaurus_sensitive_service import thesaurus_sensitive_processor
+# from app.services.dataset_faq_service import faq_processor
+# from app.services.task_processor import task_processor
+# from app.services.thesaurus_major_service import thesaurus_major_processor
+# from app.services.thesaurus_sensitive_service import thesaurus_sensitive_processor
 
 logger = get_logger(__name__)
 
@@ -338,28 +338,28 @@ async def delete_employee(
                                         f"delete_employee not found: employee_id={employee_id}")
 
         # 删除数字员工关联的数据：敏感词库
-        if employee["safe_rule"] and employee["safe_rule"]["thesaurus_sensitive"]:
-            for thesaurus_id in employee["safe_rule"]["thesaurus_sensitive"]:
-                # 刪除ChromaDB记录和ElasticSearch记录
-                await thesaurus_sensitive_processor.delete_thesaurus_vectorization_data(thesaurus_id)
+        # if employee["safe_rule"] and employee["safe_rule"]["thesaurus_sensitive"]:
+        #     for thesaurus_id in employee["safe_rule"]["thesaurus_sensitive"]:
+        #         # 刪除ChromaDB记录和ElasticSearch记录
+        #         await thesaurus_sensitive_processor.delete_thesaurus_vectorization_data(thesaurus_id)
 
-                # 刪除敏感词库任务记录
-                await db.document_tasks.delete_many({"kb_id": f"sensitive_{thesaurus_id}"})
+        #         # 刪除敏感词库任务记录
+        #         await db.document_tasks.delete_many({"kb_id": f"sensitive_{thesaurus_id}"})
 
-                # 删除敏感词库记录
-                await db.thesaurus_sensitive.delete_many({"thesaurus_id": thesaurus_id})
+        #         # 删除敏感词库记录
+        #         await db.thesaurus_sensitive.delete_many({"thesaurus_id": thesaurus_id})
 
         # 删除数字员工关联的数据：专业词库
-        if employee["thesaurus_major"]:
-            for thesaurus_id in employee["thesaurus_major"]:
-                # 刪除ChromaDB记录和ElasticSearch记录
-                await thesaurus_major_processor.delete_thesaurus_vectorization_data(thesaurus_id)
+        # if employee["thesaurus_major"]:
+        #     for thesaurus_id in employee["thesaurus_major"]:
+        #         # 刪除ChromaDB记录和ElasticSearch记录
+        #         await thesaurus_major_processor.delete_thesaurus_vectorization_data(thesaurus_id)
 
-                # 刪除专业词库任务记录
-                await db.document_tasks.delete_many({"kb_id": f"major_{thesaurus_id}"})
+        #         # 刪除专业词库任务记录
+        #         await db.document_tasks.delete_many({"kb_id": f"major_{thesaurus_id}"})
 
-                # 删除专业词库记录
-                await db.thesaurus_major.delete_many({"thesaurus_id": thesaurus_id})
+        #         # 删除专业词库记录
+        #         await db.thesaurus_major.delete_many({"thesaurus_id": thesaurus_id})
 
         result = await db.digital_employee_configs.delete_one({"employee_id": employee_id})
 
@@ -670,9 +670,9 @@ async def _execute_add_faq(employee_id: str, faq: DatasetFaqRequest):
                 vector_id=update_faq_id,  # Use faq_id as vector_id
                 es_indexed=False,  # Will be set to True after ES indexing
             ).model_dump()
-            await db.faqs.insert_one(insert_data)
+            # await db.faqs.insert_one(insert_data)
 
-            await task_processor.submit_faq_vectorization_task(faq_id=update_faq_id, kb_id=f"faq_{faq.faq_id}")
+            # await task_processor.submit_faq_vectorization_task(faq_id=update_faq_id, kb_id=f"faq_{faq.faq_id}")
         except Exception as e:
             logger.error(f"_execute_add_faq failed: faq_id={update_faq_id} error={str(e)}", exc_info=True)
 
@@ -705,8 +705,8 @@ async def _execute_add_sensitive(employee_id: str, thesaurus: ThesaurusRequest):
                 ).model_dump()
                 await db.thesaurus_sensitive.insert_one(update_data)
 
-                await task_processor.submit_thesaurus_sensitive_vectorization_task(thesaurus_id=update_thesaurus_id,
-                                                                                   kb_id=f"sensitive_{thesaurus_id}")
+                # await task_processor.submit_thesaurus_sensitive_vectorization_task(thesaurus_id=update_thesaurus_id,
+                #                                                                    kb_id=f"sensitive_{thesaurus_id}")
         except Exception as e:
             logger.error(f"_execute_add_sensitive failed: thesaurus_id={thesaurus_id} error={str(e)}", exc_info=True)
 
@@ -740,9 +740,9 @@ async def _execute_add_major(employee_id: str, thesaurus: ThesaurusRequest):
                     vector_id=update_thesaurus_id,  # Will be set after vectorization
                     es_indexed=False,  # Will be set after ElasticSearch indexing
                 ).model_dump()
-                await db.thesaurus_major.insert_one(update_data)
+                # await db.thesaurus_major.insert_one(update_data)
 
-                await task_processor.submit_thesaurus_major_vectorization_task(thesaurus_id=update_thesaurus_id,
-                                                                               kb_id=f"major_{thesaurus_id}")
+                # await task_processor.submit_thesaurus_major_vectorization_task(thesaurus_id=update_thesaurus_id,
+                #                                                                kb_id=f"major_{thesaurus_id}")
         except Exception as e:
             logger.error(f"_execute_add_major failed: thesaurus_id={thesaurus_id} error={str(e)}", exc_info=True)

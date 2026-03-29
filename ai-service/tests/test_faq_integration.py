@@ -13,7 +13,7 @@ sys.path.insert(0, str(project_root))
 
 from app.core.database import mongodb, get_database
 from app.core.elasticsearch import es_db
-from app.core.chroma import chroma_db
+# from app.core.chroma import chroma_db
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)

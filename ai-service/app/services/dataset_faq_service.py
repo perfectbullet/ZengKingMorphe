@@ -8,7 +8,7 @@ from typing import Any, List
 from app.core.logging import get_logger
 from app.core.database import get_database
 from app.utils.embeddings import get_embedding
-from app.core.chroma import chroma_db
+# from app.core.chroma import chroma_db
 from app.core.elasticsearch import es_db
 
 logger = get_logger(__name__)

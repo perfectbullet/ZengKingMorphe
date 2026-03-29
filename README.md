@@ -80,6 +80,8 @@ docker-compose logs -f ai-service
 # 或激活虚拟环境后安装
 source .venv/bin/activate
 pip install -r ai-service/requirements.txt
+# 安装 RAG-Anything 
+(morphe) zj@zj-jg:~/RAG-Anything$ pip install -e .
 ```
 
 ### 2. 启动数据库服务
@@ -94,7 +96,7 @@ docker-compose up -d mongodb elasticsearch chroma
 ```bash
 cd ai-service
 # 使用项目 Python 解释器
-/home/zj/ZengKingMorphe/.venv/bin/python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000
+/home/zj/miniconda3/envs/morphe/bin/python -m uvicorn main:app --reload --host 0.0.0.0 --port 8100
 
 # 或激活虚拟环境后运行
 source ../.venv/bin/activate

@@ -10,12 +10,6 @@ graph TD;
 	input_validation(input_validation)
 	classify_query_type(classify_query_type)
 	evaluate_complexity(evaluate_complexity)
-	rewrite_query(rewrite_query)
-	match_faq(match_faq)
-	intent_recognition(intent_recognition)
-	knowledge_retrieval(knowledge_retrieval)
-	grade_documents(grade_documents)
-	compress_context(compress_context)
 	web_search(web_search)
 	generate_answer(generate_answer)
 	save_conversation(save_conversation)
@@ -24,20 +18,11 @@ graph TD;
 	classify_query_type -. &nbsp;normal&nbsp; .-> evaluate_complexity;
 	classify_query_type -. &nbsp;greeting&nbsp; .-> generate_answer;
 	classify_query_type -. &nbsp;realtime&nbsp; .-> web_search;
-	compress_context -.-> generate_answer;
-	compress_context -.-> web_search;
-	evaluate_complexity --> rewrite_query;
+	evaluate_complexity --> generate_answer;
 	generate_answer --> save_conversation;
-	grade_documents -.-> compress_context;
-	grade_documents -.-> save_conversation;
 	input_validation --> classify_query_type;
-	intent_recognition --> knowledge_retrieval;
-	knowledge_retrieval --> grade_documents;
 	load_employee_config --> load_session_context;
 	load_session_context --> input_validation;
-	match_faq -.-> generate_answer;
-	match_faq -.-> intent_recognition;
-	rewrite_query --> match_faq;
 	web_search --> generate_answer;
 	save_conversation --> __end__;
 	classDef default fill:#f2f0ff,line-height:1.2

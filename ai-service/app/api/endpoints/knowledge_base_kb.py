@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 
 from app.api.middleware.auth import get_api_key
-from app.core.chroma import chroma_db
+# from app.core.chroma import chroma_db
 from app.core.elasticsearch import es_db
 from app.core.logging import get_logger
 from app.core.database import get_database
@@ -22,7 +22,7 @@ from app.models.schemas import (
     SearchResultItem,
     ResponseResult,
 )
-from app.services.rag_service import rag_retrieval
+# from app.services.rag_service import rag_retrieval
 
 logger = get_logger(__name__)
 
