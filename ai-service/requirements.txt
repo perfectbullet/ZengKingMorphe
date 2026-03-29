@@ -16,8 +16,16 @@ langgraph==1.0.4
 openai==2.8.1
 
 # Vector database and search
-chromadb==0.6.3  # Upgraded from 0.5.23 for better stability and performance
 elasticsearch==8.11.1
+
+# RAGAnything and LightRAG (替代 llama-rag-sdk + ChromaDB)
+raganything
+
+# Milvus 向量数据库
+pymilvus
+
+# Neo4j 图数据库
+neo4j
 
 # Database
 pymongo==4.6.1

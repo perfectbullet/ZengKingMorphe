@@ -6,20 +6,16 @@ This module contains all node functions that process the conversation state:
 - Input validation nodes
 - Query classification nodes
 - Complexity evaluation nodes
-- Query rewriting nodes
-- FAQ matching nodes
-- Intent recognition nodes
-- Knowledge retrieval nodes
-- Document grading/reranking nodes
-- Context compression nodes
 - Web search nodes
 - Answer generation nodes
-- Answer verification nodes
 - Conversation saving nodes
+
+Note: Simplified workflow using RAGAnything for RAG retrieval.
+Removed nodes: intent_recognition, knowledge_retrieval, grade_documents,
+               compress_context, match_faq, rewrite_query
 """
 import hashlib
 import json
-import random
 import time
 from datetime import datetime
 
@@ -31,11 +27,9 @@ from app.core.logging import get_logger
 from app.models.database import ConversationModel, SessionModel
 from app.services.conversation.conversation_state import ConversationState, GREETING_KEYWORDS
 from app.services.conversation.conversation_helpers import (
-    time_node, select_llm,
+    time_node,
     heuristic_complexity
 )
-from app.services.rag_service import rag_retrieval
-from app.services.math_textbook_retrieval import math_textbook_retrieval, MATH_KB_ID
 
 logger = get_logger(__name__)
 
@@ -343,494 +337,35 @@ class ConversationNodes:
 
         return state
 
-    async def rewrite_query(self, state: ConversationState) -> ConversationState:
-        """
-        Query Rewriting - Optimize short queries for better retrieval.
-
-        Strategy:
-        - Only rewrite queries shorter than 20 characters
-        - Expand with relevant keywords while preserving original intent
-        - Skip for greetings and FAQ-ready queries
-
-        Configuration: QUERY_REWRITE_ENABLED (default: False)
-
-        Args:
-            state: Current conversation state
-
-        Returns:
-            Updated state with rewritten_query populated
-        """
-        async with time_node("rewrite_query", state):
-            state["query_rewritten"] = False
-            state["rewritten_query"] = state["user_query"]
-
-            # Check if query rewriting is enabled
-            rewrite_enabled = getattr(settings, 'query_rewrite_enabled', False)
-            if not rewrite_enabled:
-                logger.debug("Query rewriting is disabled")
-                return state
-
-            query = state["user_query"].strip()
-
-            # Only rewrite short queries
-            if len(query) >= 20:
-                logger.debug(f"Query too long for rewriting: {len(query)} chars")
-                return state
-
-            # Skip greetings
-            query_lower = query.lower()
-            for keywords in GREETING_KEYWORDS.values():
-                if any(kw in query_lower for kw in keywords):
-                    logger.debug("Greeting detected, skipping query rewrite")
-                    return state
-
-            try:
-                rewrite_prompt = f"""你是一个查询优化助手。请将用户查询重写为更具体的搜索语句,用于知识库检索。
-
-原查询: {query}
-
-要求:
-1. 保持原意不变
-2. 增加相关关键词和同义词
-3. 使查询更具体、更完整
-4. 只返回重写后的查询,不要解释
-5. 长度控制在50字以内
-
-重写后的查询:"""
-
-                # Get appropriate LLM for current state (hybrid routing)
-                llm, model_name = select_llm(
-                    state,
-                    self.workflow.local_llm,
-                    self.workflow.remote_llm
-                )
-                response = await llm.ainvoke(rewrite_prompt)
-                rewritten = response.content.strip()
-
-                # Validate rewrite result
-                if rewritten and len(rewritten) > len(query) and len(rewritten) < 100:
-                    state["rewritten_query"] = rewritten
-                    state["query_rewritten"] = True
-                    logger.info(
-                        f"Query rewritten successfully: original={query[:50]}, rewritten={rewritten[:50]}"
-                    )
-                else:
-                    logger.warning(
-                        f"Query rewrite result invalid, using original: rewritten={rewritten[:50] if rewritten else 'empty'}"
-                    )
-
-            except Exception as e:
-                logger.error(f"Query rewriting failed: {str(e)}", exc_info=True)
-                state["rewritten_query"] = state["user_query"]
-
-        return state
+    # -------------------------------------------------------------------------
+    # Workflow Nodes - Query Rewriting - 已删除，由 RAGAnything 处理
+    # -------------------------------------------------------------------------
+    # Note: rewrite_query 节点已删除，查询重写功能由 RAGAnything 内部处理
 
     # -------------------------------------------------------------------------
-    # Workflow Nodes - FAQ Matching (Fast Path)
+    # Workflow Nodes - FAQ Matching (Fast Path) - 已删除，由 RAGAnything 处理
     # -------------------------------------------------------------------------
-    async def match_faq(self, state: ConversationState) -> ConversationState:
-        """
-        FAQ Fast-Path Matching - Direct answer for common questions.
-
-        Process:
-        1. SDK FAQ search (vector + built-in Reranker)
-        2. Quality check: score >= 1.0 (BGE reranker threshold)
-        3. Randomly select from multiple answers
-
-        If matched: Skip RAG pipeline, use FAQ answer directly
-        If not matched: Continue to intent recognition
-
-        Args:
-            state: Current conversation state
-
-        Returns:
-            Updated state with faq_matched populated (or None)
-        """
-        async with time_node("match_faq", state):
-            try:
-                query = state["user_query"]
-                employee_id = state["employee_id"]
-
-                # Get FAQ config from employee settings
-                db = await get_database()
-                digital_config = await db.digital_employee_configs.find_one({"employee_id": employee_id})
-
-                if not digital_config:
-                    logger.info(f"No employee config found for {employee_id}, skipping FAQ")
-                    state["faq_matched"] = None
-                    return state
-
-                faq_top_k = digital_config.get("faq_top_k", 3)
-
-                logger.info(
-                    f"FAQ matching started: employee_id={employee_id}, top_k={faq_top_k}"
-                )
-
-                # Perform FAQ search (using SDK)
-                faq_results = await rag_retrieval.faq_search(
-                    query=query,
-                    employee_id=employee_id,
-                    faq_top_k=faq_top_k
-                )
-
-                if not faq_results:
-                    logger.info("No FAQ matched")
-                    state["faq_matched"] = None
-                    return state
-
-                # Get best FAQ result
-                best_faq_result = faq_results[0]
-                faq_id = best_faq_result["faq_id"]
-                score = best_faq_result["score"]  # BGE reranker score
-
-                # Quality check: BGE score >= 1.0 indicates meaningful relevance
-                if score < 1.0:
-                    logger.warning(
-                        f"FAQ score too low, skipping: faq_id={faq_id}, score={score}"
-                    )
-                    state["faq_matched"] = None
-                    return state
-
-                # Retrieve full FAQ from MongoDB
-                faq_doc = await db.faqs.find_one({"faq_id": faq_id})
-
-                if not faq_doc or faq_doc.get("is_enable", 0) != 1:
-                    logger.info(f"FAQ {faq_id} not found or disabled")
-                    state["faq_matched"] = None
-                    return state
-
-                # Select random answer from answers array
-                answers = faq_doc.get("answers", [])
-                if not answers:
-                    logger.warning(f"FAQ {faq_id} has no answers")
-                    state["faq_matched"] = None
-                    return state
-
-                selected_answer = random.choice(answers)
-
-                # Set FAQ match state
-                state["final_answer"] = selected_answer
-                # BGE score -> confidence (1-10 maps to 0-1)
-                state["confidence"] = min(0.95, score / 10.0)
-                state["intent"] = "faq_match"
-                state["faq_matched"] = {
-                    "faq_id": faq_id,
-                    "question_name": faq_doc.get("question_name"),
-                    "score": score,
-                    "selected_answer": selected_answer,
-                    "total_answers": len(answers)
-                }
-
-                logger.info(
-                    f"FAQ answer selected: faq_id={faq_id}, score={score}"
-                )
-
-            except Exception as e:
-                logger.error(f"FAQ matching failed: {str(e)}", exc_info=True)
-                state["faq_matched"] = None
-
-        return state
+    # Note: match_faq 节点已删除，FAQ 匹配功能由 RAGAnything 内部处理
 
     # -------------------------------------------------------------------------
-    # Workflow Nodes - Intent Recognition
+    # Workflow Nodes - Intent Recognition - 已删除，功能与 classify_query_type 重复
     # -------------------------------------------------------------------------
-    async def recognize_intent(self, state: ConversationState) -> ConversationState:
-        """
-        Intent Recognition - Categorize user query for appropriate handling.
-
-        Supported intents:
-        - greeting: Simple greetings (fast response, no RAG needed)
-        - general_query: Default for knowledge base lookup
-
-        Args:
-            state: Current conversation state
-
-        Returns:
-            Updated state with intent and entities populated
-        """
-        async with time_node("recognize_intent", state):
-            query = state["user_query"].strip().lower()
-
-            # Check for greeting intent
-            for category, keywords in GREETING_KEYWORDS.items():
-                for keyword in keywords:
-                    if keyword in query:
-                        state["intent"] = "greeting"
-                        state["entities"] = {
-                            "greeting_type": category,
-                            "matched_keyword": keyword
-                        }
-                        logger.info(
-                            f"Greeting detected: category={category}, keyword={keyword}"
-                        )
-                        return state
-
-            # Default: general query requiring knowledge retrieval
-            state["intent"] = "general_query"
-            state["entities"] = {}
-
-            logger.debug("Intent recognized as general_query")
-
-        return state
+    # Note: recognize_intent 节点已删除，意图识别由 classify_query_type 处理
 
     # -------------------------------------------------------------------------
-    # Workflow Nodes - Knowledge Retrieval (RAG)
+    # Workflow Nodes - Knowledge Retrieval (RAG) - 已删除，由 RAGAnything 处理
     # -------------------------------------------------------------------------
-    async def knowledge_retrieval(self, state: ConversationState) -> ConversationState:
-        """
-        Knowledge Base Retrieval - Hybrid search for relevant documents.
+    # Note: knowledge_retrieval 节点已删除，RAG 检索由 RAGAnything 内部处理
 
-        Process:
-        1. Get kb_ids from employee config
-        2. Use rewritten query if available
-        3. Perform hybrid search (vector + BM25 + RRF fusion)
+    # -------------------------------------------------------------------------
+    # Workflow Nodes - Document Grading - 已删除，由 RAGAnything 处理
+    # -------------------------------------------------------------------------
+    # Note: grade_documents 节点已删除，文档评分由 RAGAnything 内部处理
 
-        Special handling for math textbook knowledge base (kb_9abcbe4aa557):
-        - Uses math_textbook_retrieval which returns context_text (answers)
-        - Other knowledge bases use standard rag_retrieval
-
-        Args:
-            state: Current conversation state
-
-        Returns:
-            Updated state with retrieved_docs and kb_used populated
-        """
-        async with time_node("knowledge_retrieval", state):
-            try:
-                kb_ids = state["employee_config"].get("knowledge", {}).get("kb_ids", [])
-                search_query = state.get("rewritten_query", state["user_query"])
-
-                logger.info(
-                    f"Knowledge retrieval started: employee_id={state['employee_id']}, "
-                    f"kb_count={len(kb_ids)}, kb_ids={kb_ids}, "
-                    f"query_rewritten={state.get('query_rewritten', False)}"
-                )
-
-                all_results = []
-
-                # Case 1: Math textbook knowledge base present
-                if MATH_KB_ID in kb_ids:
-                    logger.info(
-                        f"Math textbook knowledge base detected, using specialized retrieval: kb_id={MATH_KB_ID}"
-                    )
-
-                    # Math textbook specialized retrieval (returns context_text/answers)
-                    math_results = await math_textbook_retrieval.search(
-                        query=search_query,
-                        kb_ids=[MATH_KB_ID],
-                        top_k=5,
-                        use_hybrid=True,
-                        enable_rerank=True
-                    )
-                    all_results.extend(math_results)
-                    logger.info(
-                        f"Math textbook retrieval completed: math_results_count={len(math_results)}"
-                    )
-
-                    # Other knowledge bases use standard retrieval (exclude math kb)
-                    other_kb_ids = [kb_id for kb_id in kb_ids if kb_id != MATH_KB_ID]
-                    if other_kb_ids:
-                        standard_results = await rag_retrieval.search(
-                            query=search_query,
-                            kb_ids=other_kb_ids,
-                            top_k=5,
-                            use_hybrid=True,
-                            enable_rerank=True
-                        )
-                        all_results.extend(standard_results)
-                        logger.info(
-                            f"Standard retrieval completed for other KBs: other_kb_count={len(standard_results)}, "
-                            f"other_kb_ids={other_kb_ids}"
-                        )
-
-                # Case 2: No math textbook knowledge base
-                else:
-                    # Standard RAG retrieval for all knowledge bases
-                    all_results = await rag_retrieval.search(
-                        query=search_query,
-                        kb_ids=kb_ids if kb_ids else None,
-                        top_k=5,
-                        use_hybrid=True,
-                        enable_rerank=True
-                    )
-
-                # Take top_k results
-                results = all_results[:5]
-
-                state["retrieved_docs"] = results
-                state["kb_used"] = list(set([
-                    doc.get("kb_id") for doc in results if doc.get("kb_id")
-                ]))
-                if all_results:
-                    logger.info(
-                        f"Knowledge retrieval completed: total_results_1={len(all_results[:1])}, "
-                        f"kb_used={state['kb_used']}"
-                    )
-                else:
-                    logger.info(
-                        f"Knowledge retrieval completed, all result is empty: "
-                        f"total_results={len(all_results)}, kb_used={state['kb_used']}"
-                    )
-            except Exception as e:
-                logger.error(f"Knowledge retrieval failed: {str(e)}", exc_info=True)
-                state["retrieved_docs"] = []
-                state["kb_used"] = []
-
-        return state
-
-    async def grade_documents(self, state: ConversationState) -> ConversationState:
-        """
-        Document Grading - Calculate relevance score from retrieved documents.
-
-        Note: Reranking is now done in RAGRetrieval.search(). This node only
-        calculates relevance_score to determine if web search fallback is needed.
-
-        The relevance_score is derived from the top document's rerank_score
-        (computed by RAGRetrieval using Ollama/BGE reranker).
-
-        Args:
-            state: Current conversation state
-
-        Returns:
-            Updated state with relevance_score populated
-        """
-        async with time_node("grade_documents", state):
-            docs = state.get("retrieved_docs", [])
-
-            # Calculate relevance_score from top document's rerank_score
-            if not docs:
-                state["relevance_score"] = 0.0
-            else:
-                top_doc = docs[0]
-                rerank_score = top_doc.get("rerank_score")
-
-                if rerank_score is not None:
-                    # Use rerank_score (already normalized 0-1)
-                    state["relevance_score"] = max(0.0, min(1.0, float(rerank_score)))
-                else:
-                    # Fallback: use score field (should be same as rerank_score)
-                    state["relevance_score"] = max(0.0, min(1.0, float(top_doc.get("score", 0.0))))
-
-                logger.info(
-                    f"Document grading completed: relevance_score={state['relevance_score']}, "
-                    f"rerank_score={top_doc.get('rerank_score')}, docs_count={len(docs)}"
-                )
-
-                # Direct match: 仅对数学教材知识库，如果 content_type 是 'qa' 或 'teaching_script'
-                # 且 relevance_score > 0.9，直接使用 context_text 内容作为答案，跳过 LLM 生成
-                content_type = top_doc.get("content_type")
-                kb_used = state.get("kb_used", [])
-                is_math_kb = MATH_KB_ID in kb_used
-
-                logger.info(
-                    f"Direct match check: content_type={content_type}, "
-                    f"relevance_score={state['relevance_score']}, is_math_kb={is_math_kb}, "
-                    f"kb_used={kb_used}, has_context_text={'context_text' in top_doc}, "
-                    f"context_text_len={len(top_doc.get('context_text', ''))}"
-                )
-                # 只对数学教材知识库触发 direct match
-                if state["relevance_score"] > 0.8 and content_type in ("qa", "teaching_script") and is_math_kb:
-                    direct_content = top_doc.get("context_text", "")
-
-                    if direct_content:
-                        state["final_answer"] = direct_content
-                        state["confidence"] = min(0.95, state["relevance_score"])
-                        state["direct_match"] = {
-                            "content_type": content_type,
-                            "doc_id": top_doc.get("doc_id"),
-                            "chunk_id": top_doc.get("chunk_id"),
-                            "rerank_score": float(rerank_score) if rerank_score else 0.0,
-                            "content_snippet": direct_content[:100],
-                            "teaching_script_tts": top_doc.get("teaching_script_tts"),  # 添加语音播报字段
-                        }
-                        logger.info(
-                            f"{content_type.upper()} direct match triggered - skipping LLM generation: "
-                            f"content_type={content_type}, rerank_score={float(rerank_score) if rerank_score else 0.0}, "
-                            f"doc_id={top_doc.get('doc_id')}, chunk_id={top_doc.get('chunk_id')}, "
-                            f"answer_length={len(direct_content)}"
-                        )
-
-        return state
-
-    async def compress_context(self, state: ConversationState) -> ConversationState:
-        """
-        Context Compression - Reduce token usage by compressing retrieved content.
-
-        Strategy:
-        - Compress when total context > 1500 characters
-        - Preserve information relevant to user query
-        - Remove redundant and irrelevant content
-
-        Configuration: CONTEXT_COMPRESSION_ENABLED (default: False)
-
-        Args:
-            state: Current conversation state
-
-        Returns:
-            Updated state with compressed_context populated
-        """
-        async with time_node("compress_context", state):
-            state["compressed_context"] = None
-
-            compression_enabled = getattr(settings, 'context_compression_enabled', False)
-            if not compression_enabled:
-                logger.debug("Context compression is disabled")
-                return state
-
-            # Calculate total context length
-            docs = state.get("retrieved_docs", [])
-            web_results = state.get("web_search_results", [])
-            total_length = (
-                sum(len(doc.get('content', '')) for doc in docs) +
-                sum(len(r.get('content', '')) for r in web_results)
-            )
-
-            if total_length < 1500:
-                logger.debug(f"Context too short for compression: {total_length} chars")
-                return state
-
-            try:
-                docs_text = "\n\n".join([
-                    f"[文档{i+1}] {doc.get('content', '')[:400]}"
-                    for i, doc in enumerate(docs[:3])
-                ])
-
-                compress_prompt = f"""请将以下文档内容压缩成最精炼的关键信息。
-
-用户问题: {state["user_query"]}
-
-{docs_text}
-
-压缩要求:
-1. 只保留与用户问题相关的信息
-2. 去除重复和冗余内容
-3. 使用简洁的语言
-4. 压缩后的内容不超过500字
-5. 保留关键数据和事实
-
-压缩后的内容:"""
-
-                # Get appropriate LLM for current state (hybrid routing)
-                llm, model_name = select_llm(
-                    state,
-                    self.workflow.local_llm,
-                    self.workflow.remote_llm
-                )
-                response = await llm.ainvoke(compress_prompt)
-                compressed = response.content.strip()
-
-                if 100 < len(compressed) < total_length:
-                    state["compressed_context"] = compressed
-                    logger.info(
-                        f"Context compressed successfully: original_length={total_length}, "
-                        f"compressed_length={len(compressed)}, "
-                        f"compression_ratio={(1 - len(compressed) / total_length) * 100:.1f}%"
-                    )
-
-            except Exception as e:
-                logger.error(f"Context compression failed: {str(e)}", exc_info=True)
-
-        return state
+    # -------------------------------------------------------------------------
+    # Workflow Nodes - Context Compression - 已删除，由 RAGAnything 处理
+    # -------------------------------------------------------------------------
+    # Note: compress_context 节点已删除，上下文压缩由 RAGAnything 内部处理
 
     # -------------------------------------------------------------------------
     # Workflow Nodes - Web Search
@@ -958,19 +493,17 @@ class ConversationNodes:
     # -------------------------------------------------------------------------
     async def generate_answer(self, state: ConversationState) -> ConversationState:
         """
-        Answer Generation Preparation - Calculate confidence and prepare metadata.
+        配置流式输出对象 - 根据意图和数据源选择不同的流式输出方式
 
-        Note: Actual LLM streaming happens in the API endpoint.
-        This node only prepares the state with confidence scores.
+        设置的状态字段：
+        - state["streaming_llm"]     : 流式输出对象（LLM 或 None）
+        - state["streaming_type"]   : "langchain_llm" 或 "raganything_stream"
+        - state["streaming_messages"]: messages（LangChain LLM 使用）
+        - state["raganything_query"] : 查询文本（RAGAnything 使用）
+        - state["raganything_mode"]  : 检索模式（RAGAnything 使用）
+        - state["confidence"]        : 置信度分数
 
-        For interruption/greeting intents, build_generation_messages will
-        create appropriate prompts for LLM to generate short responses.
-
-        Args:
-            state: Current conversation state
-
-        Returns:
-            Updated state with confidence calculated
+        实际的流式输出在 chat_stream_v1.py 中根据这些配置执行。
         """
         async with time_node("generate_answer", state):
             # If final_answer is already set (direct match), skip placeholder
@@ -980,32 +513,52 @@ class ConversationNodes:
                 )
                 return state
 
+            intent = state.get("intent")
+            web_search_used = state.get("web_search_used", False)
 
-            # Calculate confidence based on data sources
+            # 计算置信度
             confidence = 0.5  # Base confidence
-
-            if state.get("faq_matched"):
-                confidence = 0.95
-            elif state.get("intent") == "greeting":
-                # 快速响应意图，高置信度
+            if intent == "greeting":
                 confidence = 0.98
-            elif state.get("web_search_used", False):
+            elif web_search_used:
                 web_results = state.get("web_search_results", [])
                 if web_results:
                     avg_web_score = sum(r.get("score", 0.5) for r in web_results) / len(web_results)
                     confidence = max(0.75, avg_web_score)
-            elif state.get("retrieved_docs"):
-                confidence = max(0.6, state.get("relevance_score", 0.7))
+            else:  # normal query with RAGAnything
+                confidence = 0.8
+
+            # 根据意图和数据源配置流式输出
+            if intent == "greeting" or web_search_used:
+                # 使用 LangChain LLM（原有逻辑）
+                from app.services.conversation.conversation_helpers import build_generation_messages
+
+                messages = build_generation_messages(state)
+                streaming_llm, model_name = self.workflow.get_streaming_llm(state)
+
+                state["streaming_llm"] = streaming_llm
+                state["streaming_messages"] = messages
+                state["streaming_type"] = "langchain_llm"
+
+                logger.info(
+                    f"Streaming configured: type=langchain_llm, intent={intent}, "
+                    f"web_search_used={web_search_used}, model={model_name}"
+                )
+
+            else:  # normal - 需要召回文档
+                # 使用 RAGAnything 流式
+                state["streaming_llm"] = None  # 标记使用 RAGAnything
+                state["streaming_messages"] = None
+                state["streaming_type"] = "raganything_stream"
+                state["raganything_query"] = state["user_query"]
+                state["raganything_mode"] = "hybrid"
+
+                logger.info(
+                    f"Streaming configured: type=raganything_stream, intent={intent}, mode=hybrid"
+                )
 
             state["confidence"] = confidence
             state["final_answer"] = ""  # Placeholder for streaming
-
-            logger.info(
-                f"Ready for answer generation: confidence={confidence}, "
-                f"intent={state.get('intent')}, web_search_used={state.get('web_search_used')}, "
-                f"kb_docs_count={len(state.get('retrieved_docs', []))}"
-                f"kb_docs={state.get('retrieved_docs', [])}"
-            )
 
         return state
 

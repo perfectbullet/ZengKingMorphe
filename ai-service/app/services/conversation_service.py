@@ -7,16 +7,17 @@ This module implements a state-based conversation workflow using LangGraph, supp
 - Dual-LLM architecture (local Ollama + remote OpenAI-style API)
 - Streaming responses with performance monitoring
 
-Workflow Graph (16 nodes):
+Workflow Graph (10 nodes):
     load_employee_config → load_session_context → input_validation
         → classify_query_type
         → [conditional: greeting?] → generate_answer
-        → [conditional: realtime?] → web_search
-        → [conditional: normal?] → evaluate_complexity → rewrite_query → match_faq
-        → [conditional: FAQ matched?] → generate_answer OR intent_recognition
-        → knowledge_retrieval → rerank_documents → compress_context
-        → [conditional: low relevance?] → web_search OR generate_answer
+        → [conditional: realtime?] → web_search → generate_answer
+        → [conditional: normal?] → evaluate_complexity → generate_answer
         → generate_answer → save_conversation → END
+
+Note: Simplified workflow using RAGAnything for RAG retrieval.
+Removed nodes: intent_recognition, knowledge_retrieval, grade_documents,
+               compress_context, match_faq, rewrite_query
 """
 import os
 from pathlib import Path
@@ -43,17 +44,15 @@ class ConversationWorkflow:
     Features:
     - Dual-LLM support: Local Ollama for fast responses, remote API for complex tasks
     - Hybrid routing: Automatically select LLM based on query complexity
-    - Hybrid retrieval: Vector search + keyword search + RRF fusion
-    - FAQ fast-path: Direct answer matching with configurable threshold
+    - RAGAnything integration: Knowledge graph + vector retrieval with streaming
     - Realtime query detection: Auto-route to web search for time-sensitive queries
-    - Query optimization: Rewriting, context compression, document reranking
-    - Answer verification: Consistency checking against source documents
+    - Simplified workflow: 10 nodes (down from 17)
 
-    Workflow consists of 17 nodes connected by conditional edges.
+    Workflow consists of 10 nodes connected by conditional edges.
 
     LLM Routing Strategy (hybrid mode):
-    - Use local Ollama for: greetings, FAQs, simple queries (<30 chars), early turns
-    - Use remote API for: RAG retrieval, web search, long context, complex queries
+    - Use local Ollama for: greetings, simple queries (<30 chars), early turns
+    - Use remote API for: RAGAnything queries, web search, long context, complex queries
     """
 
     def __init__(self):
@@ -236,26 +235,22 @@ class ConversationWorkflow:
 
         Graph structure:
         - Entry: load_employee_config
-        - Middle: 17 processing nodes with conditional routing
+        - Middle: 8 processing nodes with conditional routing
         - Exit: save_conversation → END
+
+        Simplified workflow using RAGAnything for RAG retrieval.
 
         Returns:
             Compiled StateGraph ready for execution
         """
         graph = StateGraph(ConversationState)
 
-        # Add all 16 workflow nodes (delegated to nodes container)
+        # Add all workflow nodes (delegated to nodes container)
         graph.add_node("load_employee_config", self.nodes.load_employee_config)
         graph.add_node("load_session_context", self.nodes.load_session_context)
         graph.add_node("input_validation", self.nodes.validate_input)
         graph.add_node("classify_query_type", self.nodes.classify_query_type)
         graph.add_node("evaluate_complexity", self.nodes.evaluate_complexity)
-        graph.add_node("rewrite_query", self.nodes.rewrite_query)
-        graph.add_node("match_faq", self.nodes.match_faq)
-        graph.add_node("intent_recognition", self.nodes.recognize_intent)
-        graph.add_node("knowledge_retrieval", self.nodes.knowledge_retrieval)
-        graph.add_node("grade_documents", self.nodes.grade_documents)
-        graph.add_node("compress_context", self.nodes.compress_context)
         graph.add_node("web_search", self.nodes.web_search)
         graph.add_node("generate_answer", self.nodes.generate_answer)
         graph.add_node("save_conversation", self.nodes.save_conversation)
@@ -279,45 +274,8 @@ class ConversationWorkflow:
             }
         )
 
-        # Normal flow: complexity → rewrite → FAQ
-        graph.add_edge("evaluate_complexity", "rewrite_query")
-        graph.add_edge("rewrite_query", "match_faq")
-
-        # Conditional routing after FAQ matching
-        graph.add_conditional_edges(
-            "match_faq",
-            lambda state: "generate_answer" if state.get("faq_matched") else "intent_recognition",
-            {
-                "generate_answer": "generate_answer",
-                "intent_recognition": "intent_recognition"
-            }
-        )
-
-        # Intent recognition now mainly handles general_query routing
-        graph.add_edge("intent_recognition", "knowledge_retrieval")
-
-        # RAG pipeline edges
-        graph.add_edge("knowledge_retrieval", "grade_documents")
-
-        # Conditional routing after grade_documents: QA 直接匹配时跳过 compress_context
-        graph.add_conditional_edges(
-            "grade_documents",
-            lambda state: "save_conversation" if state.get("final_answer") else "compress_context",
-            {
-                "save_conversation": "save_conversation",
-                "compress_context": "compress_context"
-            }
-        )
-
-        # Conditional routing after context compression
-        graph.add_conditional_edges(
-            "compress_context",
-            lambda state: "web_search" if state.get("relevance_score", 0) < settings.relevance_threshold else "generate_answer",
-            {
-                "web_search": "web_search",
-                "generate_answer": "generate_answer"
-            }
-        )
+        # Normal flow: complexity → generate_answer (RAGAnything handles RAG)
+        graph.add_edge("evaluate_complexity", "generate_answer")
 
         # Final sequence
         graph.add_edge("web_search", "generate_answer")
