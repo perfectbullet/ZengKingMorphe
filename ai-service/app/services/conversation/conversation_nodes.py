@@ -208,12 +208,18 @@ class ConversationNodes:
 
             state["has_sensitive"] = has_sensitive
 
+            # DEBUG: 输出敏感词检测结果
+            matched_words = [w for w in sensitive_words if w.lower() in query]
+            logger.info(
+                f"[DEBUG] Sensitive check | query={query[:50]} | "
+                f"words_count={len(sensitive_words)} | has_sensitive={has_sensitive} | "
+                f"matched={matched_words[:5]}"
+            )
+
             if has_sensitive:
                 logger.info(
-                    "Sensitive word detected in query",
-                    user_id=state.get("user_id"),
-                    employee_id=state.get("employee_id"),
-                    query=query[:100]
+                    f"Sensitive word detected in query, user_id={state.get('user_id')}, "
+                    f"employee_id={state.get('employee_id')}, query={query[:100]}"
                 )
         return state
 

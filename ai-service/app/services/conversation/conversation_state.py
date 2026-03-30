@@ -36,10 +36,15 @@ GREETING_KEYWORDS = {
 DEFAULT_SENSITIVE_WORDS = [
     # Violence/Threat (暴力/威胁)
     "杀你", "杀死你", "弄死你", "宰了你", "废了你",
-    "砍死", "捅死", "打死", "炸死", "毒死",
-    # Explicit profanity filter (use employee config for customization)
-    # Sexual content filter
-    # Political sensitivity filter
+    "砍死", "捅死", "打死", "炸死", "毒死", "杀死",
+    # Sexual content (涉黄)
+    "做爱", "性交", "嫖娼", "卖淫", "淫秽",
+    "色情", "裸聊", "约炮", "一夜情", "性服务",
+    "情色", "成人片", "黄色视频", "黄色小说",
+    # Political sensitivity (政治敏感)
+    "习近平", "推翻政府", "暴力推翻", "恐怖主义", "极端主义",
+    "法轮功", "邪教", "六四运动", "天安门事件", "体罚", "打骂学生", 
+    "乱收费", "强制补课", "收礼","贿赂","走后门","暗箱操作","开除","劝退","区别对待","歧视差生"
     # Note: For production, employee-specific sensitive words
     # from safe_rule.sensitive_ids should take priority
 ]
