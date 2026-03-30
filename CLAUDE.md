@@ -183,59 +183,26 @@ Background service to prevent Ollama model unloading ([ai-service/app/services/o
 
 ---
 
-## Database Schema
-
-### MongoDB Collections
-
-**Core Collections**:
-- `conversations` - Conversation records with metadata
-- `sessions` - User session data
-- `employees` - Digital employee configurations
-- `knowledge_bases` - Knowledge base metadata
-- `documents` - Document metadata and content
-- `faq` - FAQ entries for matching
-- `sensitive_words` - Sensitive word filter
-- `professional_words` - Professional terminology
-
-**MinerU Collections** (prefixed with `mineru_`):
-- `mineru_cache` - MD5-based PDF parsing cache
-- `mineru_jobs` - PDF processing job status tracking
-
-**Streaming Collections**:
-- `stream_chunks` - Stored streaming chunks for debugging/audit
-
-### ChromaDB Collections
-
-- `doc` - Document chunks with embeddings
-- `faq` - FAQ embeddings for semantic matching
-- Each collection has metadata filters: `kb_id`, `employee_id`, etc.
-
-### ElasticSearch Indices
-
-- `digital_employee_doc` - Document chunks (prefix configurable via `es_index_prefix`)
-- `digital_employee_faq` - FAQ entries
-- **Important**: Always use `es_db.doc_index` and `es_db.faq_index` instead of hardcoded `"doc"` or `"faq"`
-
----
+## Critical Conventions
 
 ## Critical Conventions
 
 ### Logging Pattern
 
-Use structured logging via Loguru wrapper ([ai-service/app/core/logging.py](ai-service/app/core/logging.py)):
+Use f-string formatting for Loguru logging ([ai-service/app/core/logging.py](ai-service/app/core/logging.py)):
 
 ```python
 from app.core.logging import logger
 
-logger.info("Chat message request", user_id=user.id, query=query[:100])  # Truncate PII
-logger.error("RAG search failed", error=str(e), exc_info=True)  # Always exc_info=True for errors
+logger.info(f"Chat message request, user_id={user.id}, query={query[:100]}")  # Truncate PII
+logger.error(f"RAG search failed, error={e}", exc_info=True)  # Always exc_info=True for errors
 ```
 
 **Rules**:
-- ✅ Use keyword arguments (not string interpolation)
+- ✅ Use f-string for all log formatting
 - ✅ Truncate user queries to 100 chars (PII prevention)
 - ✅ Error logs must include `exc_info=True`
-- ❌ Never: `logger.info(f"User {user.id} asked: {query}")`
+- ❌ Never use keyword arguments (Loguru ignores them)
 
 ### API Response Schema
 
@@ -400,111 +367,6 @@ OLLAMA_REVISE_MODEL=qwen2.5:7b
 
 **触发条件**: v2 API 匹配数学教材知识库，但 `teaching_script_tts` 字段为空时
 
-### OllamaEmbeddings (当前配置)
-
-**代码位置**: `app/utils/embeddings.py:26-362`
-
-**配置**:
-```bash
-OLLAMA_BASE_URL=http://192.168.8.233:11434
-```
-
-**字符限制**:
-- `max_tokens`: 1024 (默认)
-- `max_chars`: `int(max_tokens / 2.5)` ≈ 408 字符
-- 超长文本会被自动截断并添加 `...`
-
-**API 调用**:
-```python
-POST {base_url}/api/embeddings
-{
-    "model": "bge-large-zh-v1.5:2k",
-    "prompt": "文本内容",
-    "keep_alive": -1  # 保持模型加载
-}
-```
-
-**调用链路**:
-```
-document_service._process_chunks()
-  ↓ 构建 chunk_texts
-chroma_db.add_documents(documents=chunk_texts, ...)
-  ↓
-collection.add(documents, ...)  # ChromaDB 内部
-  ↓
-ChromaEmbeddingWrapper.__call__(input)
-  ↓
-OllamaEmbeddings.embed_documents(texts)
-  ↓
-OllamaEmbeddings._embed_batch(texts)
-  ↓
-POST /api/embeddings (逐个调用，非批量)
-```
-
-**传入 Embedding 的文本格式**:
-- **普通分块**: `chunk.content`
-- **MinerU分块**: `"{title_str}\n\n{chunk.content}"` (标题路径作为前缀)
-
-**DocumentModel 字段** (`app/models/database.py:94-109`):
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `doc_id` | str | 文档ID |
-| `filename` | str | 文件名 |
-| `kb_id` | str | 知识库ID |
-| `category` | str\|None | 分类 |
-| `size` | int | 文件大小 |
-| `format` | str | 文件格式 (PDF/Word/TXT/Markdown/HTML) |
-| `chunks_count` | int | 分块数量 |
-| `vectors_count` | int | 向量数量 |
-| `status` | str | processing/completed/failed |
-| `error_message` | str\|None | 错误信息 |
-| `segment_config` | Dict\|None | 自定义分块配置 |
-| `metadata` | Dict | 元数据 |
-| `uploaded_at` | datetime | 上传时间 |
-| `processed_at` | datetime\|None | 处理完成时间 |
-
-**DocumentChunkModel 字段** (`app/models/database.py:112-133`):
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| **基础字段** | | |
-| `chunk_id` | str | 分块ID |
-| `doc_id` | str | 所属文档ID |
-| `kb_id` | str | 知识库ID |
-| `content` | str | **分块内容 (传入 embedding)** |
-| `chunk_index` | int | 分块索引 |
-| `summary` | Dict\|None | 分块摘要 |
-| `vector_id` | str\|None | ChromaDB 向量ID |
-| `metadata` | Dict | 元数据 |
-| `created_at` | datetime | 创建时间 |
-| `updated_at` | datetime\|None | 更新时间 |
-| **MinerU结构化字段** | | |
-| `page_idx` | int\|None | 起始页码 |
-| `page_indices` | List[int] | 包含的所有页码 |
-| `block_types` | List[str] | 块类型 ['text', 'title'] |
-| `image_references` | List[str] | 图片URL列表 |
-| `image_captions` | List[str] | 图片描述列表 |
-| `title_path` | List[str] | **标题路径 (会前缀到 content)** |
-| `structure_level` | int | 文档结构层级 |
-| **语音播报字段 (v2 API)** | | |
-| `teaching_script_tts` | str\|None | 预生成的语音播报文本 (数学教材) |
-
-### BGE Reranker Docker Deployment
-
-For GPU-accelerated reranking:
-
-```bash
-# CPU mode
-docker run -d --name bge-reranker-v2-m3 -p 6006:6006 wkao/bge-reranker-v2-m3:latest
-
-# GPU mode (requires NVIDIA Container Toolkit)
-docker run -d --name bge-reranker-v2-m3 --gpus all -p 6006:6006 wkao/bge-reranker-v2-m3:latest
-```
-
-**Requirements for GPU**:
-- NVIDIA GPU Driver ≥ 535.86.10
-- CUDA 12.2+
-- NVIDIA Container Toolkit installed
-
 ---
 
 ## Integration Points
@@ -661,21 +523,4 @@ View the workflow graph at `graph_debug/crag_graph.mmd`.
 
 ---
 
-## Documentation Reference
-
-**Core Features**:
-- [联网检索功能使用指南.md](docs/联网检索功能使用指南.md)
-- [FAQ多路召回功能实现总结.md](docs/FAQ多路召回功能实现总结.md)
-- [异步文档上传使用说明.md](docs/异步文档上传使用说明.md)
-- [MinerU客户端使用指南.md](docs/MinerU客户端使用指南.md)
-- [MinerU实现总结.md](docs/MinerU实现总结.md)
-
-**Performance**:
-- [Ollama模型保活方案.md](docs/Ollama模型保活方案.md)
-- [性能优化总结.md](docs/性能优化总结.md)
-- [性能优化效果验证.md](docs/性能优化效果验证.md)
-
-**Architecture**:
-- [ConversationWorkflow流程图与架构图.md](docs/ConversationWorkflow流程图与架构图.md)
-- [API使用文档.md](docs/API使用文档.md)
-- [部署指南.md](docs/部署指南.md)
+**Documentation**: See `docs/` directory for detailed feature documentation, performance guides, and architecture diagrams.
