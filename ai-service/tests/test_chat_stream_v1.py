@@ -74,7 +74,7 @@ class ChatStreamV1Tester:
         self.query = query
         self.user_id = user_id
         self.employee_id = employee_id
-        self.session_id = session_id or f"sess_test_{int(time.time())}"
+        self.session_id = session_id or f"sess_{team_id}_{user_id}_{employee_id}"
         self.team_id = team_id
         self.model = model
         self.temperature = temperature

@@ -20,6 +20,7 @@ from app.models.database import StreamChunkModel
 from app.core.logging import get_logger
 from app.core.database import get_database
 from app.services.conversation_service import conversation_workflow
+
 from app.services.revise_llm import (
     get_revise_llm,
     convert_formula_to_voice,
@@ -28,7 +29,7 @@ from app.services.revise_llm import (
 from app.utils.latex import normalize_latex_formulas
 from app.utils.sentence_buffer import SentenceBuffer, has_latex_formula
 from app.utils.tts_formatter import strip_markdown_for_tts
-
+from app.services.raganything_wrapper import get_raganything_stream
 logger = get_logger(__name__)
 
 # =============================================================================
@@ -418,6 +419,16 @@ async def save_stream_chunk(
         chunk_data: Chunk data to save
         conversation_id: Optional conversation ID
     """
+    # 打印所有参数用于调试
+    chunk_data_preview = str(chunk_data)[:200] if chunk_data else None
+    logger.info(
+        f"[save_stream_chunk] chat_id={chat_id}, seq={chunk_sequence}, "
+        f"session_id={session_id}, user_id={user_id}, employee_id={employee_id}, "
+        f"chunk_type={chunk_type}, conversation_id={conversation_id}, "
+        f"chunk_data_keys={list(chunk_data.keys()) if chunk_data else []}, "
+        f"chunk_data_preview={chunk_data_preview}"
+    )
+
     chunk_record = StreamChunkModel(
         chunk_id=f"{chat_id}_chunk_{chunk_sequence}",
         conversation_id=conversation_id,
@@ -550,8 +561,6 @@ async def generate_openai_stream_v1(
                 # 根据 streaming_type 选择不同的流式输出方式
                 if streaming_type == "raganything_stream":
                     # RAGAnything 流式输出
-                    from app.services.raganything_wrapper import get_raganything_stream
-
                     query = current_state.get("raganything_query", current_state.get("user_query", ""))
                     mode = current_state.get("raganything_mode", "hybrid")
 

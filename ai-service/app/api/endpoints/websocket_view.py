@@ -68,11 +68,21 @@ async def websocket_stream_chunks(
 
         logger.info(f"WebSocket View starting real-time monitoring: user_id={user_id}, employee_id={employee_id}, session_id={session_id}")
 
-        async with asyncio.TaskGroup() as tg:
-            tg.create_task(send_heartbeat(websocket))
-            tg.create_task(
-                poll_new_chunks(websocket, db, query_filter, last_timestamp, sent_chunk_ids)
-            )
+        # Python 3.10 兼容：使用 asyncio.gather 替代 TaskGroup
+        heartbeat_task = asyncio.create_task(send_heartbeat(websocket))
+        poll_task = asyncio.create_task(
+            poll_new_chunks(websocket, db, query_filter, last_timestamp, sent_chunk_ids)
+        )
+
+        # 等待任一任务完成（通常是断开连接）
+        done, pending = await asyncio.wait(
+            [heartbeat_task, poll_task],
+            return_when=asyncio.FIRST_COMPLETED
+        )
+
+        # 取消未完成的任务
+        for task in pending:
+            task.cancel()
 
     except WebSocketDisconnect:
         logger.info(f"WebSocket View disconnected normally: user_id={user_id}, session_id={session_id}")
