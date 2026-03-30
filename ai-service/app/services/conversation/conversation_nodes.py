@@ -405,7 +405,10 @@ class ConversationNodes:
                 )
 
                 # Perform search
-                web_search_tool = TavilySearchResults(k=3)
+                web_search_tool = TavilySearchResults(
+                    max_results=5,  # 返回结果数量，默认 5
+                    search_depth="basic" # 搜索深度："basic" (免费) 或 "advanced" (付费)
+                )
                 search_results = await web_search_tool.ainvoke({"query": query})
 
                 # Format results
