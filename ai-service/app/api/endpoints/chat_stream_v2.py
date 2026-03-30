@@ -422,6 +422,26 @@ async def generate_openai_stream_v2(
             if state_update:
                 current_state.update(state_update)
 
+            # 检测敏感词并提前终止
+            if node_name == "input_validation" and state_update.get("has_sensitive"):
+                # 发送拒绝消息
+                reject_message = "抱歉，您的问题包含敏感内容，请规范用语后再试。"
+                reject_chunk_data = {
+                    "id": chat_id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": "status",
+                    "choices": [{"index": 0, "delta": {"content": reject_message}, "finish_reason": "sensitive"}],
+                }
+                chunk_sequence += 1
+                await save_stream_chunk(
+                    db, chat_id, chunk_sequence, session_id, request.user_id,
+                    request.employee_id, "done", reject_chunk_data, ""
+                )
+                yield json.dumps(reject_chunk_data)
+                logger.info(f"Sensitive word detected | reject_message sent | breaking workflow")
+                break  # 跳出循环，终止后续处理
+
             # 检测 knowledge_retrieval 节点并发送状态提示
             if node_name == "knowledge_retrieval":
                 status_token = random.choice(STATUS_TOKENS)

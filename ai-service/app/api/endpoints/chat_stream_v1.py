@@ -9,7 +9,7 @@ import json
 import re
 import time
 from datetime import datetime
-
+import random
 from typing import AsyncGenerator, Optional, Any
 
 from langchain_community.chat_models import ChatOllama
@@ -534,6 +534,26 @@ async def generate_openai_stream_v1(
         if state_update:
             current_state.update(state_update)
 
+        # 检测敏感词并提前终止
+        if node_name == "input_validation" and state_update.get("has_sensitive"):
+            # 发送拒绝消息
+            reject_message = "抱歉，您的问题包含敏感内容，请规范用语后再试。"
+            reject_chunk_data = {
+                "id": chat_id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": "status",
+                "choices": [{"index": 0, "delta": {"content": reject_message}, "finish_reason": "sensitive"}],
+            }
+            chunk_sequence += 1
+            await save_stream_chunk(
+                db, chat_id, chunk_sequence, session_id, request.user_id,
+                request.employee_id, "done", reject_chunk_data
+            )
+            yield json.dumps(reject_chunk_data)
+            logger.info(f"Sensitive word detected | reject_message sent | breaking workflow")
+            break  # 跳出循环，终止后续处理
+            
         # 当到达 generate_answer 节点时，开始流式输出
         if node_name == "generate_answer":
             streaming_type = current_state.get("streaming_type")
@@ -557,31 +577,41 @@ async def generate_openai_stream_v1(
             existing_answer = current_state.get("final_answer", "")
             direct_match = current_state.get("direct_match")
             # 先不做预生产答案
-            
+
+
+            first_token_received = False
+            full_answer = ""
+            TALKING_POINTS: list = [
+                "好的，我正在梳理您的问题要点…",
+                "等我一小下下······",
+            ]
+            talking_point = random.choice(TALKING_POINTS)
+            full_answer += full_answer
+            chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
+                talking_point, revise_llm, chat_id, created, request.model,
+                db, chunk_sequence, session_id, request.user_id,
+                request.employee_id, current_state.get("conversation_id"),
+                log_prefix="RAGAnything"
+            )
+            yield json.dumps(chunk_data)
+            if not first_token_received:
+                first_token_received = True
+                ttfb_ms = int((time.time() - initial_state["workflow_start_time"]) * 1000)
+                current_state["ttfb_ms"] = ttfb_ms
+                logger.info(f"First token received | ttfb_ms={ttfb_ms}")
+                
             # 根据 streaming_type 选择不同的流式输出方式
             if streaming_type == "raganything_stream":
                 # RAGAnything 流式输出
                 query = current_state.get("raganything_query", current_state.get("user_query", ""))
                 mode = current_state.get("raganything_mode", "hybrid")
-
                 logger.info(f"Using RAGAnything stream | query={query[:50]} | mode={mode}")
-
-                first_token_received = False
-                full_answer = ""
-
                 async for chunk in get_raganything_stream(query, mode=mode):
                     if chunk["type"] == "chunk":
                         content = chunk["content"]
-
                         # 跳过 None 内容
                         if content is None:
                             continue
-
-                        if not first_token_received:
-                            first_token_received = True
-                            ttfb_ms = int((time.time() - initial_state["workflow_start_time"]) * 1000)
-                            current_state["ttfb_ms"] = ttfb_ms
-                            logger.info(f"First RAGAnything token received | ttfb_ms={ttfb_ms}")
 
                         full_answer += content
                         segment = sentence_buffer.add(content)
@@ -620,28 +650,15 @@ async def generate_openai_stream_v1(
                 # LangChain LLM 流式输出（原有逻辑）
                 streaming_llm = current_state.get("streaming_llm")
                 messages = current_state.get("streaming_messages")
-
                 if not streaming_llm or not messages:
                     logger.error("streaming_llm or messages not configured for langchain_llm type")
                     continue
-
                 logger.info(f"Using LangChain LLM stream | model={model_name}")
-
-                first_token_received = False
-                full_answer = ""
-
                 async for chunk in streaming_llm.astream(messages):
                     token = chunk.content
                     if token:
-                        if not first_token_received:
-                            first_token_received = True
-                            ttfb_ms = int((time.time() - initial_state["workflow_start_time"]) * 1000)
-                            current_state["ttfb_ms"] = ttfb_ms
-                            logger.info(f"First LLM token received | ttfb_ms={ttfb_ms}")
                         full_answer += token
-
                         segment = sentence_buffer.add(token)
-
                         token_len = len(token)
                         buffer_len = sentence_buffer.get_buffer_length()
                         if segment or ('$$' in token[:10]):
@@ -650,7 +667,6 @@ async def generate_openai_stream_v1(
                                 f"has_segment={bool(segment)}, token_preview={repr(token[:50])}, "
                                 f"buffer_start={repr(sentence_buffer.buffer[:30])}, buffer_end={repr(sentence_buffer.buffer[-30:])}"
                             )
-
                         if segment:
                             chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
                                 segment, revise_llm, chat_id, created, request.model,
@@ -659,7 +675,6 @@ async def generate_openai_stream_v1(
                                 log_prefix=""
                             )
                             yield json.dumps(chunk_data)
-
                 final_segment = await sentence_buffer.flush(is_final=True)
                 if final_segment:
                     chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(

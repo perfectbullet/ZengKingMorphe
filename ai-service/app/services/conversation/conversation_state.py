@@ -29,6 +29,23 @@ GREETING_KEYWORDS = {
 
 
 # =============================================================================
+# Default Sensitive Words
+# Basic sensitive word list for content safety filtering.
+# Used when employee-specific sensitive word lists are not available.
+# =============================================================================
+DEFAULT_SENSITIVE_WORDS = [
+    # Violence/Threat (暴力/威胁)
+    "杀你", "杀死你", "弄死你", "宰了你", "废了你",
+    "砍死", "捅死", "打死", "炸死", "毒死",
+    # Explicit profanity filter (use employee config for customization)
+    # Sexual content filter
+    # Political sensitivity filter
+    # Note: For production, employee-specific sensitive words
+    # from safe_rule.sensitive_ids should take priority
+]
+
+
+# =============================================================================
 # Interruption Detection Keywords (REMOVED)
 # Previously used for detecting user interruption intent during conversation.
 # This functionality has been removed to allow interruption keywords

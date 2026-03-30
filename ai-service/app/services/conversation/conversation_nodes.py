@@ -24,7 +24,11 @@ from app.core.config import settings
 from app.core.database import get_database
 from app.core.logging import get_logger
 from app.models.database import ConversationModel, SessionModel
-from app.services.conversation.conversation_state import ConversationState, GREETING_KEYWORDS
+from app.services.conversation.conversation_state import (
+    ConversationState,
+    GREETING_KEYWORDS,
+    DEFAULT_SENSITIVE_WORDS
+)
 from app.services.conversation.conversation_helpers import (
     time_node,
     heuristic_complexity
@@ -168,7 +172,7 @@ class ConversationNodes:
 
         Performs basic validation:
         - Check for empty or malicious input
-        - Detect sensitive content (placeholder)
+        - Detect sensitive content using default + employee-specific words
 
         Args:
             state: Current conversation state
@@ -177,8 +181,40 @@ class ConversationNodes:
             Updated state with validation results
         """
         async with time_node("validate_input", state):
-            # Basic validation - can be extended
-            state["has_sensitive"] = False
+            query = state["user_query"].strip().lower()
+
+            employee_config = state.get("employee_config") or {}
+
+            # Build sensitive words list (default + employee-specific)
+            sensitive_words = set(DEFAULT_SENSITIVE_WORDS)
+
+            # Add employee-specific sensitive words from safe_rule.sensitive_ids
+            safe_rule = employee_config.get("safe_rule") or {}
+            sensitive_ids = safe_rule.get("sensitive_ids") or []
+            if sensitive_ids:
+                # Load sensitive words from database
+                db = get_database()
+                if sensitive_ids:
+                    cursor = db.thesaurus_sensitive.find(
+                        {"thesaurus_id": {"$in": sensitive_ids}},
+                        {"word": 1, "_id": 0}
+                    )
+                    sensitive_docs = await cursor.to_list(length=None)
+                    employee_words = [doc.get("word", "") for doc in sensitive_docs if doc.get("word")]
+                    sensitive_words.update(employee_words)
+
+            # Check if query contains any sensitive word
+            has_sensitive = any(word.lower() in query for word in sensitive_words if word)
+
+            state["has_sensitive"] = has_sensitive
+
+            if has_sensitive:
+                logger.info(
+                    "Sensitive word detected in query",
+                    user_id=state.get("user_id"),
+                    employee_id=state.get("employee_id"),
+                    query=query[:100]
+                )
         return state
 
     # -------------------------------------------------------------------------
