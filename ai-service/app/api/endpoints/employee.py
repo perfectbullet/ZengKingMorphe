@@ -300,8 +300,7 @@ async def update_employee_setting(
         if result and result.modified_count == 1:
             return ResponseResult.success(None)
         else:
-            return ResponseResult.error(status.HTTP_400_BAD_REQUEST, "error",
-                                        "update_employee_setting failed")
+            return ResponseResult.error(status.HTTP_400_BAD_REQUEST, "error", "update_employee_setting failed")
     except HTTPException:
         raise
     except Exception as e:
