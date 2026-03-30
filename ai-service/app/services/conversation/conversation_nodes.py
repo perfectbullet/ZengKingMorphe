@@ -87,7 +87,17 @@ class ConversationNodes:
 
             employee.pop("_id", None)
             state["employee_config"] = employee
-            kb_ids = employee.get("knowledge", []).get("kb_ids", [])
+
+            # 兼容两种 kb_ids 存储路径: knowledge.kb_ids 或根级别 kb_ids
+            kb_ids = None
+            knowledge = employee.get("knowledge")
+            if knowledge and isinstance(knowledge, dict):
+                kb_ids = knowledge.get("kb_ids")
+            if not kb_ids:
+                kb_ids = employee.get("kb_ids", [])
+            if kb_ids is None:
+                kb_ids = []
+
             logger.info(
                 f"Employee config loaded: employee_id={state['employee_id']}, "
                 f"name={employee.get('name')}, kb_ids={kb_ids}, kb_count={len(kb_ids)}"

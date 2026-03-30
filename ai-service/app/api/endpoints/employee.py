@@ -187,7 +187,7 @@ async def update_employee_setting(
             else:
                 update_data = {
                     "update_time": request.update_time,
-                    "knowledge": None
+                    "knowledge": {}
                 }
         elif request.update_type == "prologue":  # 对话开始--开场白配置
             faq_ids = []
@@ -270,7 +270,7 @@ async def update_employee_setting(
             else:
                 update_data = {
                     "update_time": request.update_time,
-                    "plugins": None
+                    "plugins": []
                 }
         elif request.update_type == "thesaurus_major":  # 高级设置--专业词库配置
             major_ids = []
