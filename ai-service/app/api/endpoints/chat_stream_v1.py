@@ -458,271 +458,237 @@ async def generate_openai_stream_v1(
     Yields:
         OpenAI-formatted SSE messages
     """
-    try:
-        db = await get_database()
 
-        session_id = (
-            request.session_id
-            or f"sess_{hashlib.md5(f'{request.user_id}_{datetime.now().timestamp()}'.encode()).hexdigest()[:12]}"
-        )
-        chat_id = f"chatcmpl-{hashlib.md5(f'{session_id}_{time.time()}'.encode()).hexdigest()[:12]}"
-        created = int(time.time())
+    db = await get_database()
 
-        user_query = _clean_user_query(_extract_user_query(request.messages))
+    session_id = (
+        request.session_id
+        or f"sess_{hashlib.md5(f'{request.user_id}_{datetime.now().timestamp()}'.encode()).hexdigest()[:12]}"
+    )
+    chat_id = f"chatcmpl-{hashlib.md5(f'{session_id}_{time.time()}'.encode()).hexdigest()[:12]}"
+    created = int(time.time())
 
-        initial_state = _build_initial_state(request, session_id, user_query)
+    user_query = _clean_user_query(_extract_user_query(request.messages))
 
-        sentence_buffer = SentenceBuffer(
-            max_chars=SENTENCE_BUFFER_MAX_CHARS,
-            max_wait_seconds=SENTENCE_BUFFER_MAX_WAIT_SECONDS,
-            # comma_split_threshold=SENTENCE_BUFFER_COMMA_SPLIT_THRESHOLD
-        )
+    initial_state = _build_initial_state(request, session_id, user_query)
 
-        finish_chunk_data = _build_finish_chunk_data(chat_id, created, request.model, user_query)
+    sentence_buffer = SentenceBuffer(
+        max_chars=SENTENCE_BUFFER_MAX_CHARS,
+        max_wait_seconds=SENTENCE_BUFFER_MAX_WAIT_SECONDS,
+        # comma_split_threshold=SENTENCE_BUFFER_COMMA_SPLIT_THRESHOLD
+    )
 
-        chunk_sequence = 0
+    finish_chunk_data = _build_finish_chunk_data(chat_id, created, request.model, user_query)
 
-        chunk_sequence += 1
-        user_query_chunk_data = {
-            "id": chat_id,
-            "object": "chat.completion.chunk",
-            "created": created,
-            "model": request.model,
-            "user_message": user_query,
-            "messages": [
-                {"role": msg.role, "content": msg.content} for msg in request.messages
-            ],
-        }
-        await save_stream_chunk(
-            db, chat_id, chunk_sequence, session_id, request.user_id,
-            request.employee_id, "user_query", user_query_chunk_data
-        )
+    chunk_sequence = 0
 
-        role_chunk_data = {
-            "id": chat_id,
-            "object": "chat.completion.chunk",
-            "created": created,
-            "model": request.model,
-            "choices": [
-                {
-                    "index": 0,
-                    "delta": {"role": "assistant", "content": ""},
-                    "finish_reason": None,
-                }
-            ],
-        }
+    chunk_sequence += 1
+    user_query_chunk_data = {
+        "id": chat_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": request.model,
+        "user_message": user_query,
+        "messages": [
+            {"role": msg.role, "content": msg.content} for msg in request.messages
+        ],
+    }
+    await save_stream_chunk(
+        db, chat_id, chunk_sequence, session_id, request.user_id,
+        request.employee_id, "user_query", user_query_chunk_data
+    )
 
-        chunk_sequence += 1
-        await save_stream_chunk(
-            db, chat_id, chunk_sequence, session_id, request.user_id,
-            request.employee_id, "role", role_chunk_data
-        )
-
-        yield json.dumps(role_chunk_data)
-
-        final_state = None
-        current_state = initial_state.copy()
-        model_name = request.model
-
-        async for event in conversation_workflow.workflow.astream(initial_state, stream_mode="updates"):
-            node_name = list(event.keys())[0] if event else None
-            state_update = event.get(node_name, {}) if node_name else {}
-
-            # DEBUG: 打印事件结构
-            logger.debug(f"Event | node={node_name} | state_update_keys={list(state_update.keys())}")
-
-            if state_update:
-                current_state.update(state_update)
-
-            # 当到达 generate_answer 节点时，开始流式输出
-            if node_name == "generate_answer":
-                streaming_type = current_state.get("streaming_type")
-                revise_llm = await get_revise_llm()
-
-                # DEBUG: 打印当前状态中的关键字段
-                logger.debug(
-                    f"generate_answer state | streaming_type={streaming_type} | "
-                    f"has_streaming_llm={current_state.get('streaming_llm') is not None} | "
-                    f"intent={current_state.get('intent')} | "
-                    f"all_keys={list(current_state.keys())}"
-                )
-
-                logger.info(
-                    f"Streaming configured | type={streaming_type} | "
-                    f"intent={current_state.get('intent')} | "
-                    f"web_search_used={current_state.get('web_search_used', False)}"
-                )
-
-                # 检查是否有预生成的答案（direct_match）
-                existing_answer = current_state.get("final_answer", "")
-                direct_match = current_state.get("direct_match")
-                # 先不做预生产答案
-                
-                # 根据 streaming_type 选择不同的流式输出方式
-                if streaming_type == "raganything_stream":
-                    # RAGAnything 流式输出
-                    query = current_state.get("raganything_query", current_state.get("user_query", ""))
-                    mode = current_state.get("raganything_mode", "hybrid")
-
-                    logger.info(f"Using RAGAnything stream | query={query[:50]} | mode={mode}")
-
-                    first_token_received = False
-                    full_answer = ""
-
-                    try:
-                        async for chunk in get_raganything_stream(query, mode=mode):
-                            if chunk["type"] == "chunk":
-                                content = chunk["content"]
-
-                                # 跳过 None 内容
-                                if content is None:
-                                    continue
-
-                                if not first_token_received:
-                                    first_token_received = True
-                                    ttfb_ms = int((time.time() - initial_state["workflow_start_time"]) * 1000)
-                                    current_state["ttfb_ms"] = ttfb_ms
-                                    logger.info(f"First RAGAnything token received | ttfb_ms={ttfb_ms}")
-
-                                full_answer += content
-                                segment = sentence_buffer.add(content)
-
-                                if segment:
-                                    chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
-                                        segment, revise_llm, chat_id, created, request.model,
-                                        db, chunk_sequence, session_id, request.user_id,
-                                        request.employee_id, current_state.get("conversation_id"),
-                                        log_prefix="RAGAnything"
-                                    )
-                                    yield json.dumps(chunk_data)
-
-                            elif chunk["type"] == "sources_info":
-                                logger.info(f"RAGAnything sources info | {chunk['content']}")
-                            elif chunk["type"] == "sources":
-                                logger.info(f"RAGAnything sources received | entities={len(chunk['content'].get('entities', []))}")
-                            elif chunk["type"] == "error":
-                                logger.error(f"RAGAnything error | {chunk['content']}")
-
-                    except Exception as e:
-                        logger.error(f"RAGAnything streaming error | error={str(e)}", exc_info=True)
-                        # 如果 RAGAnything 失败，记录错误但继续处理
-                        full_answer = f"[RAGAnything 服务暂时不可用，错误：{str(e)}]"
-                        # 添加一个占位符响应
-                        chunk_data = _build_token_chunk_data(chat_id, created, request.model, full_answer)
-                        yield json.dumps(chunk_data)
-
-                    # 刷新 buffer 中剩余内容
-                    final_segment = await sentence_buffer.flush(is_final=True)
-                    if final_segment:
-                        chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
-                            final_segment.content, revise_llm, chat_id, created, request.model,
-                            db, chunk_sequence, session_id, request.user_id,
-                            request.employee_id, current_state.get("conversation_id"),
-                            log_prefix="RAGAnything FinalSegment"
-                        )
-                        yield json.dumps(chunk_data)
-
-                    final_state = current_state
-                    final_state["final_answer"] = full_answer
-
-                elif streaming_type == "langchain_llm":
-                    # LangChain LLM 流式输出（原有逻辑）
-                    streaming_llm = current_state.get("streaming_llm")
-                    messages = current_state.get("streaming_messages")
-
-                    if not streaming_llm or not messages:
-                        logger.error("streaming_llm or messages not configured for langchain_llm type")
-                        continue
-
-                    logger.info(f"Using LangChain LLM stream | model={model_name}")
-
-                    first_token_received = False
-                    full_answer = ""
-
-                    async for chunk in streaming_llm.astream(messages):
-                        token = chunk.content
-                        if token:
-                            if not first_token_received:
-                                first_token_received = True
-                                ttfb_ms = int((time.time() - initial_state["workflow_start_time"]) * 1000)
-                                current_state["ttfb_ms"] = ttfb_ms
-                                logger.info(f"First LLM token received | ttfb_ms={ttfb_ms}")
-                            full_answer += token
-
-                            segment = sentence_buffer.add(token)
-
-                            token_len = len(token)
-                            buffer_len = sentence_buffer.get_buffer_length()
-                            if segment or ('$$' in token[:10]):
-                                logger.warning(
-                                    f"[STREAMING] token_len={token_len}, buffer_len={buffer_len}, "
-                                    f"has_segment={bool(segment)}, token_preview={repr(token[:50])}, "
-                                    f"buffer_start={repr(sentence_buffer.buffer[:30])}, buffer_end={repr(sentence_buffer.buffer[-30:])}"
-                                )
-
-                            if segment:
-                                chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
-                                    segment, revise_llm, chat_id, created, request.model,
-                                    db, chunk_sequence, session_id, request.user_id,
-                                    request.employee_id, current_state.get("conversation_id"),
-                                    log_prefix=""
-                                )
-                                yield json.dumps(chunk_data)
-
-                    final_segment = await sentence_buffer.flush(is_final=True)
-                    if final_segment:
-                        chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
-                            final_segment.content, revise_llm, chat_id, created, request.model,
-                            db, chunk_sequence, session_id, request.user_id,
-                            request.employee_id, current_state.get("conversation_id"),
-                            log_prefix="FinalSegment"
-                        )
-                        yield json.dumps(chunk_data)
-
-                    final_state = current_state
-                    final_state["final_answer"] = full_answer
-
-                # 注意：不在这里 break，让 workflow 自然继续到 save_conversation
-
-        if final_state is None:
-            final_state = current_state
-
-        sources = format_sources(
-            retrieved_docs=final_state.get("retrieved_docs", []),
-            web_search_results=final_state.get("web_search_results", []),
-        )
-
-        _update_finish_chunk_metadata(finish_chunk_data, final_state, user_query, model_name, sources)
-
-        chunk_sequence += 1
-        await save_stream_chunk(
-            db, chat_id, chunk_sequence, session_id, request.user_id,
-            request.employee_id, "done", finish_chunk_data,
-            final_state.get("conversation_id", "")
-        )
-
-        yield json.dumps(finish_chunk_data)
-        yield "[DONE]"
-
-    except Exception as e:
-        logger.error(f"OpenAI stream v1 generation error | error={str(e)}", exc_info=True)
-
-        error_chunk_data = {
-            "error": {
-                "message": str(e),
-                "type": "server_error",
-                "code": "internal_error",
+    role_chunk_data = {
+        "id": chat_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": request.model,
+        "choices": [
+            {
+                "index": 0,
+                "delta": {"role": "assistant", "content": ""},
+                "finish_reason": None,
             }
-        }
+        ],
+    }
 
-        try:
-            db = await get_database()
-            chunk_sequence += 1
-            await save_stream_chunk(
-                db, chat_id, chunk_sequence, session_id, request.user_id,
-                request.employee_id, "error", error_chunk_data
+    chunk_sequence += 1
+    await save_stream_chunk(
+        db, chat_id, chunk_sequence, session_id, request.user_id,
+        request.employee_id, "role", role_chunk_data
+    )
+
+    yield json.dumps(role_chunk_data)
+
+    final_state = None
+    current_state = initial_state.copy()
+    model_name = request.model
+
+    async for event in conversation_workflow.workflow.astream(initial_state, stream_mode="updates"):
+        node_name = list(event.keys())[0] if event else None
+        state_update = event.get(node_name, {}) if node_name else {}
+
+        # DEBUG: 打印事件结构
+        logger.debug(f"Event | node={node_name} | state_update_keys={list(state_update.keys())}")
+
+        if state_update:
+            current_state.update(state_update)
+
+        # 当到达 generate_answer 节点时，开始流式输出
+        if node_name == "generate_answer":
+            streaming_type = current_state.get("streaming_type")
+            revise_llm = await get_revise_llm()
+
+            # DEBUG: 打印当前状态中的关键字段
+            logger.debug(
+                f"generate_answer state | streaming_type={streaming_type} | "
+                f"has_streaming_llm={current_state.get('streaming_llm') is not None} | "
+                f"intent={current_state.get('intent')} | "
+                f"all_keys={list(current_state.keys())}"
             )
-        except Exception as db_error:
-            logger.error(f"Failed to save error chunk to DB | error={str(db_error)}", exc_info=True)
 
-        yield json.dumps(error_chunk_data)
+            logger.info(
+                f"Streaming configured | type={streaming_type} | "
+                f"intent={current_state.get('intent')} | "
+                f"web_search_used={current_state.get('web_search_used', False)}"
+            )
+
+            # 检查是否有预生成的答案（direct_match）
+            existing_answer = current_state.get("final_answer", "")
+            direct_match = current_state.get("direct_match")
+            # 先不做预生产答案
+            
+            # 根据 streaming_type 选择不同的流式输出方式
+            if streaming_type == "raganything_stream":
+                # RAGAnything 流式输出
+                query = current_state.get("raganything_query", current_state.get("user_query", ""))
+                mode = current_state.get("raganything_mode", "hybrid")
+
+                logger.info(f"Using RAGAnything stream | query={query[:50]} | mode={mode}")
+
+                first_token_received = False
+                full_answer = ""
+
+                async for chunk in get_raganything_stream(query, mode=mode):
+                    if chunk["type"] == "chunk":
+                        content = chunk["content"]
+
+                        # 跳过 None 内容
+                        if content is None:
+                            continue
+
+                        if not first_token_received:
+                            first_token_received = True
+                            ttfb_ms = int((time.time() - initial_state["workflow_start_time"]) * 1000)
+                            current_state["ttfb_ms"] = ttfb_ms
+                            logger.info(f"First RAGAnything token received | ttfb_ms={ttfb_ms}")
+
+                        full_answer += content
+                        segment = sentence_buffer.add(content)
+
+                        if segment:
+                            chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
+                                segment, revise_llm, chat_id, created, request.model,
+                                db, chunk_sequence, session_id, request.user_id,
+                                request.employee_id, current_state.get("conversation_id"),
+                                log_prefix="RAGAnything"
+                            )
+                            yield json.dumps(chunk_data)
+
+                    elif chunk["type"] == "sources_info":
+                        logger.info(f"RAGAnything sources info | {chunk['content']}")
+                    elif chunk["type"] == "sources":
+                        logger.info(f"RAGAnything sources received | entities={len(chunk['content'].get('entities', []))}")
+                    elif chunk["type"] == "error":
+                        logger.error(f"RAGAnything error | {chunk['content']}")
+
+                # 刷新 buffer 中剩余内容
+                final_segment = await sentence_buffer.flush(is_final=True)
+                if final_segment:
+                    chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
+                        final_segment.content, revise_llm, chat_id, created, request.model,
+                        db, chunk_sequence, session_id, request.user_id,
+                        request.employee_id, current_state.get("conversation_id"),
+                        log_prefix="RAGAnything FinalSegment"
+                    )
+                    yield json.dumps(chunk_data)
+
+                final_state = current_state
+                final_state["final_answer"] = full_answer
+
+            elif streaming_type == "langchain_llm":
+                # LangChain LLM 流式输出（原有逻辑）
+                streaming_llm = current_state.get("streaming_llm")
+                messages = current_state.get("streaming_messages")
+
+                if not streaming_llm or not messages:
+                    logger.error("streaming_llm or messages not configured for langchain_llm type")
+                    continue
+
+                logger.info(f"Using LangChain LLM stream | model={model_name}")
+
+                first_token_received = False
+                full_answer = ""
+
+                async for chunk in streaming_llm.astream(messages):
+                    token = chunk.content
+                    if token:
+                        if not first_token_received:
+                            first_token_received = True
+                            ttfb_ms = int((time.time() - initial_state["workflow_start_time"]) * 1000)
+                            current_state["ttfb_ms"] = ttfb_ms
+                            logger.info(f"First LLM token received | ttfb_ms={ttfb_ms}")
+                        full_answer += token
+
+                        segment = sentence_buffer.add(token)
+
+                        token_len = len(token)
+                        buffer_len = sentence_buffer.get_buffer_length()
+                        if segment or ('$$' in token[:10]):
+                            logger.warning(
+                                f"[STREAMING] token_len={token_len}, buffer_len={buffer_len}, "
+                                f"has_segment={bool(segment)}, token_preview={repr(token[:50])}, "
+                                f"buffer_start={repr(sentence_buffer.buffer[:30])}, buffer_end={repr(sentence_buffer.buffer[-30:])}"
+                            )
+
+                        if segment:
+                            chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
+                                segment, revise_llm, chat_id, created, request.model,
+                                db, chunk_sequence, session_id, request.user_id,
+                                request.employee_id, current_state.get("conversation_id"),
+                                log_prefix=""
+                            )
+                            yield json.dumps(chunk_data)
+
+                final_segment = await sentence_buffer.flush(is_final=True)
+                if final_segment:
+                    chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
+                        final_segment.content, revise_llm, chat_id, created, request.model,
+                        db, chunk_sequence, session_id, request.user_id,
+                        request.employee_id, current_state.get("conversation_id"),
+                        log_prefix="FinalSegment"
+                    )
+                    yield json.dumps(chunk_data)
+
+                final_state = current_state
+                final_state["final_answer"] = full_answer
+
+    if final_state is None:
+        final_state = current_state
+
+    sources = format_sources(
+        retrieved_docs=final_state.get("retrieved_docs", []),
+        web_search_results=final_state.get("web_search_results", []),
+    )
+
+    _update_finish_chunk_metadata(finish_chunk_data, final_state, user_query, model_name, sources)
+
+    chunk_sequence += 1
+    await save_stream_chunk(
+        db, chat_id, chunk_sequence, session_id, request.user_id,
+        request.employee_id, "done", finish_chunk_data,
+        final_state.get("conversation_id", "")
+    )
+
+    yield json.dumps(finish_chunk_data)
+    yield "[DONE]"

@@ -84,7 +84,8 @@ venv/bin/python -m pip install -r ai-service/requirements.txt
 source venv/bin/activate
 pip install -r ai-service/requirements.txt
 # 安装 RAG-Anything 
-(morphe) zj@zj-jg:~/RAG-Anything$ pip install -e .
+cd RAG-Anything
+pip install -e .
 ```
 
 ### 2. 启动数据库服务
