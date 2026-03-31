@@ -97,9 +97,29 @@ docker-compose up -d mongodb elasticsearch chroma
 
 ### 3. 运行开发服务器
 
+**方式一：使用启动脚本（推荐）**
+
+```bash
+# 启动服务（后台运行）
+./start_ai_service.sh start
+
+# 查看服务状态
+./start_ai_service.sh status
+
+# 查看实时日志
+./start_ai_service.sh logs
+
+# 停止服务
+./start_ai_service.sh stop
+
+# 重启服务
+./start_ai_service.sh restart
+```
+
+**方式二：手动启动**
+
 ```bash
 cd ai-service
-
 
 # 使用项目 Python 解释器
 /home/zj/miniconda3/envs/morphe/bin/python -m uvicorn main:app --reload --host 0.0.0.0 --port 8100
