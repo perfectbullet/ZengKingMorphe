@@ -184,21 +184,22 @@ async def _process_segment_for_output(
     display_content = normalize_latex_formulas(segment)
 
     if has_latex_formula(display_content):
-        logger.info(f"[{log_prefix}公式转换] 转换前长度={len(display_content)}, 转换前={repr(display_content)}")
+        logger.info(f"[{log_prefix} 公式转换] 转换前长度={len(display_content)}, 转换前={repr(display_content)}")
         voice_content = await convert_formula_to_voice(display_content, revise_llm)
-        logger.info(f"[{log_prefix}公式转换] 转换后长度={len(voice_content)}, 转换后={repr(voice_content)}")
+        logger.info(f"[{log_prefix} 公式转换] 转换后长度={len(voice_content)}, 转换后={repr(voice_content)}")
     elif _has_math_symbols_simple(display_content):
-        logger.info(f"[{log_prefix}数学句子转换] 转换前长度={len(display_content)}, 转换前={repr(display_content)}")
+        logger.info(f"[{log_prefix} 数学句子转换] 转换前长度={len(display_content)}, 转换前={repr(display_content)}")
         voice_content = await convert_math_sentence_to_voice(display_content, revise_llm)
-        logger.info(f"[{log_prefix}数学句子转换] 转换后长度={len(voice_content)}, 转换后={repr(voice_content)}")
+        logger.info(f"[{log_prefix} 数学句子转换] 转换后长度={len(voice_content)}, 转换后={repr(voice_content)}")
     else:
+        logger.info(f"{log_prefix}没有公式: {display_content}")
         voice_content = display_content
 
     # Strip markdown formatting from voice_content for TTS
     # (display_content retains original markdown formatting for display)
+    logger.info(f"[{log_prefix} 语音voice_content markdown清理前: {repr(voice_content)}")
     voice_content = strip_markdown_for_tts(voice_content)
-    logger.info(f"[{log_prefix}markdown清理] , markdown清理={repr(voice_content)}")
-    
+    logger.info(f"[{log_prefix} 语音voice_content markdown清理后: {repr(voice_content)}")
     return display_content, voice_content
 
 def _build_token_chunk_data(
