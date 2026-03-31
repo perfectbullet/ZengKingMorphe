@@ -29,6 +29,7 @@ from app.services.revise_llm import (
 from app.utils.latex import normalize_latex_formulas
 from app.utils.sentence_buffer import SentenceBuffer, has_latex_formula
 from app.utils.tts_formatter import strip_markdown_for_tts
+from app.utils.text_mapping import map_english_to_chinese
 from app.services.raganything_wrapper import get_raganything_stream
 logger = get_logger(__name__)
 
@@ -182,6 +183,10 @@ async def _process_segment_for_output(
         )
 
     display_content = normalize_latex_formulas(segment)
+
+    # 英文到中文映射（处理 RAGAnything LLM 可能返回的英文回复）
+    display_content = map_english_to_chinese(display_content)
+
 
     if has_latex_formula(display_content):
         logger.info(f"[{log_prefix} 公式转换] 转换前长度={len(display_content)}, 转换前={repr(display_content)}")
