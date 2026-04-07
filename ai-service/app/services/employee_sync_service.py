@@ -127,42 +127,43 @@ class EmployeeSyncService:
         """构建员工配置文档
 
         注意：保存到 MongoDB 时 employee_id 必须是字符串
+        使用 or 模式确保 None 值也能正确处理
         """
         # API 返回的 id 转为字符串用于 MongoDB 存储
-        employee_id_str = str(employee_data.get("id", employee_id))
+        employee_id_str = str(employee_data.get("id") or employee_id)
         return DigitalEmployeeConfigModel(
             employee_id=employee_id_str,
-            team_id=employee_data.get("teamId", 0),
-            name=employee_data.get("name", ""),
-            position=employee_data.get("position"),
-            employee_type=employee_data.get("type", "FULL"),
-            tone=employee_data.get("tone", "elegant"),
-            language=employee_data.get("language", "mandarin"),
-            gender=employee_data.get("gender", 0),
-            intro=employee_data.get("intro"),
-            portrait=employee_data.get("portrait"),
-            model_image=employee_data.get("modelImage"),
-            digital_code=employee_data.get("digitalCode"),
-            onduty_status=employee_data.get("ondutyStatus", 0),
-            create_time=employee_data.get("createTime", ""),
-            update_time=employee_data.get("updateTime", ""),
+            team_id=employee_data.get("teamId") or 0,
+            name=employee_data.get("name") or "",
+            position=employee_data.get("position") or "",
+            employee_type=employee_data.get("type") or "FULL",
+            tone=employee_data.get("tone") or "elegant",
+            language=employee_data.get("language") or "mandarin",
+            gender=employee_data.get("gender") or 0,
+            intro=employee_data.get("intro") or "",
+            portrait=employee_data.get("portrait") or "",
+            model_image=employee_data.get("modelImage") or "",
+            digital_code=employee_data.get("digitalCode") or "",
+            onduty_status=employee_data.get("ondutyStatus") or 0,
+            create_time=employee_data.get("createTime") or "",
+            update_time=employee_data.get("updateTime") or "",
         )
 
     def _build_setting_doc(self, employee_id: str, setting_data: Dict[str, Any]) -> DigitalEmployeeConfigSettingModel:
         """构建员工设置文档"""
-        knowledge = setting_data.get("knowledge", {})
-        prologue = setting_data.get("prologue", {})
-        rule = setting_data.get("rule", {})
-        chat_rule = rule.get("chatRule", {})
-        unusual_rule = rule.get("unusualRule", {})
+        knowledge = setting_data.get("knowledge") or {}
+        prologue = setting_data.get("prologue") or {}
+        rule = setting_data.get("rule") or {}
+        chat_rule = rule.get("chatRule") or {}
+        unusual_rule = rule.get("unusualRule") or {}
         # 处理 llmReply 可能为 None 的情况
-        llm_reply = (unusual_rule.get("llmReply") or {}) if unusual_rule else {}
-        safe_rule = rule.get("safeRule", {})
-        role = setting_data.get("role", {})
+        llm_reply = unusual_rule.get("llmReply") or {}
+        safe_rule = rule.get("safeRule") or {}
+        role = setting_data.get("role") or {}
 
         # 从 ragDatasets 提取 kb_ids
         kb_ids = []
-        for dataset in knowledge.get("ragDatasets", []):
+        for dataset in knowledge.get("ragDatasets") or []:
             if dataset.get("isEnable") == 1:
                 rag_id = dataset.get("ragDatasetId")
                 if rag_id:
@@ -170,30 +171,30 @@ class EmployeeSyncService:
 
         return DigitalEmployeeConfigSettingModel(
             employee_id=employee_id,
-            update_time=setting_data.get("updateTime", ""),
+            update_time=setting_data.get("updateTime") or "",
             knowledge_kb_ids=kb_ids,
-            prologue_prologue=prologue.get("prologue"),
-            prologue_is_opening_questions=prologue.get("isOpeningQuestions", False),
-            prologue_question_type=prologue.get("questionType", 1),
-            prologue_hot_questions=prologue.get("myQuestions", []),
-            chat_rule_is_multimodal=chat_rule.get("isMultiModal", False),
-            chat_rule_fixed_answer=chat_rule.get("fixedAnswer"),
-            chat_rule_faq_sim_threshold=chat_rule.get("faqSimThreshold", 0.0),
-            chat_rule_faq_top_k=chat_rule.get("faqTopK", 1),
-            unusual_rule_exception_reply=unusual_rule.get("excepitonReply"),
+            prologue_prologue=prologue.get("prologue") or "",
+            prologue_is_opening_questions=prologue.get("isOpeningQuestions") or False,
+            prologue_question_type=prologue.get("questionType") or 1,
+            prologue_hot_questions=prologue.get("myQuestions") or [],
+            chat_rule_is_multimodal=chat_rule.get("isMultiModal") or False,
+            chat_rule_fixed_answer=chat_rule.get("fixedAnswer") or "",
+            chat_rule_faq_sim_threshold=chat_rule.get("faqSimThreshold") or 0.0,
+            chat_rule_faq_top_k=chat_rule.get("faqTopK") or 1,
+            unusual_rule_exception_reply=unusual_rule.get("excepitonReply") or "",
             unusual_rule_not_match_reply_type=unusual_rule.get("notMatchReplyType"),
-            unusual_rule_fixed_replys=unusual_rule.get("fixedReplys", []),
-            unusual_rule_is_web_search=llm_reply.get("isWebSearch", False),
-            unusual_rule_is_show_sign=llm_reply.get("isShowSign", False),
-            unusual_rule_is_my_prompt=llm_reply.get("isMyPrompt", False),
-            unusual_rule_my_prompt=llm_reply.get("myPrompt"),
-            safe_rule_is_reject_answer=safe_rule.get("isRejectAnswer", False),
-            safe_rule_reject_answer=safe_rule.get("rejectAnswer"),
-            role_persona=role.get("persona"),
-            role_style=role.get("style"),
-            role_style_desc=role.get("styleDesc"),
-            plugins=self._extract_plugins(setting_data.get("plugins", [])),
-            major_bank_ids=self._extract_major_banks(setting_data.get("majorWord", {})),
+            unusual_rule_fixed_replys=unusual_rule.get("fixedReplys") or [],
+            unusual_rule_is_web_search=llm_reply.get("isWebSearch") or False,
+            unusual_rule_is_show_sign=llm_reply.get("isShowSign") or False,
+            unusual_rule_is_my_prompt=llm_reply.get("isMyPrompt") or False,
+            unusual_rule_my_prompt=llm_reply.get("myPrompt") or "",
+            safe_rule_is_reject_answer=safe_rule.get("isRejectAnswer") or False,
+            safe_rule_reject_answer=safe_rule.get("rejectAnswer") or "",
+            role_persona=role.get("persona") or "",
+            role_style=role.get("style") or "",
+            role_style_desc=role.get("styleDesc") or "",
+            plugins=self._extract_plugins(setting_data.get("plugins") or []),
+            major_bank_ids=self._extract_major_banks(setting_data.get("majorWord") or {}),
         )
 
     def _extract_plugins(self, plugins_data: list) -> List[Dict[str, Any]]:

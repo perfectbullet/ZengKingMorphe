@@ -7,7 +7,6 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status, Path, Query
 from app.models.schemas import SessionResponse, CreateSessionRequest
 from app.services.employee_sync_service import EmployeeSyncService
-from app.api.middleware.auth import get_api_key
 from app.core.database import get_database
 from app.core.logging import get_logger
 
@@ -22,7 +21,6 @@ employee_sync_service = EmployeeSyncService()
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def create_session(
     request: CreateSessionRequest,
-    api_key: str = Depends(get_api_key),
     db=Depends(get_database)
 ):
     """
@@ -140,7 +138,6 @@ async def create_session(
 @router.get("/{session_id}", response_model=SessionResponse)
 async def get_session(
     session_id: str = Path(..., description="Session ID"),
-    api_key: str = Depends(get_api_key),
     db = Depends(get_database)
 ):
     """
@@ -192,7 +189,6 @@ async def get_session(
 @router.delete("/{session_id}")
 async def end_session(
     session_id: str = Path(..., description="Session ID"),
-    api_key: str = Depends(get_api_key),
     db = Depends(get_database)
 ):
     """
@@ -246,7 +242,6 @@ async def get_session_conversations(
     session_id: str = Path(..., description="Session ID"),
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(50, ge=1, le=200, description="Page size"),
-    api_key: str = Depends(get_api_key),
     db = Depends(get_database)
 ):
     """
