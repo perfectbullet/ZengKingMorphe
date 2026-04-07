@@ -10,10 +10,6 @@ from app.models.schemas import CreateEmployeeRequest, UpdateEmployeeRequest, Res
 from app.api.middleware.auth import get_api_key
 from app.core.database import get_database
 from app.core.logging import get_logger
-# from app.services.dataset_faq_service import faq_processor
-# from app.services.task_processor import task_processor
-# from app.services.thesaurus_major_service import thesaurus_major_processor
-# from app.services.thesaurus_sensitive_service import thesaurus_sensitive_processor
 
 logger = get_logger(__name__)
 

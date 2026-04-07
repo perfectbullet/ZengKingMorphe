@@ -26,7 +26,10 @@ try:
         
         # Initialize search tool
         try:
-            search_tool = TavilySearchResults(k=settings.web_search_max_results)
+            search_tool = TavilySearchResults(
+                k=settings.web_search_max_results,
+                search_depth="basic",  # 添加此参数
+                )
             print("✅ TavilySearchResults initialized successfully")
         except Exception as e:
             print(f"❌ Failed to initialize TavilySearchResults: {e}")

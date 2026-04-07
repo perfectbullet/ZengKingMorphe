@@ -4,6 +4,8 @@ Session management API endpoints.
 import hashlib
 import httpx
 import os
+import json
+from pathlib import Path
 from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Path, Query
@@ -27,42 +29,7 @@ async def fetch_external_employee_data(employee_id: str) -> Optional[dict]:
         
     Returns:
         外部API返回的data字段数据，或None（失败时）
-    """
-    # 🔧 测试模式：如果是 hutao，直接加载本地测试数据
-    if employee_id == "hutao":
-        try:
-            import json
-            from pathlib import Path
-            
-            test_data_file = Path(__file__).parent.parent.parent.parent / "outer_api_docs" / "按员工id返回的数据-hutao.json"
-            logger.info(f"🧪 Using local test data for hutao: {test_data_file}")
-            
-            with open(test_data_file, "r", encoding="utf-8") as f:
-                test_data = json.load(f)
-            
-            # 使用 Pydantic 模型解析，保持与API模式一致
-            api_response = ExternalEmployeeAPIResponse(**test_data)
-            
-            if not api_response.success:
-                logger.warning(f"Test data indicates failure: status={api_response.status}")
-                return None
-            
-            faq_count = len(api_response.data.setting.knowledge.faqs)
-            logger.info(f"✅ Successfully loaded hutao test data: {faq_count} FAQs")
-            
-            # 返回 model_dump() 结果，自动转换为下划线命名
-            return api_response.data.model_dump()
-                
-        except FileNotFoundError:
-            logger.error(f"❌ Test data file not found: {test_data_file}")
-            return None
-        except json.JSONDecodeError as e:
-            logger.exception(f"❌ Test data JSON decode error: {test_data_file}")
-            return None
-        except Exception as e:
-            logger.exception(f"❌ Failed to load test data: {test_data_file}")
-            return None
-    
+    """ 
     # 从环境变量读取外部API地址
     external_api_url = os.getenv(
         "EXTERNAL_EMPLOYEE_API_URL",
@@ -99,6 +66,7 @@ async def fetch_external_employee_data(employee_id: str) -> Optional[dict]:
             f"外部API HTTP请求失败！\n"
             f"API URL: {external_api_url}\n"
             f"Employee ID: {employee_id}"
+            f"error_message: {error_message}"
         )
         return None
     except Exception as e:
@@ -169,7 +137,7 @@ async def sync_digital_employee_config(db, request_employee_id: str, external_da
             kb_ids=kb_ids,
             faq_count=len(setting_info["knowledge"]["faqs"]),
             # Prologue configuration
-            prologue=prologue_config.get("prologue"),
+            prologue=prologue_config.get("prologue", {}),
             is_opening_questions=prologue_config.get("is_opening_questions", False),
             hot_questions=hot_questions,
             # Chat rules
@@ -327,26 +295,16 @@ async def create_session(
         logger.info(f"Create session request: user_id={request.user_id}, employee_id={request.employee_id}")
         
         # Step 1: Fetch external employee data
-        # external_data = await fetch_external_employee_data(request.employee_id)
-        #
-        # if external_data:
-        #     # Step 2: 同步数字员工配置、FAQs到MongoDB
-        #     synced_employee_id = await sync_digital_employee_config(db, request.employee_id, external_data)
-        #
-        #     if synced_employee_id:
-        #         # Step 3: Trigger FAQ vectorization task (async background)
-        #         from app.services.task_processor import task_processor
-        #
-        #         faqs_count = len(external_data["setting"]["knowledge"]["faqs"])
-        #
-        #         if faqs_count > 0:
-        #             employee_name = external_data["employee"]["name"]
-        #             # task_id = await task_processor.submit_faq_vectorization_task_by_employee_id(
-        #             #     employee_id=synced_employee_id
-        #             # )
-        #             # logger.info(f"FAQ vectorization task submitted: task_id={task_id}, employee_id={synced_employee_id} ({employee_name}), faq_count={faqs_count}")
-        # else:
-        #     logger.warning(f"Failed to fetch external employee data for {request.employee_id}, using existing config")
+        external_data = await fetch_external_employee_data(request.employee_id)
+        
+        if external_data:
+            # Step 2: 同步数字员工配置、FAQs到MongoDB
+            synced_employee_id = await sync_digital_employee_config(db, request.employee_id, external_data)
+        
+            if synced_employee_id:
+                logger.info(f"fetch external employee data synced_employee_id {synced_employee_id}")
+        else:
+            logger.warning(f"Failed to fetch external employee data for {request.employee_id}, using existing config")
         
         # Step 4: Check if employee exists (either from sync or existing)
         employee = await db.digital_employee_configs.find_one({"employee_id": request.employee_id})
@@ -401,7 +359,7 @@ async def create_session(
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception("Failed to create session")
+        logger.exception(e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create session"

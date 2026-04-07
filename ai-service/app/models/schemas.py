@@ -661,9 +661,8 @@ class EmployeeSettingConfig(BaseModel):
     prologue: ExternalPrologueConfig = Field(..., description="对话开始--开场白配置")
     rule: ExternalRuleConfig = Field(..., description="对话中--规则规则、异常或未匹配规则、安全规则配置")
     role: ExternalRoleConfig = Field(..., description="角色--人设配置")
-    plugins: str = Field(..., description="高级设置--插件配置")
-    major_word: str = Field(..., description="高级设置--专业词库配置")
-
+    plugins: Optional[Union[str, List]] = Field(None, description="高级设置--插件配置")
+    major_word: Optional[str] = Field(None, description="高级设置--专业词库配置")
     model_config = ConfigDict(populate_by_name=True)
 
 

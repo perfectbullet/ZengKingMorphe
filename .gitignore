@@ -65,3 +65,5 @@ data/output/
 ai-service/.env-for-233
 *.pyc
 josn格式数据
+ai-service/.env-for-233-new
+get.json

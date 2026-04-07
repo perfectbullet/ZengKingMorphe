@@ -72,40 +72,40 @@ services:
       start_period: 180s
 
   # BGE-Large: 中文文本嵌入模型 (Embedding)
-  bge-large:
-    image: docker.m.daocloud.io/vllm/vllm-openai:v0.11.0
-    container_name: bge-large
-    restart: unless-stopped
-    ports:
-      - "8093:8093"
-    volumes:
-      - ./models/BAAI/BGE-large:/model/BAAI/BGE-large:ro
-    environment:
-      - NVIDIA_VISIBLE_DEVICES=0
-    command: >
-      --model /model/BAAI/BGE-large
-      --task embed
-      --served-model-name BAAI/BGE-large
-      --max-model-len 512
-      --host 0.0.0.0
-      --port 8093
-      --dtype float16
-      --gpu-memory-utilization 0.2
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    runtime: nvidia
-    shm_size: '4gb'
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8093/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 180s
+  # bge-large:
+    # image: docker.m.daocloud.io/vllm/vllm-openai:v0.11.0
+    # container_name: bge-large
+    # restart: unless-stopped
+    # ports:
+    #   - "8093:8093"
+    # volumes:
+    #   - ./models/BAAI/BGE-large:/model/BAAI/BGE-large:ro
+    # environment:
+    #   - NVIDIA_VISIBLE_DEVICES=0
+    # command: >
+    #   --model /model/BAAI/BGE-large
+    #   --task embed
+    #   --served-model-name BAAI/BGE-large
+    #   --max-model-len 512
+    #   --host 0.0.0.0
+    #   --port 8093
+    #   --dtype float16
+    #   --gpu-memory-utilization 0.2
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+    # runtime: nvidia
+    # shm_size: '4gb'
+    # healthcheck:
+    #   test: ["CMD", "curl", "-f", "http://localhost:8093/health"]
+    #   interval: 30s
+    #   timeout: 10s
+    #   retries: 3
+    #   start_period: 180s
 
 networks:
   default:
