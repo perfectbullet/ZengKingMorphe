@@ -382,31 +382,44 @@ async def get_employee(
     db=Depends(get_database),
 ):
     """
-        获取数字员工配置。
+    获取数字员工配置（合并核心信息和设置）。
 
-        \nArgs:
-            \n- employee_id: 数字员工id
-            \n- api_key: API key from auth
-            \n- db: Database instance
+    Args:
+        - employee_id: 数字员工id
+        - api_key: API key from auth
+        - db: Database instance
 
-        \nReturns:
-            \n- Employee configuration
+    Returns:
+        - Employee configuration (merged from configs and settings collections)
     """
     try:
         logger.info(f"get_employee request: employee_id={employee_id}")
 
+        # 查询员工核心信息
         employee = await db.digital_employee_configs.find_one({"employee_id": employee_id})
 
         if not employee:
             return ResponseResult.error(status.HTTP_404_NOT_FOUND, "error",
                                         f"get_employee not found employee_id={employee_id}")
 
-        # Convert MongoDB document to dict
+        # 查询员工设置信息
+        setting = await db.digital_employee_settings.find_one({"employee_id": employee_id})
+
+        # 格式化并合并数据
         employee.pop("_id", None)
         employee["created_at"] = employee["created_at"].isoformat() + "Z"
         employee["updated_at"] = employee["updated_at"].isoformat() + "Z"
         if employee.get("synced_at"):
             employee["synced_at"] = employee["synced_at"].isoformat() + "Z"
+
+        # 合并设置信息
+        if setting:
+            setting.pop("_id", None)
+            if setting.get("updated_at"):
+                setting["updated_at"] = setting["updated_at"].isoformat() + "Z"
+            employee["setting"] = setting
+        else:
+            employee["setting"] = {}
 
         return ResponseResult.success(employee)
 
@@ -470,15 +483,15 @@ async def list_employees(
     db=Depends(get_database),
 ):
     """
-        获取数字员工列表（前N个）。
+    获取数字员工列表（前N个，包含核心信息和设置）。
 
-        \nArgs:
-            \n- limit: 返回的最大数量（默认10，最大100）
-            \n- api_key: API key from auth
-            \n- db: Database instance
+    Args:
+        - limit: 返回的最大数量（默认10，最大100）
+        - api_key: API key from auth
+        - db: Database instance
 
-        \nReturns:
-            \n- Employee list with total count
+    Returns:
+        - Employee list with total count
     """
     try:
         logger.info(f"list_employees request: limit={limit}")
@@ -490,6 +503,12 @@ async def list_employees(
         # 统计总数
         total = await db.digital_employee_configs.count_documents({})
 
+        # 获取所有员工ID，批量查询设置
+        employee_ids = [emp["employee_id"] for emp in employees]
+        settings_cursor = db.digital_employee_settings.find({"employee_id": {"$in": employee_ids}})
+        settings_list = await settings_cursor.to_list(length=len(employee_ids))
+        settings_dict = {s["employee_id"]: s for s in settings_list}
+
         # 格式化返回数据
         result = []
         for emp in employees:
@@ -498,13 +517,24 @@ async def list_employees(
             emp["updated_at"] = emp["updated_at"].isoformat() + "Z"
             if emp.get("synced_at"):
                 emp["synced_at"] = emp["synced_at"].isoformat() + "Z"
+
+            # 合并设置信息
+            setting = settings_dict.get(emp["employee_id"])
+            if setting:
+                setting.pop("_id", None)
+                if setting.get("updated_at"):
+                    setting["updated_at"] = setting["updated_at"].isoformat() + "Z"
+                emp["setting"] = setting
+            else:
+                emp["setting"] = {}
+
             result.append(emp)
 
         data = {
-                "total": total,
-                "count": len(result),
-                "employees": result,
-            }
+            "total": total,
+            "count": len(result),
+            "employees": result,
+        }
         return ResponseResult.success(data)
 
     except Exception as e:
