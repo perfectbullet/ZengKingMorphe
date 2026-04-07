@@ -4,7 +4,7 @@
 """
 import httpx
 import os
-from datetime import datetime
+
 from typing import Optional, Dict, Any, List
 from app.core.logging import get_logger
 from app.models.database import DigitalEmployeeConfigModel, DigitalEmployeeConfigSettingModel
@@ -87,6 +87,9 @@ class EmployeeSyncService:
         注意：保存到 MongoDB 时 employee_id 必须是字符串
         """
         try:
+            # 确保 employee_id 是字符串
+            employee_id = str(employee_id)
+
             employee_data = api_data.get("employee", {})
             setting_data = api_data.get("setting", {})
 
@@ -152,7 +155,8 @@ class EmployeeSyncService:
         rule = setting_data.get("rule", {})
         chat_rule = rule.get("chatRule", {})
         unusual_rule = rule.get("unusualRule", {})
-        llm_reply = unusual_rule.get("llmReply", {}) if unusual_rule else {}
+        # 处理 llmReply 可能为 None 的情况
+        llm_reply = (unusual_rule.get("llmReply") or {}) if unusual_rule else {}
         safe_rule = rule.get("safeRule", {})
         role = setting_data.get("role", {})
 

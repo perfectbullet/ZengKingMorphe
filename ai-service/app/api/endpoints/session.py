@@ -3,7 +3,7 @@ Session management API endpoints.
 """
 import hashlib
 from datetime import datetime
-from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, status, Path, Query
 from app.models.schemas import SessionResponse, CreateSessionRequest
 from app.services.employee_sync_service import EmployeeSyncService

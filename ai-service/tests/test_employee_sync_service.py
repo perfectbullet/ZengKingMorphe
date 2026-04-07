@@ -4,7 +4,6 @@
 """
 import pytest
 from unittest.mock import Mock, patch, AsyncMock
-from app.services.employee_sync_service import EmployeeSyncService
 
 
 # 测试数据 - 模拟 get.json 中 employee_id=29 的响应
@@ -175,12 +174,6 @@ MOCK_API_RESPONSE_43 = {
 
 
 @pytest.fixture
-def service():
-    """创建同步服务实例"""
-    return EmployeeSyncService()
-
-
-@pytest.fixture
 def mock_db():
     """创建模拟数据库"""
     db = Mock()
@@ -197,126 +190,159 @@ def mock_db():
 
 
 @pytest.mark.asyncio
-async def test_sync_employee_29(service, mock_db):
+async def test_sync_employee_29(mock_db):
     """测试同步 employee_id=29"""
-    with patch("httpx.AsyncClient.get") as mock_get:
-        # 设置 mock 响应
-        mock_response = Mock()
-        mock_response.json.return_value = MOCK_API_RESPONSE_29
-        mock_response.raise_for_status = Mock()
-        mock_get.return_value.__aenter__.return_value = mock_response
+    from app.services.employee_sync_service import EmployeeSyncService
 
-        # 执行同步
+    service = EmployeeSyncService()
+
+    # 创建模拟的响应
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = MOCK_API_RESPONSE_29
+    mock_response.raise_for_status = Mock()
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(return_value=mock_response)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("app.services.employee_sync_service.httpx.AsyncClient", return_value=mock_client):
         result = await service.fetch_and_sync("29", mock_db)
 
-        # 验证返回的是字符串
-        assert result == "29"
+    # 验证返回的是字符串
+    assert result == "29"
 
-        # 验证 API 调用时使用的是数字参数
-        mock_get.assert_called_once()
-        call_args = mock_get.call_args
-        assert call_args[1]["params"]["employeeId"] == 29  # 应该是数字，不是字符串
+    # 验证 API 调用时使用的是数字参数
+    assert mock_client.get.called
+    call_args = mock_client.get.call_args
+    assert call_args[1]["params"]["employeeId"] == 29  # 应该是数字，不是字符串
 
-        # 验证 MongoDB 更新被调用
-        assert mock_db.digital_employee_configs.update_one.called
-        assert mock_db.digital_employee_settings.update_one.called
+    # 验证 MongoDB 更新被调用
+    assert mock_db.digital_employee_configs.update_one.called
+    assert mock_db.digital_employee_settings.update_one.called
 
-        # 验证 update_one 的参数
-        config_call = mock_db.digital_employee_configs.update_one.call_args
-        assert config_call[0][0]["employee_id"] == "29"  # MongoDB 查询使用字符串
+    # 验证 update_one 的参数
+    config_call = mock_db.digital_employee_configs.update_one.call_args
+    assert config_call[0][0]["employee_id"] == "29"  # MongoDB 查询使用字符串
 
-        setting_call = mock_db.digital_employee_settings.update_one.call_args
-        assert setting_call[0][0]["employee_id"] == "29"
+    setting_call = mock_db.digital_employee_settings.update_one.call_args
+    assert setting_call[0][0]["employee_id"] == "29"
 
-        # 验证员工数据
-        employee_doc = config_call[0][1]["$set"]
-        assert employee_doc["name"] == "陈晓燕"
-        assert employee_doc["position"] == "校园助教"
-        assert employee_doc["employee_type"] == "FULL"
-        assert employee_doc["gender"] == 2
+    # 验证员工数据
+    employee_doc = config_call[0][1]["$set"]
+    assert employee_doc["name"] == "陈晓燕"
+    assert employee_doc["position"] == "校园助教"
+    assert employee_doc["employee_type"] == "FULL"
+    assert employee_doc["gender"] == 2
 
-        # 验证设置数据
-        setting_doc = setting_call[0][1]["$set"]
-        assert "kb_9abcbe4aa557" in setting_doc["knowledge_kb_ids"]
-        assert setting_doc["chat_rule_is_multimodal"] is True
-        assert setting_doc["safe_rule_is_reject_answer"] is True
-        assert setting_doc["role_persona"] == "你是一个资深客服，懂得使用话术拉进与客户距离"
+    # 验证设置数据
+    setting_doc = setting_call[0][1]["$set"]
+    assert "kb_9abcbe4aa557" in setting_doc["knowledge_kb_ids"]
+    assert setting_doc["chat_rule_is_multimodal"] is True
+    assert setting_doc["safe_rule_is_reject_answer"] is True
+    assert setting_doc["role_persona"] == "你是一个资深客服，懂得使用话术拉进与客户距离"
 
 
 @pytest.mark.asyncio
-async def test_sync_employee_43(service, mock_db):
+async def test_sync_employee_43(mock_db):
     """测试同步 employee_id=43"""
-    with patch("httpx.AsyncClient.get") as mock_get:
-        # 设置 mock 响应
-        mock_response = Mock()
-        mock_response.json.return_value = MOCK_API_RESPONSE_43
-        mock_response.raise_for_status = Mock()
-        mock_get.return_value.__aenter__.return_value = mock_response
+    from app.services.employee_sync_service import EmployeeSyncService
 
-        # 执行同步
+    service = EmployeeSyncService()
+
+    # 创建模拟的响应
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = MOCK_API_RESPONSE_43
+    mock_response.raise_for_status = Mock()
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(return_value=mock_response)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("app.services.employee_sync_service.httpx.AsyncClient", return_value=mock_client):
         result = await service.fetch_and_sync("43", mock_db)
 
-        # 验证返回的是字符串
-        assert result == "43"
+    # 验证返回的是字符串
+    assert result == "43"
 
-        # 验证 API 调用时使用的是数字参数
-        call_args = mock_get.call_args
-        assert call_args[1]["params"]["employeeId"] == 43
+    # 验证员工数据
+    config_call = mock_db.digital_employee_configs.update_one.call_args
+    employee_doc = config_call[0][1]["$set"]
+    assert employee_doc["name"] == "测试员工43"
+    assert employee_doc["employee_type"] == "HALF"
+    assert employee_doc["gender"] == 1
 
-        # 验证员工数据
-        config_call = mock_db.digital_employee_configs.update_one.call_args
-        employee_doc = config_call[0][1]["$set"]
-        assert employee_doc["name"] == "测试员工43"
-        assert employee_doc["employee_type"] == "HALF"
-        assert employee_doc["gender"] == 1
-
-        # 验证设置数据
-        setting_call = mock_db.digital_employee_settings.update_one.call_args
-        setting_doc = setting_call[0][1]["$set"]
-        assert "kb_test123" in setting_doc["knowledge_kb_ids"]
-        assert setting_doc["prologue_hot_questions"] == ["问题1", "问题2"]
-        assert setting_doc["chat_rule_is_multimodal"] is False
-        assert setting_doc["unusual_rule_not_match_reply_type"] == 0
-        assert setting_doc["major_bank_ids"] == ["101", "102"]
-        assert len(setting_doc["plugins"]) == 1
-        assert setting_doc["plugins"][0]["plugin_name"] == "测试插件"
+    # 验证设置数据
+    setting_call = mock_db.digital_employee_settings.update_one.call_args
+    setting_doc = setting_call[0][1]["$set"]
+    assert "kb_test123" in setting_doc["knowledge_kb_ids"]
+    assert setting_doc["prologue_hot_questions"] == ["问题1", "问题2"]
+    assert setting_doc["chat_rule_is_multimodal"] is False
+    assert setting_doc["unusual_rule_not_match_reply_type"] == 0
+    assert setting_doc["major_bank_ids"] == ["101", "102"]
+    assert len(setting_doc["plugins"]) == 1
+    assert setting_doc["plugins"][0]["plugin_name"] == "测试插件"
 
 
 @pytest.mark.asyncio
-async def test_fetch_api_failure(service, mock_db):
+async def test_fetch_api_failure(mock_db):
     """测试 API 调用失败的情况"""
-    with patch("httpx.AsyncClient.get") as mock_get:
-        mock_get.side_effect = Exception("Network error")
+    from app.services.employee_sync_service import EmployeeSyncService
 
+    service = EmployeeSyncService()
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(side_effect=Exception("Network error"))
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("app.services.employee_sync_service.httpx.AsyncClient", return_value=mock_client):
         result = await service.fetch_and_sync("29", mock_db)
 
-        assert result is None
+    assert result is None
 
-        # 验证没有调用 MongoDB 更新
-        assert not mock_db.digital_employee_configs.update_one.called
-        assert not mock_db.digital_employee_settings.update_one.called
+    # 验证没有调用 MongoDB 更新
+    assert not mock_db.digital_employee_configs.update_one.called
+    assert not mock_db.digital_employee_settings.update_one.called
 
 
 @pytest.mark.asyncio
-async def test_api_returns_error(service, mock_db):
+async def test_api_returns_error(mock_db):
     """测试 API 返回错误状态"""
-    with patch("httpx.AsyncClient.get") as mock_get:
-        mock_response = Mock()
-        mock_response.json.return_value = {
-            "status": 400,
-            "message": "Bad Request",
-            "success": False
-        }
-        mock_get.return_value.__aenter__.return_value = mock_response
+    from app.services.employee_sync_service import EmployeeSyncService
 
+    service = EmployeeSyncService()
+
+    # 创建模拟的响应
+    mock_response = Mock()
+    mock_response.status_code = 400
+    mock_response.json.return_value = {
+        "status": 400,
+        "message": "Bad Request",
+        "success": False
+    }
+    mock_response.raise_for_status = Mock()
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(return_value=mock_response)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("app.services.employee_sync_service.httpx.AsyncClient", return_value=mock_client):
         result = await service.fetch_and_sync("29", mock_db)
 
-        assert result is None
+    assert result is None
 
 
-@pytest.mark.asyncio
-async def test_extract_plugins(service):
+def test_extract_plugins():
     """测试插件数据提取"""
+    from app.services.employee_sync_service import EmployeeSyncService
+
+    service = EmployeeSyncService()
+
     plugins_data = [
         {
             "pluginId": 1,
@@ -342,9 +368,12 @@ async def test_extract_plugins(service):
     assert result[1]["plugin_name"] == "测试插件2"
 
 
-@pytest.mark.asyncio
-async def test_extract_major_banks(service):
+def test_extract_major_banks():
     """测试专业词库 ID 提取"""
+    from app.services.employee_sync_service import EmployeeSyncService
+
+    service = EmployeeSyncService()
+
     major_word_data = {
         "majorBanks": [
             {"id": 101},
@@ -361,20 +390,30 @@ async def test_extract_major_banks(service):
 
 
 @pytest.mark.asyncio
-async def test_employee_id_type_conversion(service, mock_db):
+async def test_employee_id_type_conversion(mock_db):
     """测试 employee_id 类型转换"""
-    with patch("httpx.AsyncClient.get") as mock_get:
-        mock_response = Mock()
-        mock_response.json.return_value = MOCK_API_RESPONSE_29
-        mock_response.raise_for_status = Mock()
-        mock_get.return_value.__aenter__.return_value = mock_response
+    from app.services.employee_sync_service import EmployeeSyncService
 
+    service = EmployeeSyncService()
+
+    # 创建模拟的响应
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = MOCK_API_RESPONSE_29
+    mock_response.raise_for_status = Mock()
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(return_value=mock_response)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("app.services.employee_sync_service.httpx.AsyncClient", return_value=mock_client):
         # 使用数字类型调用
         result = await service.fetch_and_sync(29, mock_db)
 
-        assert result == "29"  # 返回的应该是字符串
+    assert result == "29"  # 返回的应该是字符串
 
-        # 验证 API 调用参数是数字
-        call_args = mock_get.call_args
-        assert call_args[1]["params"]["employeeId"] == 29
-        assert isinstance(call_args[1]["params"]["employeeId"], int)
+    # 验证 API 调用参数是数字
+    call_args = mock_client.get.call_args
+    assert call_args[1]["params"]["employeeId"] == 29
+    assert isinstance(call_args[1]["params"]["employeeId"], int)
