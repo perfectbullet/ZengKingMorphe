@@ -132,3 +132,4 @@ class ConversationState(TypedDict):
     streaming_messages: Optional[List]  # Messages (for langchain_llm)
     raganything_query: Optional[str]  # Query for RAGAnything
     raganything_mode: Optional[str]  # RAGAnything mode (hybrid, local, global, naive)
+    sources: List[Dict[str, Any]]  # 累积的数据源列表

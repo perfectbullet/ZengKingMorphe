@@ -30,6 +30,7 @@ from app.utils.latex import normalize_latex_formulas
 from app.utils.sentence_buffer import SentenceBuffer, has_latex_formula
 from app.utils.tts_formatter import strip_markdown_for_tts
 from app.utils.text_mapping import map_english_to_chinese
+from app.utils.common import sanitize_filename
 from app.services.raganything_wrapper import get_raganything_stream
 logger = get_logger(__name__)
 
@@ -338,6 +339,7 @@ def _build_initial_state(request: OpenAIChatRequest, session_id: str, user_query
         "streaming_messages": None,
         "raganything_query": None,
         "raganything_mode": None,
+        "sources": [],
     }
 
 def _build_finish_chunk_data(
@@ -376,7 +378,7 @@ def _update_finish_chunk_metadata(
     final_state: dict,
     user_query: str,
     model_name: str,
-    sources: dict,
+    sources: list,
 ) -> None:
     """Update the finish chunk data with final state information."""
     finish_chunk_data["usage"] = {
@@ -634,7 +636,33 @@ async def generate_openai_stream_v1(
                     elif chunk["type"] == "sources_info":
                         logger.info(f"RAGAnything sources info | {chunk['content']}")
                     elif chunk["type"] == "sources":
-                        logger.info(f"RAGAnything sources received | entities={len(chunk['content'].get('entities', []))}")
+                        # 捕获 RAGAnything 返回的 sources
+                        sources_data = chunk["content"]
+                        entities = sources_data.get("entities", [])
+
+                        if entities:
+                            # 转换为新格式
+                            citations = []
+                            for entity in entities[:3]:
+                                citations.append({
+                                    "doc_id": entity.get("source_id", ""),
+                                    "kb_id": "",  # RAGAnything 没有提供 kb_id
+                                    "chunk_index": None,  # RAGAnything 没有提供 chunk_index
+                                    "score": entity.get("score", 0.0),
+                                    "content": entity.get("description", "")[:200]
+                                })
+
+                            # 获取文档标题（使用 entity_name 或文件名）
+                            doc_title = entities[0].get("entity_name", entities[0].get("file_path", "知识库文档"))
+
+                            current_state["sources"].append({
+                                "type": "text",
+                                "from": "rag",
+                                "text": doc_title,
+                                "citations": citations
+                            })
+
+                            logger.info(f"RAGAnything sources | entities={len(entities)} | 添加到 state['sources']")
                     elif chunk["type"] == "error":
                         logger.error(f"RAGAnything error | {chunk['content']}")
 
@@ -697,10 +725,7 @@ async def generate_openai_stream_v1(
     if final_state is None:
         final_state = current_state
 
-    sources = format_sources(
-        retrieved_docs=final_state.get("retrieved_docs", []),
-        web_search_results=final_state.get("web_search_results", []),
-    )
+    sources = final_state.get("sources", [])
 
     _update_finish_chunk_metadata(finish_chunk_data, final_state, user_query, model_name, sources)
 
@@ -712,4 +737,21 @@ async def generate_openai_stream_v1(
     )
 
     yield json.dumps(finish_chunk_data)
+
+    # 保存 final_state 用于调试
+    import os
+
+    save_dir = "finish_chunk_data"
+    os.makedirs(save_dir, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_query = sanitize_filename(user_query)
+    filename = f"{timestamp}_{session_id}_{safe_query}_finish_chunk_data.json"
+    filepath = os.path.join(save_dir, filename)
+
+    with open(filepath, 'w', encoding='utf-8') as f:
+        json.dump(finish_chunk_data, f, ensure_ascii=False, indent=2, default=str)
+
+    logger.info(f"[调试] 保存 conversation_state 到 {filepath}")
+
     yield "[DONE]"

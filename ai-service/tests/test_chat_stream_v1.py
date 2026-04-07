@@ -164,6 +164,18 @@ class ChatStreamV1Tester:
                             full_content += content
                             print(content, end="", flush=True)
 
+                    # 检查 done chunk 并提取 sources
+                    if chunk_data.get("object") == "chat.completion.chunk":
+                        choices = chunk_data.get("choices", [])
+                        if choices and choices[0].get("finish_reason") == "stop":
+                            metadata = chunk_data.get("metadata", {})
+                            if "sources" in metadata:
+                                sources = metadata["sources"]
+                                self.results["sources"] = sources
+                                logger.info(f"Sources: {len(sources)} 条")
+                                for src in sources:
+                                    logger.info(f"  - from={src.get('from', 'unknown')}, text={src.get('text', 'N/A')}, citations={len(src.get('citations', []))}")
+
                 except json.JSONDecodeError as e:
                     logger.warning(f"Chunk JSON 解析失败: {e}, chunk={chunk_str[:100]}")
 
@@ -209,6 +221,21 @@ class ChatStreamV1Tester:
 
         if self.results.get("error"):
             print(f"错误: {self.results['error']}")
+
+        # 打印 Sources 信息
+        if self.results.get("sources"):
+            print("\nSources:")
+            print("-" * 40)
+            for src in self.results["sources"]:
+                print(f"Type: {src.get('type', 'text')}")
+                print(f"From: {src.get('from', 'unknown')}")
+                print(f"Text: {src.get('text', 'N/A')}")
+                citations = src.get('citations', [])
+                print(f"Citations: {len(citations)} 条")
+                if citations:
+                    for i, citation in enumerate(citations, 1):
+                        print(f"  {i}. {str(citation)[:100]}...")
+                print("-" * 40)
 
         print("=" * 60)
 
@@ -269,6 +296,11 @@ async def main():
         type=int,
         default=None,
         help="最大生成 token 数"
+    )
+    parser.add_argument(
+        "--save-state",
+        action="store_true",
+        help="保存 final_state 到 JSON 文件"
     )
 
     args = parser.parse_args()

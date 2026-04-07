@@ -151,6 +151,7 @@ class ConversationNodes:
                     )
                     await db.sessions.insert_one(session_model.model_dump())
                     state["context"] = {"messages": [], "message_count": 0}
+                    state["sources"] = []  # 初始化 sources 列表
 
                 logger.debug(
                     f"Session context loaded: session_id={state['session_id']}, "
@@ -231,10 +232,9 @@ class ConversationNodes:
         Query Classification - 快速识别查询类型并路由。
 
         检测顺序 (从快到慢):
-        1. 打断检测 (关键词匹配)
-        2. 问候语检测 (关键词匹配)
-        3. 实时查询检测 (关键词匹配)
-        4. 其他 (继续正常流程)
+        1. 问候语检测 (关键词匹配)
+        2. 实时查询检测 (关键词匹配)
+        3. 其他 (继续正常流程)
 
         Args:
             state: Current conversation state
@@ -252,6 +252,13 @@ class ConversationNodes:
                     state["complexity_score"] = 0.0
                     state["complexity_reason"] = "greeting"
                     state["is_realtime_query"] = False
+                    # 添加 greeting source
+                    state["sources"].append({
+                        "type": "text",
+                        "from": "greeting",
+                        "text": query,
+                        "citations": []
+                    })
                     logger.info(f"Query classified: greeting: category={category}")
                     return state
 
@@ -501,6 +508,24 @@ class ConversationNodes:
                 state["web_search_results"] = formatted_results
                 state["web_search_used"] = len(formatted_results) > 0
                 state["web_search_error"] = api_error_message
+
+                # 添加 web_search source
+                if formatted_results:
+                    citations = []
+                    for result in formatted_results[:3]:  # 最多3个
+                        citations.append({
+                            "title": result.get("title", ""),
+                            "url": result.get("url", ""),
+                            "score": result.get("score", 0.0),
+                            "snippet": result.get("content", "")[:100]
+                        })
+
+                    state["sources"].append({
+                        "type": "text",
+                        "from": "web_search",
+                        "text": state.get("rewritten_query", state["user_query"]),
+                        "citations": citations
+                    })
 
                 logger.info(
                     f"Web search completed: results_count={len(formatted_results)}, "
