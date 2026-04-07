@@ -9,7 +9,7 @@ REMOTE_HOST="192.168.8.233"
 REMOTE_USER="zenking"
 SSH_KEY="/home/zj/.ssh/id_rsa"
 LOCAL_DIR="/home/zj/ZengKingMorphe"
-REMOTE_DIR="/data/metahuman_work/ZengKingMorphe-20260330"
+REMOTE_DIR="/data/metahuman_work/ZengKingMorphe"
 
 # rsync 选项
 # --no-group: 跳过组权限设置（避免权限不足警告）
@@ -75,6 +75,24 @@ rsync ${RSYNC_OPTS} -e "ssh -i ${SSH_KEY}" \
     "${LOCAL_DIR}/bge-athenaeum/" \
     "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_DIR}/bge-athenaeum/"
     
+# 同步 requirements.txt
+echo ""
+echo "[3/3] 同步并更新依赖..."
+rsync ${RSYNC_OPTS} -e "ssh -i ${SSH_KEY}" \
+    --include="requirements.txt" \
+    --exclude="*" \
+    "${LOCAL_DIR}/ai-service/" \
+    "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_DIR}/ai-service/"
+
+# 远程更新依赖
+echo "正在远程服务器上更新依赖..."
+ssh -i "${SSH_KEY}" "${REMOTE_USER}@${REMOTE_HOST}" "
+    cd ${REMOTE_DIR} &&
+    source venv/bin/activate &&
+    pip install --upgrade pip &&
+    pip install -r ai-service/requirements.txt
+"
+
 echo ""
 echo "=========================================="
 echo "同步完成！"

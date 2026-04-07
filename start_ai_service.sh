@@ -77,8 +77,17 @@ start_service() {
         return 1
     fi
 
-    # 创建日志目录
-    mkdir -p "$(dirname "$LOG_FILE")"
+    # 创建日志目录（确保权限正确）
+    LOG_DIR="$(dirname "$LOG_FILE")"
+    # 如果目录存在但权限不对，重新创建
+    if [ -d "$LOG_DIR" ]; then
+        # 检查是否可写
+        if [ ! -w "$LOG_DIR" ]; then
+            log_warn "日志目录权限异常，尝试修复..."
+            rm -rf "$LOG_DIR" 2>/dev/null || true
+        fi
+    fi
+    mkdir -p "$LOG_DIR"
 
     # 切换到服务目录并启动
     cd "$SERVICE_DIR" || exit 1

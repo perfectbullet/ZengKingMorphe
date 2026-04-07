@@ -85,6 +85,9 @@ source venv/bin/activate
 pip install -r ai-service/requirements.txt
 # 安装 RAG-Anything 
 cd RAG-Anything
+# 只安装类似客户端的mineru
+pip install mineru==3.0.8
+# 安装
 pip install -e .
 ```
 
