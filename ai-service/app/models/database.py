@@ -238,69 +238,6 @@ class FAQModel(BaseModel):
     synced_at: datetime = Field(default_factory=datetime.now)
 
 
-class EmployeeSettingKnowledge(BaseModel):
-    kb_ids: List[str] = Field(default_factory=list, description="知识库id列表")
-    faq_ids: List[str] = Field(default_factory=list, description="FAQ问答id列表")
-    video_ids: List[str] = Field(default_factory=list, description="视频资源id列表")
-
-
-class EmployeeSettingPrologue(BaseModel):
-    prologue: Optional[str] = Field(None, description="开场白内容")
-    is_opening_questions: bool = Field(False, description="是否开启开场热门问题")
-    prologue_question_type: int = Field(1, description="热门问题类型: 1-自动推荐 2-FAQ 3-自定义")
-    prologue_faqs: Optional[List[str]] = Field(default_factory=list, description="开场热门问题关联FAQ列表")
-    hot_questions: Optional[List[str]] = Field(default_factory=list, description="开场热门问题自定义列表")
-
-
-class EmployeeSettingChatRule(BaseModel):
-    is_multimodal: bool = Field(False, description="是否支持多模态")
-    fixed_answer: Optional[str] = Field(None, description="关闭图片理解后返回的固定回复话术")
-    faq_sim_threshold: Optional[float] = Field(0.0, description="FAQ相似度阈值")
-    faq_top_k: Optional[int] = Field(1, description="FAQ最多推荐数量")
-
-
-class EmployeeSettingUnusualRule(BaseModel):
-    exception_reply: Optional[str] = Field(None, description="系统异常时的回复话术")
-    not_match_reply_type: Optional[int] = Field(None, description="未匹配时的回复类型：0：固定话术，1：模型闲聊回复")
-    fixed_replys: Optional[List[str]] = Field(default_factory=list, description="not_match_reply_type=0时的固定回复列表")
-    is_web_search: bool = Field(False, description="not_match_reply_type=1时的模型闲聊回复：是否联网搜索")
-    is_show_sign: bool = Field(False, description="not_match_reply_type=1时的模型闲聊回复：是否显示标识")
-    is_my_prompt: bool = Field(False, description="not_match_reply_type=1时的模型闲聊回复：是否启用自定义提示词")
-    my_prompt: Optional[str] = Field(None, description="not_match_reply_type=1时的模型闲聊回复：自定义提示词内容")
-
-
-class ThesaurusWord(BaseModel):
-    word_id: int = Field(..., description="词条id")
-    word_name: str = Field(..., description="词条名称")
-    similar_words: List[str] = Field(default_factory=list, description="相似词条名称列表")
-
-
-class EmployeeSettingSafeRule(BaseModel):
-    is_reject_answer: bool = Field(False, description="命中敏感词时是否拒绝回答")
-    reject_answer: Optional[str] = Field(None, description="拒绝回答时的回复内容")
-    sensitive_ids: List[str] = Field(default_factory=list, description="敏感词库的词条id列表：sensitive_41_67_118")
-
-
-class EmployeeSettingRole(BaseModel):
-    persona: Optional[str] = Field(None, description="人设")
-    style: Optional[str] = Field(None, description="风格名称")
-    style_desc: Optional[str] = Field(None, description="风格描述")
-
-
-class EmployeeSettingPlugin(BaseModel):
-    plugin_id: int = Field(..., description="插件id")
-    plugin_name: str = Field(None, description="插件名称")
-    plugin_code: Optional[str] = Field(None, description="插件编码")
-    plugin_intro: Optional[str] = Field(None, description="插件简介")
-    plugin_icon: Optional[str] = Field(None, description="插件图标")
-    plugin_params: Optional[str] = Field(None, description="插件参数")
-
-
-class EmployeeSettingThesaurusMajor(BaseModel):
-    is_synonym_rewrite: bool = Field(False, description="是否同义词重写")
-    major_ids: List[str] = Field(default_factory=list, description="专业词库的词条id列表：major_41_67_118")
-
-
 class DigitalEmployeeConfigModel(BaseModel):
     """员工核心信息 - 来自 Java API 的 employee 对象
 
