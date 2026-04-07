@@ -85,13 +85,13 @@ rsync ${RSYNC_OPTS} -e "ssh -i ${SSH_KEY}" \
     "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_DIR}/ai-service/"
 
 # 远程更新依赖
-echo "正在远程服务器上更新依赖..."
-ssh -i "${SSH_KEY}" "${REMOTE_USER}@${REMOTE_HOST}" "
-    cd ${REMOTE_DIR} &&
-    source venv/bin/activate &&
-    pip install --upgrade pip &&
-    pip install -r ai-service/requirements.txt
-"
+# echo "正在远程服务器上更新依赖..."
+# ssh -i "${SSH_KEY}" "${REMOTE_USER}@${REMOTE_HOST}" "
+#     cd ${REMOTE_DIR} &&
+#     source venv/bin/activate &&
+#     pip install --upgrade pip &&
+#     pip install -r ai-service/requirements.txt
+# "
 
 echo ""
 echo "=========================================="
