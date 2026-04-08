@@ -290,6 +290,7 @@ async def generate_openai_stream_v2(
             "web_search_error": None,
             "conversation_id": "",
             "response_time_ms": 0,
+            "sources": [],  # Initialize sources list for workflow nodes
             # Performance monitoring
             "workflow_start_time": time.time(),
             "node_timings": {},
