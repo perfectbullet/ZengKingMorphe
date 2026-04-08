@@ -93,6 +93,16 @@ rsync ${RSYNC_OPTS} -e "ssh -i ${SSH_KEY}" \
 #     pip install -r ai-service/requirements.txt
 # "
 
+# 远程重启 AI 服务
+echo ""
+echo "=========================================="
+echo "正在远程重启 AI 服务..."
+echo "=========================================="
+ssh -i "${SSH_KEY}" "${REMOTE_USER}@${REMOTE_HOST}" "
+    cd ${REMOTE_DIR} &&
+    ./start_ai_service.sh restart
+"
+
 echo ""
 echo "=========================================="
 echo "同步完成！"
