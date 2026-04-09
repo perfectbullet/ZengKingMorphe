@@ -279,7 +279,6 @@ class ConversationNodes:
                         state["intent"] = "general_query"
                         logger.info(f"Query classified: realtime: category={category}")
                         return state
-            # 3. 问题
             
             # 4. 默认为一般查询
             state["is_realtime_query"] = False
@@ -322,6 +321,16 @@ class ConversationNodes:
                 f"Math detection result: is_math={is_math}, reason={reason}, "
                 f"query={query[:50]}"
             )
+
+            # 如果是数学问题，添加来源信息
+            if is_math:
+                state["sources"].append({
+                    "type": "text",
+                    "from": "phi4_math",
+                    "text": query,
+                    "citations": []
+                })
+                logger.info(f"Math problem source added | query={query[:50]}")
 
         return state
 

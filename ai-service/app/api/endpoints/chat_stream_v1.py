@@ -685,7 +685,6 @@ async def generate_openai_stream_v1(
                 # Phi-4 数学推理流式输出
                 streaming_llm = current_state.get("streaming_llm")
                 messages = current_state.get("streaming_messages")
-                logger.info(f"messages： {messages}")
                 if not streaming_llm or not messages:
                     logger.error("streaming_llm or messages not configured for phi4_math type")
                     continue
@@ -699,11 +698,12 @@ async def generate_openai_stream_v1(
                 async for chunk in streaming_llm.astream(messages):
                     token = chunk.content if hasattr(chunk, 'content') else str(chunk)
                     if token:
-                        logger.info(f'{token!r}')
+                        
                         # 过滤 think 标签
                         filtered_token = think_tag_buffer.add(token)
 
                         if not filtered_token:
+                            # logger.info(f'跟踪但不输出: {token!r}') # 本行日志疯狂打印，不要随意开启
                             full_answer += token  # 跟踪但不输出
                         else:
                             full_answer += filtered_token
