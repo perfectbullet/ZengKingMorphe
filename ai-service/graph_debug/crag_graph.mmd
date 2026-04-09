@@ -9,13 +9,16 @@ graph TD;
 	load_session_context(load_session_context)
 	input_validation(input_validation)
 	classify_query_type(classify_query_type)
+	check_math_problem(check_math_problem)
 	evaluate_complexity(evaluate_complexity)
 	web_search(web_search)
 	generate_answer(generate_answer)
 	save_conversation(save_conversation)
 	__end__([<p>__end__</p>]):::last
 	__start__ --> load_employee_config;
-	classify_query_type -. &nbsp;normal&nbsp; .-> evaluate_complexity;
+	check_math_problem -. &nbsp;normal&nbsp; .-> evaluate_complexity;
+	check_math_problem -. &nbsp;math&nbsp; .-> generate_answer;
+	classify_query_type -. &nbsp;normal&nbsp; .-> check_math_problem;
 	classify_query_type -. &nbsp;greeting&nbsp; .-> generate_answer;
 	classify_query_type -. &nbsp;realtime&nbsp; .-> web_search;
 	evaluate_complexity --> generate_answer;

@@ -85,18 +85,6 @@ class ConversationWorkflow:
             streaming=True,
         )
 
-        # Set default LLM based on routing mode
-        routing_mode = getattr(settings, 'llm_routing_mode', 'local_only')
-        if routing_mode == 'local_only':
-            self.llm = self.local_llm
-            logger.info("LLM routing mode: local_only - using Ollama only")
-        elif routing_mode == 'remote_only':
-            self.llm = self.remote_llm
-            logger.info("LLM routing mode: remote_only - using remote API only")
-        else:  # hybrid mode - will select dynamically per request
-            self.llm = self.local_llm  # default to local
-            logger.info("LLM routing mode: hybrid - will select dynamically")
-
         # Initialize nodes container
         self.nodes = ConversationNodes(self)
 
@@ -214,6 +202,51 @@ class ConversationWorkflow:
         from app.services.conversation.conversation_helpers import build_generation_messages
         return build_generation_messages(state)
 
+    def get_phi4_streaming_llm(self, state: ConversationState):
+        """
+        动态创建 Phi-4 流式 LLM（不存储为实例变量）。
+
+        根据环境配置创建 Phi-4 LLM 实例用于数学问题解答。
+
+        Args:
+            state: Current conversation state
+
+        Returns:
+            Tuple of (llm, model_name) for Phi-4 streaming
+
+        Notes:
+            - 读取环境变量而非从 state
+            - vLLM 不需要真实 API key
+        """
+        # 检查是否启用
+        enabled = os.getenv("PHI4_ENABLED", "true").lower() == "true"
+        if not enabled:
+            logger.info("Phi-4 disabled, falling back to default LLM")
+            return self.get_streaming_llm(state)
+
+        # 读取配置
+        base_url = os.getenv("PHI4_BASE_URL", "http://192.168.8.235:8000/v1")
+        model_id = os.getenv("PHI4_MODEL_ID", "/home/phi-4-mini-reasoning")
+        temperature = float(os.getenv("PHI4_TEMPERATURE", "0.1"))
+        max_tokens = int(os.getenv("PHI4_MAX_TOKENS", "8192"))
+
+        # 动态创建 ChatOpenAI 实例
+        phi4_llm = ChatOpenAI(
+            base_url=base_url,
+            api_key="dummy-key",  # vLLM 不需要真实 key
+            model=model_id,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            streaming=True,
+        )
+
+        logger.info(
+            f"Phi-4 LLM created | model={model_id} | base_url={base_url} | "
+            f"temperature={temperature} | max_tokens={max_tokens}"
+        )
+
+        return phi4_llm, model_id
+
     async def save_conversation(self, state: ConversationState):
         """
         Save conversation record (delegates to nodes container).
@@ -250,6 +283,7 @@ class ConversationWorkflow:
         graph.add_node("load_session_context", self.nodes.load_session_context)
         graph.add_node("input_validation", self.nodes.validate_input)
         graph.add_node("classify_query_type", self.nodes.classify_query_type)
+        graph.add_node("check_math_problem", self.nodes.check_math_problem)
         graph.add_node("evaluate_complexity", self.nodes.evaluate_complexity)
         graph.add_node("web_search", self.nodes.web_search)
         graph.add_node("generate_answer", self.nodes.generate_answer)
@@ -270,6 +304,16 @@ class ConversationWorkflow:
             {
                 "greeting": "generate_answer",      # Greeting → direct to answer
                 "realtime": "web_search",           # Realtime query → web search
+                "normal": "check_math_problem"     # Normal query → math detection
+            }
+        )
+
+        # Math detection routing
+        graph.add_conditional_edges(
+            "check_math_problem",
+            self.nodes.route_after_math_check,
+            {
+                "math": "generate_answer",          # Math problem → skip complexity eval
                 "normal": "evaluate_complexity"     # Normal query → complexity eval
             }
         )

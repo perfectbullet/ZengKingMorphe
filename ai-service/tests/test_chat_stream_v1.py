@@ -135,73 +135,68 @@ class ChatStreamV1Tester:
         request = self._build_request()
         start_time = time.time()
 
-        try:
-            chunk_count = 0
-            first_chunk_time = None
-            full_content = ""
+        chunk_count = 0
+        first_chunk_time = None
+        full_content = ""
 
-            async for chunk_str in generate_openai_stream_v1(request):
-                chunk_count += 1
-                if first_chunk_time is None:
-                    first_chunk_time = time.time()
-                    ttfb_ms = int((first_chunk_time - start_time) * 1000)
-                    logger.info(f"首字延迟 (TTFB): {ttfb_ms}ms")
+        async for chunk_str in generate_openai_stream_v1(request):
+            chunk_count += 1
+            if first_chunk_time is None:
+                first_chunk_time = time.time()
+                ttfb_ms = int((first_chunk_time - start_time) * 1000)
+                logger.info(f"首字延迟 (TTFB): {ttfb_ms}ms")
 
-                # 解析 chunk
-                try:
-                    if chunk_str == "[DONE]":
-                        logger.info(f"收到 [DONE] 信号")
-                        break
+            # 解析 chunk
+            try:
+                if chunk_str == "[DONE]":
+                    logger.info(f"收到 [DONE] 信号")
+                    break
 
-                    chunk_data = json.loads(chunk_str)
-                    self.results["stream_chunks"].append(chunk_data)
+                chunk_data = json.loads(chunk_str)
+                self.results["stream_chunks"].append(chunk_data)
 
-                    # 提取内容
-                    if "choices" in chunk_data and chunk_data["choices"]:
-                        delta = chunk_data["choices"][0].get("delta", {})
-                        content = delta.get("content", "")
-                        if content:
-                            full_content += content
-                            print(content, end="", flush=True)
+                # 提取内容
+                if "choices" in chunk_data and chunk_data["choices"]:
+                    delta = chunk_data["choices"][0].get("delta", {})
+                    content = delta.get("content", "")
+                    if content:
+                        full_content += content
+                        print(content, end="", flush=True)
 
-                    # 检查 done chunk 并提取 sources
-                    if chunk_data.get("object") == "chat.completion.chunk":
-                        choices = chunk_data.get("choices", [])
-                        if choices and choices[0].get("finish_reason") == "stop":
-                            metadata = chunk_data.get("metadata", {})
-                            if "sources" in metadata:
-                                sources = metadata["sources"]
-                                self.results["sources"] = sources
-                                logger.info(f"Sources: {len(sources)} 条")
-                                for src in sources:
-                                    logger.info(f"  - from={src.get('from', 'unknown')}, text={src.get('text', 'N/A')}, citations={len(src.get('citations', []))}")
+                # 检查 done chunk 并提取 sources
+                if chunk_data.get("object") == "chat.completion.chunk":
+                    choices = chunk_data.get("choices", [])
+                    if choices and choices[0].get("finish_reason") == "stop":
+                        metadata = chunk_data.get("metadata", {})
+                        if "sources" in metadata:
+                            sources = metadata["sources"]
+                            self.results["sources"] = sources
+                            logger.info(f"Sources: {len(sources)} 条")
+                            for src in sources:
+                                logger.info(f"  - from={src.get('from', 'unknown')}, text={src.get('text', 'N/A')}, citations={len(src.get('citations', []))}")
 
-                except json.JSONDecodeError as e:
-                    logger.warning(f"Chunk JSON 解析失败: {e}, chunk={chunk_str[:100]}")
+            except json.JSONDecodeError as e:
+                logger.warning(f"Chunk JSON 解析失败: {e}, chunk={chunk_str[:100]}")
 
-            end_time = time.time()
-            duration_ms = int((end_time - start_time) * 1000)
+        end_time = time.time()
+        duration_ms = int((end_time - start_time) * 1000)
 
-            self.results["full_response"] = full_content
-            self.results["duration_ms"] = duration_ms
-            self.results["chunk_count"] = chunk_count
+        self.results["full_response"] = full_content
+        self.results["duration_ms"] = duration_ms
+        self.results["chunk_count"] = chunk_count
 
-            print()  # 换行
-            logger.info("=" * 60)
-            logger.info(f"测试完成")
-            logger.info(f"总耗时: {duration_ms}ms")
-            logger.info(f"Chunk 数量: {chunk_count}")
-            logger.info(f"响应长度: {len(full_content)} 字符")
-            logger.info("=" * 60)
+        print()  # 换行
+        logger.info("=" * 60)
+        logger.info(f"测试完成")
+        logger.info(f"总耗时: {duration_ms}ms")
+        logger.info(f"Chunk 数量: {chunk_count}")
+        logger.info(f"响应长度: {len(full_content)} 字符")
+        logger.info("=" * 60)
 
-            # 打印完整响应（截断显示）
-            if full_content:
-                preview = full_content[:200] + "..." if len(full_content) > 200 else full_content
-                logger.info(f"响应预览: {preview}")
-
-        except Exception as e:
-            logger.error(f"测试失败: {e}", exc_info=True)
-            self.results["error"] = str(e)
+        # 打印完整响应（截断显示）
+        if full_content:
+            preview = full_content[:200] + "..." if len(full_content) > 200 else full_content
+            logger.info(f"响应预览: {preview}")
 
         return self.results
 

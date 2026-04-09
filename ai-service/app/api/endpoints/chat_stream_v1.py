@@ -3,6 +3,7 @@ Chat stream response generator for /v1/chat/completions endpoint.
 
 This version can be modified for custom behavior specific to v1 API.
 """
+import os
 import asyncio
 import hashlib
 import json
@@ -12,7 +13,6 @@ from datetime import datetime
 import random
 from typing import AsyncGenerator, Optional, Any
 
-from langchain_community.chat_models import ChatOllama
 from langchain_openai import ChatOpenAI
 
 from app.models.schemas import OpenAIChatRequest
@@ -28,6 +28,7 @@ from app.services.revise_llm import (
 )
 from app.utils.latex import normalize_latex_formulas
 from app.utils.sentence_buffer import SentenceBuffer, has_latex_formula
+from app.utils.think_tag_buffer import ThinkTagBuffer
 from app.utils.tts_formatter import strip_markdown_for_tts
 from app.utils.text_mapping import map_english_to_chinese
 from app.utils.common import sanitize_filename
@@ -157,7 +158,7 @@ def _has_math_symbols_simple(text: str) -> bool:
 
 async def _process_segment_for_output(
     segment: str,
-    revise_llm: ChatOllama | ChatOpenAI,
+    revise_llm: ChatOpenAI,
     log_prefix: str = "",
 ) -> tuple[str, str]:
     """
@@ -229,7 +230,7 @@ def _build_token_chunk_data(
 
 async def _stream_segment_with_formula_conversion(
     segment: str,
-    revise_llm: ChatOllama | ChatOpenAI,
+    revise_llm: ChatOpenAI,
     chat_id: str,
     created: int,
     model: str,
@@ -485,6 +486,7 @@ async def generate_openai_stream_v1(
         max_wait_seconds=SENTENCE_BUFFER_MAX_WAIT_SECONDS,
         # comma_split_threshold=SENTENCE_BUFFER_COMMA_SPLIT_THRESHOLD
     )
+    think_tag_buffer = ThinkTagBuffer()  # 用于过滤 think 标签
 
     finish_chunk_data = _build_finish_chunk_data(chat_id, created, request.model, user_query)
 
@@ -586,7 +588,6 @@ async def generate_openai_stream_v1(
             direct_match = current_state.get("direct_match")
             # 先不做预生产答案
 
-
             first_token_received = False
             full_answer = ""
             TALKING_POINTS: list = [
@@ -607,7 +608,7 @@ async def generate_openai_stream_v1(
                 ttfb_ms = int((time.time() - initial_state["workflow_start_time"]) * 1000)
                 current_state["ttfb_ms"] = ttfb_ms
                 logger.info(f"First token received | ttfb_ms={ttfb_ms}")
-                
+            model_name = streaming_type or model_name
             # 根据 streaming_type 选择不同的流式输出方式
             if streaming_type == "raganything_stream":
                 # RAGAnything 流式输出
@@ -679,6 +680,62 @@ async def generate_openai_stream_v1(
 
                 final_state = current_state
                 final_state["final_answer"] = full_answer
+                
+            elif streaming_type == "phi4_math":
+                # Phi-4 数学推理流式输出
+                streaming_llm = current_state.get("streaming_llm")
+                messages = current_state.get("streaming_messages")
+                logger.info(f"messages： {messages}")
+                if not streaming_llm or not messages:
+                    logger.error("streaming_llm or messages not configured for phi4_math type")
+                    continue
+                logger.info(f"Using Phi-4 math stream | model={model_name}")
+
+                # 使用真正的流式输出
+                logger.info("Starting streaming response with astream")
+                first_token_received = False
+                full_answer = ""
+
+                async for chunk in streaming_llm.astream(messages):
+                    token = chunk.content if hasattr(chunk, 'content') else str(chunk)
+                    if token:
+                        logger.info(f'{token!r}')
+                        # 过滤 think 标签
+                        filtered_token = think_tag_buffer.add(token)
+
+                        if not filtered_token:
+                            full_answer += token  # 跟踪但不输出
+                        else:
+                            full_answer += filtered_token
+                            segment = sentence_buffer.add(filtered_token)
+                            if segment:
+                                chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
+                                    segment, revise_llm, chat_id, created, request.model,
+                                    db, chunk_sequence, session_id, request.user_id,
+                                    request.employee_id, current_state.get("conversation_id"),
+                                    log_prefix="Phi-4-Math-Stream"
+                                )
+                                yield json.dumps(chunk_data)
+
+                                if not first_token_received:
+                                    first_token_received = True
+                                    ttfb_ms = int((time.time() - initial_state["workflow_start_time"]) * 1000)
+                                    current_state["ttfb_ms"] = ttfb_ms
+                                    logger.info(f"First token received | ttfb_ms={ttfb_ms}")
+
+                # 刷新 buffer 中剩余内容
+                final_segment = await sentence_buffer.flush(is_final=True)
+                if final_segment:
+                    chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
+                        final_segment.content, revise_llm, chat_id, created, request.model,
+                        db, chunk_sequence, session_id, request.user_id,
+                        request.employee_id, current_state.get("conversation_id"),
+                        log_prefix="Phi-4-Math FinalSegment"
+                    )
+                    yield json.dumps(chunk_data)
+
+                final_state = current_state
+                final_state["final_answer"] = full_answer
 
             elif streaming_type == "langchain_llm":
                 # LangChain LLM 流式输出（原有逻辑）
@@ -739,19 +796,14 @@ async def generate_openai_stream_v1(
     yield json.dumps(finish_chunk_data)
 
     # 保存 final_state 用于调试
-    import os
-
     save_dir = "finish_chunk_data"
     os.makedirs(save_dir, exist_ok=True)
-
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_query = sanitize_filename(user_query)
     filename = f"{timestamp}_{session_id}_{safe_query}_finish_chunk_data.json"
     filepath = os.path.join(save_dir, filename)
-
     with open(filepath, 'w', encoding='utf-8') as f:
         json.dump(finish_chunk_data, f, ensure_ascii=False, indent=2, default=str)
-
     logger.info(f"[调试] 保存 conversation_state 到 {filepath}")
-
+    
     yield "[DONE]"

@@ -31,9 +31,10 @@ from app.services.conversation.conversation_state import (
 )
 from app.services.conversation.conversation_helpers import (
     time_node,
-    heuristic_complexity
+    heuristic_complexity,
+    build_generation_messages,
+    build_math_generation_messages
 )
-from app.services.conversation.conversation_helpers import build_generation_messages
 
 logger = get_logger(__name__)
 
@@ -262,7 +263,7 @@ class ConversationNodes:
                     logger.info(f"Query classified: greeting: category={category}")
                     return state
 
-            # 3. 检测实时查询
+            # 2. 检测实时查询
             if settings.realtime_query_enabled:
                 realtime_keywords = {
                     "time": ["今天", "明天", "昨天", "最近", "现在", "本周", "本月", "当前"],
@@ -278,12 +279,98 @@ class ConversationNodes:
                         state["intent"] = "general_query"
                         logger.info(f"Query classified: realtime: category={category}")
                         return state
-
+            # 3. 问题
+            
             # 4. 默认为一般查询
             state["is_realtime_query"] = False
             state["intent"] = "general_query"
             logger.debug("Query classified as general")
         return state
+
+    # -------------------------------------------------------------------------
+    # Math Problem Detection
+    # -------------------------------------------------------------------------
+    # 概念性问题排除关键词（不算数学题）
+    CONCEPT_KEYWORDS = ["是什么", "什么是", "介绍", "解释", "定义", "概念"]
+    # 数学操作关键词
+    MATH_OPERATION_KEYWORDS = ["求", "计算", "解", "证明", "推导", "化简"]
+    # 数学对象关键词
+    MATH_OBJECT_KEYWORDS = ["函数", "方程", "不等式", "集合", "数列", "三角函数", "导数", "积分", "极限", "椭圆", "双曲线", "抛物线"]
+
+    async def check_math_problem(self, state: ConversationState) -> ConversationState:
+        """
+        数学问题检测节点 - 检测用户查询是否为数学问题。
+
+        使用基于规则的模式匹配：
+        - 排除概念性问题（"什么是函数"、"介绍一下三角函数"等）
+        - 检测数学操作+数学对象（"求函数值域"、"解方程"等）
+
+        Args:
+            state: Current conversation state
+
+        Returns:
+            Updated state with is_math_problem populated
+        """
+        async with time_node("check_math_problem", state):
+            query = state["user_query"].strip()
+
+            # 执行数学问题检测
+            is_math, reason = self._detect_math_problem(query)
+            state["is_math_problem"] = is_math
+
+            logger.info(
+                f"Math detection result: is_math={is_math}, reason={reason}, "
+                f"query={query[:50]}"
+            )
+
+        return state
+
+    @staticmethod
+    def _detect_math_problem(query: str) -> tuple[bool, str]:
+        """
+        基于规则的模式匹配检测数学问题。
+
+        规则:
+        1. 概念性问题排除（"是什么"、"什么是"等 + 短问题）
+        2. 同时包含数学操作关键词 + 数学对象关键词 → 数学题
+        3. 其他 → 普通查询
+
+        Args:
+            query: 用户查询
+
+        Returns:
+            (is_math, reason) - 是否为数学问题及原因
+        """
+        query_lower = query.strip().lower()
+
+        # 1. 概念性问题排除
+        for concept_kw in ConversationNodes.CONCEPT_KEYWORDS:
+            if concept_kw in query_lower and len(query) < 50:
+                return (False, "concept_question")
+
+        # 2. 同时包含数学操作+数学对象 → 数学题
+        has_operation = any(kw in query_lower for kw in ConversationNodes.MATH_OPERATION_KEYWORDS)
+        has_object = any(kw in query_lower for kw in ConversationNodes.MATH_OBJECT_KEYWORDS)
+
+        if has_operation and has_object:
+            return (True, "math_problem")
+
+        return (False, "general_query")
+
+    @staticmethod
+    def route_after_math_check(state: ConversationState) -> str:
+        """
+        路由决策: 数学检测后的下一步。
+
+        Args:
+            state: Current conversation state
+
+        Returns:
+            目标节点名称 (math/normal)
+        """
+        if state.get("is_math_problem", False):
+            return "math"
+        return "normal"
 
     @staticmethod
     def route_after_classification(state: ConversationState) -> str:
@@ -367,36 +454,6 @@ class ConversationNodes:
             )
 
         return state
-
-    # -------------------------------------------------------------------------
-    # Workflow Nodes - Query Rewriting - 已删除，由 RAGAnything 处理
-    # -------------------------------------------------------------------------
-    # Note: rewrite_query 节点已删除，查询重写功能由 RAGAnything 内部处理
-
-    # -------------------------------------------------------------------------
-    # Workflow Nodes - FAQ Matching (Fast Path) - 已删除，由 RAGAnything 处理
-    # -------------------------------------------------------------------------
-    # Note: match_faq 节点已删除，FAQ 匹配功能由 RAGAnything 内部处理
-
-    # -------------------------------------------------------------------------
-    # Workflow Nodes - Intent Recognition - 已删除，功能与 classify_query_type 重复
-    # -------------------------------------------------------------------------
-    # Note: recognize_intent 节点已删除，意图识别由 classify_query_type 处理
-
-    # -------------------------------------------------------------------------
-    # Workflow Nodes - Knowledge Retrieval (RAG) - 已删除，由 RAGAnything 处理
-    # -------------------------------------------------------------------------
-    # Note: knowledge_retrieval 节点已删除，RAG 检索由 RAGAnything 内部处理
-
-    # -------------------------------------------------------------------------
-    # Workflow Nodes - Document Grading - 已删除，由 RAGAnything 处理
-    # -------------------------------------------------------------------------
-    # Note: grade_documents 节点已删除，文档评分由 RAGAnything 内部处理
-
-    # -------------------------------------------------------------------------
-    # Workflow Nodes - Context Compression - 已删除，由 RAGAnything 处理
-    # -------------------------------------------------------------------------
-    # Note: compress_context 节点已删除，上下文压缩由 RAGAnything 内部处理
 
     # -------------------------------------------------------------------------
     # Workflow Nodes - Web Search
@@ -581,7 +638,19 @@ class ConversationNodes:
                 confidence = 0.8
 
             # 根据意图和数据源配置流式输出
-            if intent == "greeting" or web_search_used:
+            # 数学问题特殊处理
+            if state.get("is_math_problem", False):
+                # 使用 Phi-4 LLM 进行数学推理
+                messages = build_math_generation_messages(state)
+                streaming_llm, model_name = self.workflow.get_phi4_streaming_llm(state)
+                state["streaming_llm"] = streaming_llm
+                state["streaming_messages"] = messages
+                state["streaming_type"] = "phi4_math"
+                logger.info(
+                    f"Streaming configured: type=phi4_math, model={model_name}, "
+                    f"query={state['user_query'][:50]}..."
+                )
+            elif intent == "greeting" or web_search_used:
                 # 使用 LangChain LLM（原有逻辑）
                 messages = build_generation_messages(state)
                 streaming_llm, model_name = self.workflow.get_streaming_llm(state)

@@ -464,6 +464,32 @@ def build_generation_messages(state: ConversationState) -> List:
     return messages
 
 
+def build_math_generation_messages(state: ConversationState) -> List:
+    """
+    构建数学问题的 Phi-4 模型消息。
+
+    Args:
+        state: Current conversation state
+
+    Returns:
+        List of Message objects for Phi-4 LLM
+    """
+    # Phi-4 专用系统提示词
+    SYSTEM_PROMPT = (
+        "你是 Phi-4-Mini-Reasoning，一个专门从事数学和逻辑推理的强大 AI 模型。\n"
+        "请一步步思考，并提供清晰、合理的答案。\n"
+        "对于数学问题，请展示完整的解题过程。"
+    )
+
+    # 使用 Phi-4 模型进行数学推理
+    messages = [SystemMessage(content=SYSTEM_PROMPT)]
+
+    # 添加用户问题
+    messages.append(HumanMessage(content=state["user_query"]))
+
+    return messages
+
+
 def heuristic_complexity(query: str) -> float:
     """
     启发式复杂度评估（当 LLM 评估失败时的备用方案）。

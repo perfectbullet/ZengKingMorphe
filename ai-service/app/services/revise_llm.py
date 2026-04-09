@@ -13,7 +13,7 @@ import os
 import re
 from typing import List, Tuple
 
-from langchain_community.chat_models import ChatOllama
+from langchain_openai import ChatOpenAI
 
 from app.core.logging import get_logger
 
@@ -95,33 +95,36 @@ FORMULA_ONLY_PROMPT = r'''
 # LLM Provider Functions
 # =============================================================================
 
-async def get_revise_llm() -> ChatOllama:
+async def get_revise_llm() -> ChatOpenAI:
     """
     Get LLM instance for text revision (voice-friendly output).
 
-    Uses Ollama as LLM provider.
+    Uses ChatOpenAI (compatible with Ollama OpenAI-style API).
 
     Environment Variables:
     - OLLAMA_BASE_URL: Ollama base URL, default http://localhost:11434
-    - OLLAMA_REVISE_MODEL: Ollama model name, default qwen2.5:32b
+    - OLLAMA_REVISE_MODEL: Ollama model name, default qwen2.5:14b
 
     Returns:
-        ChatOllama instance configured for formula conversion
+        ChatOpenAI instance configured for formula conversion
     """
-    ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-    ollama_model = os.getenv(
+    base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+    model = os.getenv(
         "OLLAMA_REVISE_MODEL",
         os.getenv("OLLAMA_MODEL", "qwen2.5:14b")
     )
 
-    logger.info(f"[Revise LLM] Ollama | BASE_URL={ollama_base_url} | MODEL={ollama_model}")
+    # Add /v1 suffix if not present
+    if not base_url.endswith("/v1"):
+        base_url = f"{base_url.rstrip('/')}/v1"
 
-    return ChatOllama(
-        base_url=ollama_base_url,
-        model=ollama_model,
-        temperature=0.7,
+    logger.info(f"[Revise LLM] ChatOpenAI | BASE_URL={base_url} | MODEL={model}")
+
+    return ChatOpenAI(
+        base_url=base_url,
+        model=model,
+        temperature=0.1,
         streaming=True,
-        keep_alive=-1
     )
 
 def _is_empty_or_delimiter_only(text: str) -> bool:
@@ -193,7 +196,7 @@ def _extract_latex_formulas(text: str) -> List[Tuple[str, int, int]]:
 
 async def _convert_single_formula(
     formula: str,
-    llm: ChatOllama,
+    llm: ChatOpenAI,
 ) -> str:
     """
     Convert a single formula to voice-friendly text.
@@ -228,7 +231,7 @@ async def _convert_single_formula(
 
 async def convert_formula_to_voice(
     text: str,
-    llm: ChatOllama,
+    llm: ChatOpenAI,
 ) -> str:
     """
     Convert formula text to voice-friendly output using LLM.
@@ -344,7 +347,7 @@ MATH_SENTENCE_PROMPT = r"""你是一个专业的数学讲解助手，专门将�
 
 async def convert_math_sentence_to_voice(
     text: str,
-    llm: ChatOllama,
+    llm: ChatOpenAI,
 ) -> str:
     """
     Convert sentences containing math symbols to voice-friendly expressions.

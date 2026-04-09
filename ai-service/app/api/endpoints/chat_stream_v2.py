@@ -20,7 +20,6 @@ from app.core.database import get_database
 from app.services.conversation_service import conversation_workflow
 from app.utils.sentence_buffer import SentenceBuffer
 from langchain_openai import ChatOpenAI
-from langchain_community.chat_models import ChatOllama
 
 logger = get_logger(__name__)
 
@@ -108,19 +107,22 @@ def _get_revise_llm():
             streaming=True,
         )
     else:
-        # Use Ollama
+        # Use Ollama via OpenAI-style API
         ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
         ollama_model = os.getenv("OLLAMA_REVISE_MODEL",
                                  os.getenv("OLLAMA_MODEL", "qwen2.5:7b"))
 
-        logger.info(f"[Revise LLM] Ollama | BASE_URL={ollama_base_url} | MODEL={ollama_model}")
+        # Add /v1 suffix if not present
+        if not ollama_base_url.endswith("/v1"):
+            ollama_base_url = f"{ollama_base_url.rstrip('/')}/v1"
 
-        return ChatOllama(
+        logger.info(f"[Revise LLM] Ollama (via OpenAI API) | BASE_URL={ollama_base_url} | MODEL={ollama_model}")
+
+        return ChatOpenAI(
             base_url=ollama_base_url,
             model=ollama_model,
-            temperature=0.7,
+            temperature=0.1,
             streaming=True,
-            keep_alive=-1
         )
 
 def format_sources(

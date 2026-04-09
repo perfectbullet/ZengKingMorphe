@@ -133,3 +133,4 @@ class ConversationState(TypedDict):
     raganything_query: Optional[str]  # Query for RAGAnything
     raganything_mode: Optional[str]  # RAGAnything mode (hybrid, local, global, naive)
     sources: List[Dict[str, Any]]  # 累积的数据源列表
+    is_math_problem: bool  # 是否为数学题目
