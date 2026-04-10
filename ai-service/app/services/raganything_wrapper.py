@@ -94,15 +94,27 @@ async def llm_model_func(
     **kwargs,
 ) -> str:
     """OpenAI兼容API的LLM函数"""
-    return await openai_complete_if_cache(
-        get_required_env("OLLAMA_MODEL"),
-        prompt,
-        system_prompt=system_prompt,
-        history_messages=history_messages or [],
-        base_url=get_required_env("RAG_Anything_OLLAMA_BASE_URL"),
-        api_key="no-api-key",
-        **kwargs,
-    )
+    model = get_required_env("OLLAMA_MODEL")
+    base_url = get_required_env("RAG_Anything_OLLAMA_BASE_URL")
+    try:
+        return await openai_complete_if_cache(
+            model,
+            prompt,
+            system_prompt=system_prompt,
+            history_messages=history_messages or [],
+            base_url=base_url,
+            api_key="no-api-key",
+            **kwargs,
+        )
+    except Exception as e:
+        logger.error(
+            f"❌ RAGAnything LLM 调用失败 | "
+            f"model={model} | "
+            f"base_url={base_url} | "
+            f"error_type={type(e).__name__} | "
+            f"error={e}"
+        )
+        raise
 
 
 async def vision_model_func(
@@ -120,60 +132,74 @@ async def vision_model_func(
     1. messages格式：多模态VLM增强查询（包含文本和图像的混合消息）
     2. image_data格式：图像处理（base64编码的图像数据）
     """
+    model = get_required_env("VISION_MODEL")
+    base_url = get_required_env("RAG_Anything_OPENAI_API_BASE")
+    api_key = get_required_env("OPENAI_API_KEY")
+
     # 从 kwargs 中移除 image_data 和 messages，避免传递给 openai_complete_if_cache
     kwargs.pop("image_data", None)
     kwargs.pop("messages", None)
 
     # 抑制 stdout（避免打印 image_data）
     with io.StringIO() as buf, contextlib.redirect_stdout(buf):
-        if messages:
-            result = await openai_complete_if_cache(
-                get_required_env("VISION_MODEL"),
-                "",
-                system_prompt=system_prompt,
-                messages=messages,
-                base_url=get_required_env("RAG_Anything_OPENAI_API_BASE"),
-                api_key=get_required_env("OPENAI_API_KEY"),
-                **kwargs,
-            )
-        elif image_data:
-            # 将 image_data 转换为标准的 OpenAI messages 格式
-            image_messages = [
-                {"role": "system", "content": system_prompt} if system_prompt else None,
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{image_data}"
+        try:
+            if messages:
+                result = await openai_complete_if_cache(
+                    model,
+                    "",
+                    system_prompt=system_prompt,
+                    messages=messages,
+                    base_url=base_url,
+                    api_key=api_key,
+                    **kwargs,
+                )
+            elif image_data:
+                # 将 image_data 转换为标准的 OpenAI messages 格式
+                image_messages = [
+                    {"role": "system", "content": system_prompt} if system_prompt else None,
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/jpeg;base64,{image_data}"
+                                },
                             },
-                        },
-                    ],
-                },
-            ]
-            # 过滤掉 None 值
-            image_messages = [m for m in image_messages if m is not None]
-            result = await openai_complete_if_cache(
-                get_required_env("VISION_MODEL"),
-                "",
-                system_prompt=None,  # 已在 messages 中
-                messages=image_messages,
-                base_url=get_required_env("RAG_Anything_OPENAI_API_BASE"),
-                api_key=get_required_env("OPENAI_API_KEY"),
-                **kwargs,
+                        ],
+                    },
+                ]
+                # 过滤掉 None 值
+                image_messages = [m for m in image_messages if m is not None]
+                result = await openai_complete_if_cache(
+                    model,
+                    "",
+                    system_prompt=None,  # 已在 messages 中
+                    messages=image_messages,
+                    base_url=base_url,
+                    api_key=api_key,
+                    **kwargs,
+                )
+            else:
+                result = await openai_complete_if_cache(
+                    model,
+                    prompt,
+                    system_prompt=system_prompt,
+                    history_messages=history_messages,
+                    base_url=base_url,
+                    api_key=api_key,
+                    **kwargs,
+                )
+        except Exception as e:
+            logger.error(
+                f"❌ RAGAnything Vision Model 调用失败 | "
+                f"model={model} | "
+                f"base_url={base_url} | "
+                f"error_type={type(e).__name__} | "
+                f"error={e}"
             )
-        else:
-            result = await openai_complete_if_cache(
-                get_required_env("VISION_MODEL"),
-                prompt,
-                system_prompt=system_prompt,
-                history_messages=history_messages,
-                base_url=get_required_env("RAG_Anything_OPENAI_API_BASE"),
-                api_key=get_required_env("OPENAI_API_KEY"),
-                **kwargs,
-            )
+            raise
 
     return result
 
@@ -183,16 +209,26 @@ async def vllm_embedding_func(texts: List[str]) -> np.ndarray:
     embed_url = get_required_env("VLLM_EMBED_URL")
     embed_model = get_required_env("VLLM_EMBED_MODEL")
 
-    async with aiohttp.ClientSession() as session:
-        async with session.post(
-            f"{embed_url}/embeddings",
-            json={"input": texts, "model": embed_model},
-            timeout=aiohttp.ClientTimeout(total=30),
-        ) as response:
-            result = await response.json()
-            return np.array(
-                [item["embedding"] for item in result["data"]], dtype=np.float32
-            )
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{embed_url}/embeddings",
+                json={"input": texts, "model": embed_model},
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as response:
+                result = await response.json()
+                return np.array(
+                    [item["embedding"] for item in result["data"]], dtype=np.float32
+                )
+    except Exception as e:
+        logger.error(
+            f"❌ RAGAnything Embedding 调用失败 | "
+            f"model={embed_model} | "
+            f"url={embed_url}/embeddings | "
+            f"error_type={type(e).__name__} | "
+            f"error={e}"
+        )
+        raise
 
 
 async def vllm_reranker_func(
@@ -202,25 +238,35 @@ async def vllm_reranker_func(
     rerank_url = get_required_env("VLLM_RERANK_URL")
     rerank_model = get_required_env("VLLM_RERANK_MODEL")
 
-    async with aiohttp.ClientSession() as session:
-        async with session.post(
-            f"{rerank_url}/rerank",
-            json={"model": rerank_model, "query": query, "documents": documents},
-            timeout=aiohttp.ClientTimeout(total=30),
-        ) as response:
-            result = await response.json()
-            reranked = []
-            for item in result.get("results", []):
-                idx = item["index"]
-                reranked.append(
-                    {
-                        "doc_id": idx,
-                        "index": idx,
-                        "relevance_score": item["relevance_score"],
-                        "text": item.get("document", {}).get("text", documents[idx]),
-                    }
-                )
-            return reranked[:top_k] if top_k else reranked
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{rerank_url}/rerank",
+                json={"model": rerank_model, "query": query, "documents": documents},
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as response:
+                result = await response.json()
+                reranked = []
+                for item in result.get("results", []):
+                    idx = item["index"]
+                    reranked.append(
+                        {
+                            "doc_id": idx,
+                            "index": idx,
+                            "relevance_score": item["relevance_score"],
+                            "text": item.get("document", {}).get("text", documents[idx]),
+                        }
+                    )
+                return reranked[:top_k] if top_k else reranked
+    except Exception as e:
+        logger.error(
+            f"❌ RAGAnything Reranker 调用失败 | "
+            f"model={rerank_model} | "
+            f"url={rerank_url}/rerank | "
+            f"error_type={type(e).__name__} | "
+            f"error={e}"
+        )
+        raise
 
 
 def get_embedding_func():
@@ -229,6 +275,97 @@ def get_embedding_func():
     return EmbeddingFunc(
         embedding_dim=embed_dim, max_token_size=8192, func=vllm_embedding_func
     )
+
+
+# =============================================================================
+# 服务健康检查
+# =============================================================================
+async def _check_http_service(name: str, url: str, timeout: int = 5) -> bool:
+    """检查 HTTP 服务健康状态"""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
+                if resp.status < 500:
+                    logger.info(f"  ✅ {name}: {url}")
+                    return True
+                else:
+                    logger.warning(f"  ⚠️ {name}: {url} - HTTP {resp.status}")
+                    return False
+    except Exception as e:
+        logger.error(
+            f"  ❌ {name}: {url} - 不可用 ({type(e).__name__}: {e})"
+        )
+        return False
+
+
+async def check_raganything_services_health() -> Dict[str, bool]:
+    """
+    检查 RAGAnything 依赖的所有服务健康状态
+
+    Returns:
+        Dict[str, bool]: 服务名到健康状态的映射
+    """
+    results = {}
+
+    logger.info("🔍 检查 RAGAnything 服务健康状态...")
+
+    # 检查 Ollama LLM
+    try:
+        ollama_base = os.getenv("RAG_Anything_OLLAMA_BASE_URL", "")
+        if ollama_base:
+            results["ollama"] = await _check_http_service("Ollama LLM", f"{ollama_base}/api/tags")
+        else:
+            logger.warning("  ⚠️ Ollama LLM: 未配置 RAG_Anything_OLLAMA_BASE_URL")
+            results["ollama"] = False
+    except Exception as e:
+        logger.error(f"  ❌ Ollama LLM 检查异常: {e}")
+        results["ollama"] = False
+
+    # 检查 VLLM Embedding
+    try:
+        embed_url = os.getenv("VLLM_EMBED_URL", "")
+        if embed_url:
+            results["vllm_embed"] = await _check_http_service("VLLM Embedding", f"{embed_url}/health")
+        else:
+            logger.warning("  ⚠️ VLLM Embedding: 未配置 VLLM_EMBED_URL")
+            results["vllm_embed"] = False
+    except Exception as e:
+        logger.error(f"  ❌ VLLM Embedding 检查异常: {e}")
+        results["vllm_embed"] = False
+
+    # 检查 VLLM Reranker
+    try:
+        rerank_url = os.getenv("VLLM_RERANK_URL", "")
+        if rerank_url:
+            results["vllm_rerank"] = await _check_http_service("VLLM Reranker", f"{rerank_url}/health")
+        else:
+            logger.warning("  ⚠️ VLLM Reranker: 未配置 VLLM_RERANK_URL")
+            results["vllm_rerank"] = False
+    except Exception as e:
+        logger.error(f"  ❌ VLLM Reranker 检查异常: {e}")
+        results["vllm_rerank"] = False
+
+    # 检查 OpenAI API (Vision)
+    try:
+        openai_base = os.getenv("RAG_Anything_OPENAI_API_BASE", "")
+        if openai_base:
+            results["openai_api"] = await _check_http_service("OpenAI API", f"{openai_base}/models")
+        else:
+            logger.warning("  ⚠️ OpenAI API: 未配置 RAG_Anything_OPENAI_API_BASE")
+            results["openai_api"] = False
+    except Exception as e:
+        logger.error(f"  ❌ OpenAI API 检查异常: {e}")
+        results["openai_api"] = False
+
+    # 总结
+    healthy_count = sum(1 for v in results.values() if v)
+    total_count = len(results)
+    if healthy_count == total_count:
+        logger.info(f"✅ 所有服务健康 ({healthy_count}/{total_count})")
+    else:
+        logger.warning(f"⚠️ 部分服务不可用 ({healthy_count}/{total_count})")
+
+    return results
 
 
 async def get_raganything_instance():
@@ -265,6 +402,8 @@ async def get_raganything_instance():
         logger.info(f"   OPENAI_API_BASE (VLLM): {get_required_env('OPENAI_API_BASE')}")
         logger.info(f"   OPENAI_MODEL (VLLM): {get_required_env('OPENAI_MODEL')}")
 
+        # 健康检查
+        await check_raganything_services_health()
 
         milvus_config = {
             "uri": get_required_env("MILVUS_URI"),

@@ -328,7 +328,7 @@ class ConversationWorkflow:
 
         # Compile and export graph for debugging
         compiled_graph = graph.compile()
-        self._dump_graph_debug(compiled_graph)
+        # self._dump_graph_debug(compiled_graph)
         return compiled_graph
 
     def _dump_graph_debug(self, compiled_graph) -> None:

@@ -657,7 +657,7 @@ async def generate_openai_stream_v1(
 
                             current_state["sources"].append({
                                 "type": "entity",
-                                "from": "raganything",
+                                "from": "raganything【知识图谱】",
                                 "text": doc_title,
                                 "citations": citations
                             })
@@ -680,7 +680,7 @@ async def generate_openai_stream_v1(
 
                             current_state["sources"].append({
                                 "type": "chunk",
-                                "from": "raganything",
+                                "from": "raganything【文档块】",
                                 "text": doc_title,
                                 "citations": citations
                             })
