@@ -229,7 +229,7 @@ class ChatStreamV1Tester:
                 print(f"Citations: {len(citations)} 条")
                 if citations:
                     for i, citation in enumerate(citations, 1):
-                        print(f"  {i}. {str(citation)[:100]}...")
+                        print(f"  {i}. {str(citation)}")
                 print("-" * 40)
 
         print("=" * 60)

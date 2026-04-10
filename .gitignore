@@ -70,3 +70,4 @@ get.json
 finish_chunk_data
 ai-service/.env*
 ai-service/scripts/test_phi4_api_openai_sdk_query.py
+ai-service/tests/stream.out

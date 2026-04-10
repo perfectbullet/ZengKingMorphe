@@ -3,6 +3,7 @@ RAGAnything 包装器 - 提供流式查询接口
 
 集成 RAGAnything 到 ai-service，提供统一的 RAG 查询接口。
 """
+
 import os
 from typing import AsyncIterator, Dict, Any
 from app.core.logging import get_logger
@@ -16,7 +17,15 @@ import numpy as np
 from lightrag.utils import EmbeddingFunc
 from raganything import RAGAnything, RAGAnythingConfig
 from lightrag.llm.openai import openai_complete_if_cache
-
+from raganything.utils import (
+    validate_required_env_vars,
+    get_required_env,
+    load_content_list_v2,
+    ContentProcessingProgressTracker,
+    RetryConfig,
+    ProgressMessage,
+    get_chinese_query_prompt,
+)
 
 logger = get_logger(__name__)
 _raganything_instance = None
@@ -74,11 +83,15 @@ def get_required_env(var_name: str) -> str:
         raise ValueError(f"缺少必需的环境变量: {var_name}")
     return value.strip()
 
+
 # =============================================================================
 # 模型函数
 # =============================================================================
 async def llm_model_func(
-    prompt: str, system_prompt: str = None, history_messages: List[Dict] = None, **kwargs
+    prompt: str,
+    system_prompt: str = None,
+    history_messages: List[Dict] = None,
+    **kwargs,
 ) -> str:
     """OpenAI兼容API的LLM函数"""
     return await openai_complete_if_cache(
@@ -87,7 +100,7 @@ async def llm_model_func(
         system_prompt=system_prompt,
         history_messages=history_messages or [],
         base_url=get_required_env("RAG_Anything_OLLAMA_BASE_URL"),
-        api_key='no-api-key',
+        api_key="no-api-key",
         **kwargs,
     )
 
@@ -133,7 +146,9 @@ async def vision_model_func(
                         {"type": "text", "text": prompt},
                         {
                             "type": "image_url",
-                            "image_url": {"url": f"data:image/jpeg;base64,{image_data}"},
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{image_data}"
+                            },
                         },
                     ],
                 },
@@ -175,7 +190,9 @@ async def vllm_embedding_func(texts: List[str]) -> np.ndarray:
             timeout=aiohttp.ClientTimeout(total=30),
         ) as response:
             result = await response.json()
-            return np.array([item["embedding"] for item in result["data"]], dtype=np.float32)
+            return np.array(
+                [item["embedding"] for item in result["data"]], dtype=np.float32
+            )
 
 
 async def vllm_reranker_func(
@@ -218,7 +235,6 @@ async def get_raganything_instance():
     """获取 RAGAnything 单例实例"""
     global _raganything_instance
     if _raganything_instance is None:
-
         config = RAGAnythingConfig(
             working_dir=get_required_env("RAG_ANYTHING_WORKING_DIR"),
             enable_image_processing=True,
@@ -226,7 +242,7 @@ async def get_raganything_instance():
             enable_equation_processing=True,
             display_content_stats=True,
         )
-        
+
         # 初始化 RAGAnything（带数据库后端）
         # 隐藏密码显示 MongoDB URI
         mongo_display = get_required_env("MONGO_URI")
@@ -237,13 +253,18 @@ async def get_raganything_instance():
             if ":" in auth:
                 username = auth.split(":")[0]
                 mongo_display = f"{parts[0].split('://')[0]}//{username}:***@{parts[1]}"
-        
+
         logger.info("    初始化 RAGAnything（数据库后端）...")
         logger.info("    存储配置:")
         logger.info(f"   文档状态存储 (MongoDB): {mongo_display}")
         logger.info(f"   向量存储 (Milvus): {get_required_env('MILVUS_URI')}")
-        logger.info(f"   图存储 (Neo4j): http://{get_required_env('NEO4J_URI').replace('bolt://', '').replace(':7687', '')}:7474")
+        logger.info(
+            f"   图存储 (Neo4j): http://{get_required_env('NEO4J_URI').replace('bolt://', '').replace(':7687', '')}:7474"
+        )
         logger.info(f"   Reranker (VLLM): {get_required_env('VLLM_RERANK_URL')}")
+        logger.info(f"   OPENAI_API_BASE (VLLM): {get_required_env('OPENAI_API_BASE')}")
+        logger.info(f"   OPENAI_MODEL (VLLM): {get_required_env('OPENAI_MODEL')}")
+
 
         milvus_config = {
             "uri": get_required_env("MILVUS_URI"),
@@ -251,7 +272,7 @@ async def get_raganything_instance():
             "password": get_required_env("MILVUS_PASSWORD"),
             "db_name": get_required_env("MILVUS_DB_NAME"),
         }
-        
+
         _raganything_instance = RAGAnything(
             config=config,
             llm_model_func=llm_model_func,
@@ -267,15 +288,32 @@ async def get_raganything_instance():
                 # LightRAG 配置 (注意: 使用 cosine_better_than_threshold 而不是 cosine_threshold)
                 "cosine_better_than_threshold": 0.5,  # 向量相似度阈值
                 "min_rerank_score": 0.3,  # 过滤 rerank 分数低于 0.2 的 chunks
+                # 缓存开关
+                "enable_llm_cache": False,
+                # 语言配置
+                "addon_params": {
+                    "language": "Chinese",  # 知识图谱构建和查询的语言
+                    "entity_types": [
+                        "organization",
+                        "person",
+                        "location",
+                        "event",
+                        "concept",
+                        "method",
+                    ],
+                },
             },
         )
         await _raganything_instance._ensure_lightrag_initialized()
+        await _raganything_instance.lightrag.initialize_storages()
         logger.info("RAGAnything instance initialized successfully")
 
     return _raganything_instance
 
 
-async def get_raganything_stream(query: str, mode: str = "hybrid") -> AsyncIterator[Dict[str, Any]]:
+async def get_raganything_stream(
+    query: str, mode: str = "hybrid"
+) -> AsyncIterator[Dict[str, Any]]:
     """
     流式查询接口
 
@@ -291,7 +329,14 @@ async def get_raganything_stream(query: str, mode: str = "hybrid") -> AsyncItera
             - {"type": "error", "content": str}: 错误信息
     """
     rag = await get_raganything_instance()
-    async for chunk in rag.aquery_stream_with_sources(query, mode=mode):
+    async for chunk in rag.aquery_stream_with_sources(
+        query,
+        mode="hybrid",
+        system_prompt=get_chinese_query_prompt(),  # 中文系统提示词（无 References）
+        top_k=20,  # 召回实体/关系数量
+        chunk_top_k=10,  # (默认10) - 召回文档块数量
+        enable_rerank=True,  # (默认True) - 是否启用重排序
+    ):
         yield chunk
 
 

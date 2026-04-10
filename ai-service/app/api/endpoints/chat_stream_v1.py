@@ -584,8 +584,8 @@ async def generate_openai_stream_v1(
             )
 
             # 检查是否有预生成的答案（direct_match）
-            existing_answer = current_state.get("final_answer", "")
-            direct_match = current_state.get("direct_match")
+            # existing_answer = current_state.get("final_answer", "")
+            # direct_match = current_state.get("direct_match")
             # 先不做预生产答案
 
             first_token_received = False
@@ -616,15 +616,14 @@ async def generate_openai_stream_v1(
                 mode = current_state.get("raganything_mode", "hybrid")
                 logger.info(f"Using RAGAnything stream | query={query[:50]} | mode={mode}")
                 async for chunk in get_raganything_stream(query, mode=mode):
-                    if chunk["type"] == "chunk":
-                        content = chunk["content"]
+                    chunk_type = chunk.get("type")
+                    content = chunk.get("content")
+                    if chunk_type == "chunk":
                         # 跳过 None 内容
                         if content is None:
                             continue
-
                         full_answer += content
                         segment = sentence_buffer.add(content)
-
                         if segment:
                             chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
                                 segment, revise_llm, chat_id, created, request.model,
@@ -633,38 +632,60 @@ async def generate_openai_stream_v1(
                                 log_prefix="RAGAnything"
                             )
                             yield json.dumps(chunk_data)
-
-                    elif chunk["type"] == "sources_info":
-                        logger.info(f"RAGAnything sources info | {chunk['content']}")
-                    elif chunk["type"] == "sources":
+                    elif chunk_type == "sources_info":
+                        content: dict
+                        logger.info(f"📊 检索到: {content['entities_count']} 个实体, "
+                           f"{content['relationships_count']} 个关系, "
+                           f"{content['chunks_count']} 个文档块")
+                    elif chunk_type == "sources":
                         # 捕获 RAGAnything 返回的 sources
-                        sources_data = chunk["content"]
-                        entities = sources_data.get("entities", [])
-
-                        if entities:
-                            # 转换为新格式
+                        sources = content
+                        # 处理实体引用
+                        if sources.get("entities"):
+                            entities = sources["entities"]
                             citations = []
-                            for entity in entities[:3]:
+                            for entity in entities:
                                 citations.append({
-                                    "doc_id": entity.get("source_id", ""),
-                                    "kb_id": "",  # RAGAnything 没有提供 kb_id
-                                    "chunk_index": None,  # RAGAnything 没有提供 chunk_index
+                                    "doc_id": entity.get("source_id", "")[:10],
+                                    "kb_id": "",
+                                    "chunk_index": None,
                                     "score": entity.get("score", 0.0),
-                                    "content": entity.get("description", "")[:200]
+                                    "content": entity.get("description", "")
                                 })
 
-                            # 获取文档标题（使用 entity_name 或文件名）
-                            doc_title = entities[0].get("entity_name", entities[0].get("file_path", "知识库文档"))
+                            doc_title = entities[0].get("entity_name", entities[0].get("file_path", "知识库实体"))
 
                             current_state["sources"].append({
-                                "type": "text",
-                                "from": "rag",
+                                "type": "entity",
+                                "from": "raganything",
                                 "text": doc_title,
                                 "citations": citations
                             })
+                            logger.info(f"RAGAnything entities | count={len(entities)} | 添加到 state['sources']")
 
-                            logger.info(f"RAGAnything sources | entities={len(entities)} | 添加到 state['sources']")
-                    elif chunk["type"] == "error":
+                        # 处理文档块引用
+                        if sources.get("chunks"):
+                            chunks = sources["chunks"]
+                            citations = []
+                            for chunk in chunks:
+                                citations.append({
+                                    "doc_id": chunk.get("doc_id", chunk.get("source_id", ""))[:10],
+                                    "kb_id": "",
+                                    "chunk_index": chunk.get("chunk_id")[:10],
+                                    "score": chunk.get("score", 0.0),
+                                    "content": chunk.get("content", "")
+                                })
+
+                            doc_title = chunks[0].get("docpath", chunks[0].get("file_path", "知识库文档"))
+
+                            current_state["sources"].append({
+                                "type": "chunk",
+                                "from": "raganything",
+                                "text": doc_title,
+                                "citations": citations
+                            })
+                            logger.info(f"RAGAnything chunks | count={len(chunks)} | 添加到 state['sources']")
+                    elif chunk_type == "error":
                         logger.error(f"RAGAnything error | {chunk['content']}")
 
                 # 刷新 buffer 中剩余内容
