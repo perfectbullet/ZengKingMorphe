@@ -640,49 +640,32 @@ async def generate_openai_stream_v1(
                     elif chunk_type == "sources":
                         # 捕获 RAGAnything 返回的 sources
                         sources = content
+                        
+                        # 【调试代码】
+                        # 保存 sources 为 JSON 文件
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        json_file_path = f"json格式数据/{timestamp}_sources.json"
+                        with open(json_file_path, 'w', encoding='utf-8') as f:
+                            json.dump(sources, f, ensure_ascii=False, indent=2)
+                        print(f"📁 来源数据已保存到: {json_file_path}")
+                        # 【调试代码】
+                        
                         # 处理实体引用
                         if sources.get("entities"):
                             entities = sources["entities"]
-                            citations = []
-                            for entity in entities:
-                                citations.append({
-                                    "doc_id": entity.get("source_id", "")[:10],
-                                    "kb_id": "",
-                                    "chunk_index": None,
-                                    "score": entity.get("score", 0.0),
-                                    "content": entity.get("description", "")
-                                })
-
-                            doc_title = entities[0].get("entity_name", entities[0].get("file_path", "知识库实体"))
-
                             current_state["sources"].append({
                                 "type": "entity",
-                                "from": "raganything【知识图谱】",
-                                "text": doc_title,
-                                "citations": citations
+                                "from": "【知识图谱】",
+                                "entities": sources["entities"]
                             })
                             logger.info(f"RAGAnything entities | count={len(entities)} | 添加到 state['sources']")
-
                         # 处理文档块引用
                         if sources.get("chunks"):
                             chunks = sources["chunks"]
-                            citations = []
-                            for chunk in chunks:
-                                citations.append({
-                                    "doc_id": chunk.get("doc_id", chunk.get("source_id", ""))[:10],
-                                    "kb_id": "",
-                                    "chunk_index": chunk.get("chunk_id")[:10],
-                                    "score": chunk.get("score", 0.0),
-                                    "content": chunk.get("content", "")
-                                })
-
-                            doc_title = chunks[0].get("docpath", chunks[0].get("file_path", "知识库文档"))
-
                             current_state["sources"].append({
                                 "type": "chunk",
-                                "from": "raganything【文档块】",
-                                "text": doc_title,
-                                "citations": citations
+                                "from": "【文档块】",
+                                "chunks": chunks
                             })
                             logger.info(f"RAGAnything chunks | count={len(chunks)} | 添加到 state['sources']")
                     elif chunk_type == "error":

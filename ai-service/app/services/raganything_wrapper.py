@@ -425,8 +425,8 @@ async def get_raganything_instance():
                 "rerank_model_func": vllm_reranker_func,
                 "vector_db_storage_cls_kwargs": milvus_config,
                 # LightRAG 配置 (注意: 使用 cosine_better_than_threshold 而不是 cosine_threshold)
-                "cosine_better_than_threshold": 0.5,  # 向量相似度阈值
-                "min_rerank_score": 0.3,  # 过滤 rerank 分数低于 0.2 的 chunks
+                "cosine_better_than_threshold": 0.7,  # 向量相似度阈值
+                "min_rerank_score": 0.9,  # 过滤 rerank 分数低于 0.2 的 chunks
                 # 缓存开关
                 "enable_llm_cache": False,
                 # 语言配置
@@ -470,10 +470,10 @@ async def get_raganything_stream(
     rag = await get_raganything_instance()
     async for chunk in rag.aquery_stream_with_sources(
         query,
-        mode="hybrid",
+        mode=mode,
         system_prompt=get_chinese_query_prompt(),  # 中文系统提示词（无 References）
-        top_k=20,  # 召回实体/关系数量
-        chunk_top_k=10,  # (默认10) - 召回文档块数量
+        top_k=2,  # 召回实体/关系数量
+        chunk_top_k=3,  # (默认10) - 召回文档块数量
         enable_rerank=True,  # (默认True) - 是否启用重排序
     ):
         yield chunk
