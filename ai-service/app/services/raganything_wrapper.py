@@ -24,8 +24,8 @@ from raganything.utils import (
     ContentProcessingProgressTracker,
     RetryConfig,
     ProgressMessage,
-    get_chinese_query_prompt,
 )
+from raganything.query_prompts import get_chinese_query_prompt
 
 logger = get_logger(__name__)
 _raganything_instance = None
@@ -425,8 +425,8 @@ async def get_raganything_instance():
                 "rerank_model_func": vllm_reranker_func,
                 "vector_db_storage_cls_kwargs": milvus_config,
                 # LightRAG 配置 (注意: 使用 cosine_better_than_threshold 而不是 cosine_threshold)
-                "cosine_better_than_threshold": 0.7,  # 向量相似度阈值
-                "min_rerank_score": 0.9,  # 过滤 rerank 分数低于 0.2 的 chunks
+                "cosine_better_than_threshold": 0.6,  # 向量相似度阈值
+                "min_rerank_score": 0.8,  # 过滤 rerank 分数低于 0.2 的 chunks
                 # 缓存开关
                 "enable_llm_cache": False,
                 # 语言配置
