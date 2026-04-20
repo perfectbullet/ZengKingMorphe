@@ -5,7 +5,6 @@ This module provides functions to convert markdown-formatted text into
 voice-friendly text for text-to-speech services.
 """
 import re
-from typing import Optional
 
 
 def strip_markdown_for_tts(text: str) -> str:
