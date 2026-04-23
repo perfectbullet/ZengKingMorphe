@@ -7,6 +7,7 @@ This module provides:
 - Message building helpers
 - Personality description helpers
 """
+
 import time
 from contextlib import asynccontextmanager
 from typing import List, Dict, Any, Tuple
@@ -56,11 +57,7 @@ async def time_node(node_name: str, state: ConversationState, llm_instance=None)
 # =============================================================================
 # LLM Selection Utility
 # =============================================================================
-def select_llm(
-    state: ConversationState,
-    local_llm,
-    remote_llm
-) -> Tuple[Any, str]:
+def select_llm(state: ConversationState, local_llm, remote_llm) -> Tuple[Any, str]:
     """
     Select appropriate LLM based on query context (hybrid mode only).
 
@@ -79,12 +76,12 @@ def select_llm(
     Returns:
         Tuple of (llm, model_name)
     """
-    routing_mode = getattr(settings, 'llm_routing_mode', 'local_only')
+    routing_mode = getattr(settings, "llm_routing_mode", "local_only")
 
     # Non-hybrid modes: return pre-configured LLM
-    if routing_mode == 'local_only':
+    if routing_mode == "local_only":
         return local_llm, settings.ollama_model
-    elif routing_mode == 'remote_only':
+    elif routing_mode == "remote_only":
         return remote_llm, settings.openai_model
 
     # Hybrid mode: dynamic selection based on complexity score
@@ -94,7 +91,7 @@ def select_llm(
     faq_matched = state.get("faq_matched")
 
     # 复杂度阈值：超过此分数使用外部模型
-    complexity_threshold = getattr(settings, 'complexity_threshold', 7.0)
+    complexity_threshold = getattr(settings, "complexity_threshold", 7.0)
 
     # 决策逻辑
     use_remote = False
@@ -120,7 +117,7 @@ def select_llm(
         complexity_score=complexity_score,
         complexity_reason=complexity_reason,
         reason=reason,
-        threshold=complexity_threshold
+        threshold=complexity_threshold,
     )
 
     if use_remote:
@@ -145,20 +142,20 @@ def get_personality_description(personality: dict) -> Tuple[str, str, str]:
         "professional": "专业严谨",
         "friendly": "友好亲切",
         "formal": "正式庄重",
-        "casual": "轻松随意"
+        "casual": "轻松随意",
     }
 
     style_map = {
         "concise": "简明扼要",
         "detailed": "详细周到",
         "conversational": "对话式",
-        "instructional": "指导式"
+        "instructional": "指导式",
     }
 
     formality_map = {
         "high": "高度正式（使用敬语）",
         "moderate": "适度正式",
-        "low": "轻松口语化"
+        "low": "轻松口语化",
     }
 
     tone_desc = tone_map.get(personality.get("tone", "professional"), "专业")
@@ -243,8 +240,7 @@ def _build_conversation_history(state: ConversationState, max_turns: int = 5) ->
 # Message Building Helpers
 # =============================================================================
 def build_greeting_messages(
-    state: ConversationState,
-    employee_config: Dict[str, Any]
+    state: ConversationState, employee_config: Dict[str, Any]
 ) -> List:
     """
     Build LLM messages for greeting scenario.
@@ -264,21 +260,23 @@ def build_greeting_messages(
     personality = employee_config.get("personality", {})
     role = employee_config.get("role", "AI助手")
     greeting = employee_config.get("greeting", "您好")
-    name = employee_config.get('name', 'AI助手')
-    description = employee_config.get('description', '专业的AI助手')
+    name = employee_config.get("name", "AI助手")
+    description = employee_config.get("description", "专业的AI助手")
 
     entities = state.get("entities", {})
     greeting_type = entities.get("greeting_type", "basic")
     matched_keyword = entities.get("matched_keyword", "")
 
     tone_desc, _, _ = get_personality_description(personality)
-    formality_desc = "高度正式" if personality.get('formality') == 'high' else "适度正式"
+    formality_desc = (
+        "高度正式" if personality.get("formality") == "high" else "适度正式"
+    )
 
     style_hints = {
         "time": f"根据时间（{matched_keyword}）给予相应的热情问候，并自然地询问用户今天需要什么帮助",
         "casual": "用轻松活泼的方式回应，表现出随时准备提供帮助的状态",
         "polite": "以礼貌、耐心的方式回应，让用户感受到专业和尊重",
-        "basic": "用简洁友好的方式回应，自然地引导用户说明需求"
+        "basic": "用简洁友好的方式回应，自然地引导用户说明需求",
     }
     style_hint = style_hints.get(greeting_type, style_hints["basic"])
 
@@ -305,7 +303,7 @@ def build_greeting_messages(
 6. 如果用户用英文你也用英文
 
 用户原话：
-{state['user_query']}
+{state["user_query"]}
 """
 
     messages = [SystemMessage(content=system_prompt)]
@@ -315,7 +313,7 @@ def build_greeting_messages(
     logger.debug(
         "Greeting messages built",
         greeting_type=greeting_type,
-        matched_keyword=matched_keyword
+        matched_keyword=matched_keyword,
     )
 
     return messages
@@ -346,8 +344,8 @@ def build_generation_messages(state: ConversationState) -> List:
     personality = employee_config.get("personality", {})
     role = employee_config.get("role", "AI助手")
     greeting = employee_config.get("greeting", "您好")
-    name = employee_config.get('name', 'AI助手')
-    description = employee_config.get('description', '专业的AI助手')
+    name = employee_config.get("name", "AI助手")
+    description = employee_config.get("description", "专业的AI助手")
     tone_desc, style_desc, formality_desc = get_personality_description(personality)
 
     context_text = build_context_text(state)
@@ -386,7 +384,7 @@ def build_generation_messages(state: ConversationState) -> List:
 {context_text}
 
 用户问题：
-{state['user_query']}
+{state["user_query"]}
 """
         elif realtime_category == "news":
             requirements = f"""**重要提示**：用户询问的是新闻信息，系统已通过网络搜索获取了最新数据。
@@ -402,7 +400,7 @@ def build_generation_messages(state: ConversationState) -> List:
 {context_text}
 
 用户问题：
-{state['user_query']}
+{state["user_query"]}
 """
         elif realtime_category == "market":
             requirements = f"""**重要提示**：用户询问的是价格/市场信息，系统已通过网络搜索获取了最新数据。
@@ -418,7 +416,7 @@ def build_generation_messages(state: ConversationState) -> List:
 {context_text}
 
 用户问题：
-{state['user_query']}
+{state["user_query"]}
 
 """
         else:
@@ -435,7 +433,7 @@ def build_generation_messages(state: ConversationState) -> List:
 {context_text}
 
 用户问题：
-{state['user_query']}
+{state["user_query"]}
 
 请基于上述网络资料，提供准确的实时信息回答。"""
     else:
@@ -451,7 +449,7 @@ def build_generation_messages(state: ConversationState) -> List:
 {context_text}
 
 用户问题：
-{state['user_query']}
+{state["user_query"]}
 
 """
 
@@ -477,8 +475,8 @@ def build_math_generation_messages(state: ConversationState) -> List:
     # Phi-4 专用系统提示词
     SYSTEM_PROMPT = (
         "你是 Phi-4-Mini-Reasoning，一个专门从事数学和逻辑推理的强大 AI 模型。\n"
-        "请一步步思考，并提供清晰、合理的答案。\n"
-        "对于数学问题，请展示完整的解题过程。"
+        "请简洁的回答。\n"
+        "请使用中文回复。\n"
     )
 
     # 使用 Phi-4 模型进行数学推理
@@ -511,11 +509,26 @@ def heuristic_complexity(query: str) -> float:
 
     # Complex keywords
     complex_keywords = [
-        "为什么", "为何", "如何", "怎样", "怎么",
-        "比较", "对比", "区别", "差异",
-        "分析", "评估", "评价", "总结",
-        "影响", "后果", "原因", "导致",
-        "关系", "关联", "相关性"
+        "为什么",
+        "为何",
+        "如何",
+        "怎样",
+        "怎么",
+        "比较",
+        "对比",
+        "区别",
+        "差异",
+        "分析",
+        "评估",
+        "评价",
+        "总结",
+        "影响",
+        "后果",
+        "原因",
+        "导致",
+        "关系",
+        "关联",
+        "相关性",
     ]
     if any(kw in query for kw in complex_keywords):
         score += 2
@@ -525,7 +538,16 @@ def heuristic_complexity(query: str) -> float:
         score += 1
 
     # Simple patterns (reduce complexity)
-    simple_patterns = ["是什么", "什么是", "多少", "几个", "天气", "价格", "多少钱", "怎么"]
+    simple_patterns = [
+        "是什么",
+        "什么是",
+        "多少",
+        "几个",
+        "天气",
+        "价格",
+        "多少钱",
+        "怎么",
+    ]
     if any(p in query for p in simple_patterns) and length < 30:
         score -= 1
 

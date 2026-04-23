@@ -228,8 +228,8 @@ class ConversationWorkflow:
         # 读取配置
         base_url = os.getenv("PHI4_BASE_URL", "http://192.168.8.235:8000/v1")
         model_id = get_vllm_first_model(base_url)
-        temperature = float(os.getenv("PHI4_TEMPERATURE", "0.1"))
-        max_tokens = int(os.getenv("PHI4_MAX_TOKENS", "8192"))
+        temperature = float(os.getenv("PHI4_TEMPERATURE", "0.0"))
+        max_tokens = int(os.getenv("PHI4_MAX_TOKENS", "16384"))
 
         # 动态创建 ChatOpenAI 实例
         phi4_llm = ChatOpenAI(
@@ -239,6 +239,9 @@ class ConversationWorkflow:
             temperature=temperature,
             max_tokens=max_tokens,
             streaming=True,
+            extra_body={
+                "repetition_penalty": 1.2,  # vLLM 特有参数
+            }
         )
 
         logger.info(
