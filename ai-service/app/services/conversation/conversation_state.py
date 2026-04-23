@@ -5,8 +5,13 @@ This module defines:
 - ConversationState: TypedDict that flows through workflow nodes
 - GREETING_KEYWORDS: Keyword patterns for greeting detection
 """
-from typing import TypedDict, Annotated, List, Dict, Any, Optional
+from pathlib import Path
+from typing import TypedDict, Annotated, List, Dict, Any, Optional, Set
 from operator import add
+
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 # =============================================================================
@@ -33,21 +38,42 @@ GREETING_KEYWORDS = {
 # Basic sensitive word list for content safety filtering.
 # Used when employee-specific sensitive word lists are not available.
 # =============================================================================
-DEFAULT_SENSITIVE_WORDS = [
-    # Violence/Threat (暴力/威胁)
-    "杀你", "杀死你", "弄死你", "宰了你", "废了你",
-    "砍死", "捅死", "打死", "炸死", "毒死", "杀死",
-    # Sexual content (涉黄)
-    "做爱", "性交", "嫖娼", "卖淫", "淫秽",
-    "色情", "裸聊", "约炮", "一夜情", "性服务",
-    "情色", "成人片", "黄色视频", "黄色小说",
-    # Political sensitivity (政治敏感)
-    "习近平", "推翻政府", "暴力推翻", "恐怖主义", "极端主义",
-    "法轮功", "邪教", "六四运动", "天安门事件", "体罚", "打骂学生", 
-    "乱收费", "强制补课", "收礼","贿赂","走后门","暗箱操作","开除","劝退","区别对待","歧视差生"
-    # Note: For production, employee-specific sensitive words
-    # from safe_rule.sensitive_ids should take priority
-]
+def _load_default_sensitive_words() -> Set[str]:
+    """
+    从文件加载默认敏感词列表。
+
+    文件格式：
+    - 一行一个敏感词
+    - # 开头为注释
+    - ( 开头为注释
+    - 自动去重
+    - 去掉长度为1的敏感词
+    Returns:
+        Set[str]: 去重后的敏感词集合
+    """
+    words: Set[str] = set()
+    # 从 conversation_state.py 向上四级到 ai-service 目录
+    # ai-service/app/services/conversation/conversation_state.py -> ai-service/
+    file_path = Path(__file__).parent.parent.parent.parent / "DEFAULT_SENSITIVE_WORDS.txt"
+
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                # 跳过空行、注释行（#或(开头）
+                if not line or line.startswith("#") or line.startswith("("):
+                    continue
+                if len(line) < 2:
+                    continue
+                words.add(line)
+        logger.info(f"Loaded {len(words)} default sensitive words from {file_path}")
+    except FileNotFoundError:
+        logger.warning(f"Sensitive words file not found: {file_path}, using empty list")
+
+    return words
+
+
+DEFAULT_SENSITIVE_WORDS = list(_load_default_sensitive_words())
 
 
 # =============================================================================

@@ -206,7 +206,8 @@ class ConversationNodes:
                     sensitive_words.update(employee_words)
 
             # Check if query contains any sensitive word
-            has_sensitive = any(word.lower() in query for word in sensitive_words if word)
+            sensitive_words_lower = {w.lower() for w in sensitive_words if w}
+            has_sensitive = any(word in query for word in sensitive_words_lower)
 
             state["has_sensitive"] = has_sensitive
 
