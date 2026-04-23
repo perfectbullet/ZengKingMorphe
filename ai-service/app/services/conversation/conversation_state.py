@@ -73,7 +73,8 @@ def _load_default_sensitive_words() -> Set[str]:
     return words
 
 
-DEFAULT_SENSITIVE_WORDS = list(_load_default_sensitive_words())
+DEFAULT_SENSITIVE_WORDS = frozenset(_load_default_sensitive_words())
+DEFAULT_SENSITIVE_WORDS_LOWER = frozenset(w.lower() for w in DEFAULT_SENSITIVE_WORDS)
 
 
 # =============================================================================

@@ -27,7 +27,8 @@ from app.models.database import ConversationModel, SessionModel
 from app.services.conversation.conversation_state import (
     ConversationState,
     GREETING_KEYWORDS,
-    DEFAULT_SENSITIVE_WORDS
+    DEFAULT_SENSITIVE_WORDS,
+    DEFAULT_SENSITIVE_WORDS_LOWER,
 )
 from app.services.conversation.conversation_helpers import (
     time_node,
@@ -193,6 +194,7 @@ class ConversationNodes:
             # Add employee-specific sensitive words from safe_rule.sensitive_ids
             safe_rule = employee_config.get("safe_rule") or {}
             sensitive_ids = safe_rule.get("sensitive_ids") or []
+            employee_words_lower: set = set()
             if sensitive_ids:
                 # Load sensitive words from database
                 db = get_database()
@@ -204,15 +206,17 @@ class ConversationNodes:
                     sensitive_docs = await cursor.to_list(length=None)
                     employee_words = [doc.get("word", "") for doc in sensitive_docs if doc.get("word")]
                     sensitive_words.update(employee_words)
+                    employee_words_lower = {w.lower() for w in employee_words if w}
 
-            # Check if query contains any sensitive word
-            sensitive_words_lower = {w.lower() for w in sensitive_words if w}
-            has_sensitive = any(word in query for word in sensitive_words_lower)
+            # Check if query contains any sensitive word (using pre-computed lowercase set)
+            check_words_lower = DEFAULT_SENSITIVE_WORDS_LOWER | employee_words_lower
+            query_lower = query.lower()
+            has_sensitive = any(word in query_lower for word in check_words_lower)
 
             state["has_sensitive"] = has_sensitive
 
             # DEBUG: 输出敏感词检测结果
-            matched_words = [w for w in sensitive_words if w.lower() in query]
+            matched_words = [w for w in sensitive_words if w.lower() in query_lower]
             logger.info(
                 f"[DEBUG] Sensitive check | query={query[:50]} | "
                 f"words_count={len(sensitive_words)} | has_sensitive={has_sensitive} | "

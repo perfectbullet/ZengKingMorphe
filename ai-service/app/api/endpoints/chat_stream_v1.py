@@ -601,7 +601,6 @@ async def generate_openai_stream_v1(
             if streaming_type == "raganything_stream":
                 # 输出话术，因为有点延迟
                 talking_point = "好的，我正在梳理您的问题要点。\n"
-                full_answer += full_answer
                 chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
                     talking_point, revise_llm, chat_id, created, request.model,
                     db, chunk_sequence, session_id, request.user_id,
@@ -688,7 +687,6 @@ async def generate_openai_stream_v1(
             elif streaming_type == "phi4_math":
                 # 增加话术 因为接下来要推理
                 talking_point_math_think = "我需要思考一下这个数学问题，请稍等。"
-                full_answer += full_answer
                 chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
                     talking_point_math_think, revise_llm, chat_id, created, request.model,
                     db, chunk_sequence, session_id, request.user_id,

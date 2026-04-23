@@ -1,11 +1,14 @@
+import functools
+
 from langchain_openai import ChatOpenAI
 
 
+@functools.lru_cache(maxsize=4)
 def get_vllm_first_model(base_url: str) -> str:
-    """获取 vLLM 第一个模型 ID
+    """获取 vLLM 第一个模型 ID（结果按 base_url 缓存）
 
     Args:
-        client: ChatOpenAI 实例
+        base_url: vLLM API base URL（如 http://192.168.8.235:8000/v1）
 
     Returns:
         第一个模型的 ID
@@ -16,7 +19,7 @@ def get_vllm_first_model(base_url: str) -> str:
     """
     try:
         client = ChatOpenAI(
-            base_url=base_url,  # 注意：base_url 不要加 /models
+            base_url=base_url,
             api_key="dummy-key",
         )
         # 访问底层的 OpenAI 客户端
@@ -24,7 +27,7 @@ def get_vllm_first_model(base_url: str) -> str:
 
         # 检查模型列表是否为空
         if not response.data:
-            raise ValueError(f"未找到可用的模型，base_url={client.openai_api_base}")
+            raise ValueError(f"未找到可用的模型，base_url={base_url}")
 
         # 返回第一个模型 ID
         return response.data[0].id
@@ -36,12 +39,8 @@ def get_vllm_first_model(base_url: str) -> str:
 
 
 if __name__ == "__main__":
-    client = ChatOpenAI(
-        base_url="http://192.168.8.235:8000/v1",  # 注意：不要加 /models
-        api_key="dummy-key",
-    )
     try:
-        first_model = get_vllm_first_model(client)
+        first_model = get_vllm_first_model("http://192.168.8.235:8000/v1")
         print(f"✓ 第一个模型 ID: {first_model}")
     except Exception as e:
         print(f"✗ 错误: {e}")
