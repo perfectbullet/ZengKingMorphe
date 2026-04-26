@@ -11,6 +11,14 @@ SSH_KEY="/home/zj/.ssh/id_rsa"
 LOCAL_DIR="/home/zj/ZengKingMorphe"
 REMOTE_DIR="/data/metahuman_work/ZengKingMorphe"
 
+# 解析参数：-r 才重启
+RESTART=false
+while getopts "r" opt; do
+    case $opt in
+        r) RESTART=true ;;
+    esac
+done
+
 # rsync 选项
 # --no-group: 跳过组权限设置（避免权限不足警告）
 # --prune-empty-dirs: 删除空目录
@@ -91,17 +99,23 @@ rsync ${RSYNC_OPTS} -e "ssh -i ${SSH_KEY}" \
 #     pip install -r ai-service/requirements.txt
 # "
 
-# 远程重启 AI 服务
-echo ""
-echo "=========================================="
-echo "正在远程重启 AI 服务..."
-echo "=========================================="
-ssh -i "${SSH_KEY}" "${REMOTE_USER}@${REMOTE_HOST}" "
-    cd ${REMOTE_DIR} &&
-    ./start_ai_service.sh restart
-"
+# 远程重启 AI 服务（仅 -r 时执行）
+if $RESTART; then
+    echo ""
+    echo "=========================================="
+    echo "正在远程重启 AI 服务..."
+    echo "=========================================="
+    ssh -i "${SSH_KEY}" "${REMOTE_USER}@${REMOTE_HOST}" "
+        cd ${REMOTE_DIR} &&
+        ./start_ai_service.sh restart
+    "
+else
+    echo ""
+    echo "提示: 使用 -r 参数可同步后自动重启 (例如: $0 -r)"
+fi
 
 echo ""
 echo "=========================================="
 echo "同步完成！"
 echo "=========================================="
+
