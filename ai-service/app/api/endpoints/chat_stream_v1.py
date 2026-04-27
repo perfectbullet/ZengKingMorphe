@@ -134,14 +134,14 @@ def _build_history_prefix_for_query(
     )
 
 def _prefer_zh_output(user_query: str) -> bool:
-    """
-    根据用户输入判断输出语言
-    规则：包含中文字符 → 输出中文；否则 → 输出英文
-    """
-    # 空查询默认返回中文
+    """判断输出语言：含中文→中文，含英文→英文，其余默认中文"""
     if not user_query:
         return True
-    return re.search(r"[\u4e00-\u9fff]", user_query) is not None
+    if re.search(r"[\u4e00-\u9fff]", user_query):
+        return True
+    if re.search(r"[A-Za-z]", user_query):
+        return False
+    return True
 
 # =============================================================================
 # Source Attribution
