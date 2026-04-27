@@ -368,7 +368,8 @@ class ConversationNodes:
                     ("market", ["股价", "汇率", "行情", "股市", "价格", "金价", "银价", "油价", "多少钱"]),
                     # 中英实时触发词，避免LLM返回过期/幻觉内容
                     ("time", [
-                        "今天", "明天", "昨天", "最近", "现在", "本周", "本月", "当前", "几月几号", "几号", "几点",
+                        "今天", "明天", "昨天", "前天", "大前天", "后天", "大后天",
+                        "最近", "现在", "本周", "本月", "当前", "几月几号", "几号", "几点", "日期",
                         "today", "date", "what's the date", "what is the date", "what day is it", "current date", "today's date",
                         "time", "what time", "current time", "now"
                     ]),
