@@ -18,6 +18,7 @@ import hashlib
 import time
 from datetime import datetime
 import re
+from datetime import timedelta
 
 from langchain_community.tools.tavily_search import TavilySearchResults
 
@@ -39,6 +40,58 @@ from app.services.conversation.conversation_helpers import (
 )
 
 logger = get_logger(__name__)
+
+# 相对日历日的偏移（天）：列表顺序很重要——长的、更具体的词必须排在前面，
+# 例如「大前天」若排在「前天」之后会错判。
+_RELATIVE_DAY_OFFSET_ZH: tuple[tuple[str, int], ...] = (
+    ("大前天", -3),
+    ("前天", -2),
+    ("昨天", -1),
+    ("今天", 0),
+    ("明天", 1),
+    ("后天", 2),
+    ("大后天", 3),
+)
+_RELATIVE_DAY_OFFSET_EN: tuple[tuple[str, int], ...] = (
+    ("three days ago", -3),
+    ("day before yesterday", -2),
+    ("yesterday", -1),
+    ("today", 0),
+    ("tomorrow", 1),
+    ("day after tomorrow", 2),
+    ("three days later", 3),
+)
+
+
+def _relative_calendar_day_offset(q_lower: str) -> int | None:
+    """命中「今天/昨天/前天/大前天…」等表述时返回 timedelta 天数偏移，否则 None。"""
+    for phrase, off in _RELATIVE_DAY_OFFSET_ZH:
+        if phrase in q_lower:
+            return off
+    for phrase, off in _RELATIVE_DAY_OFFSET_EN:
+        if phrase in q_lower:
+            return off
+    return None
+
+
+_DAY_LABEL_ZH: dict[int, str] = {
+    -3: "大前天",
+    -2: "前天",
+    -1: "昨天",
+    0: "今天",
+    1: "明天",
+    2: "后天",
+    3: "大后天",
+}
+_DAY_LABEL_EN: dict[int, str] = {
+    -3: "Three days ago",
+    -2: "The day before yesterday",
+    -1: "Yesterday",
+    0: "Today",
+    1: "Tomorrow",
+    2: "The day after tomorrow",
+    3: "Three days from now",
+}
 
 
 # =============================================================================
@@ -271,24 +324,48 @@ class ConversationNodes:
 
             # 2. 检测实时查询
             if settings.realtime_query_enabled:
-                realtime_keywords = {
+                # 天气追问兜底：识别“明天呢？”等短问，避免误判为时间
+                follow_up_weather_queries = {
+                    "明天呢", "明天呢?", "明天呢？",
+                    "那明天呢", "那明天呢?", "那明天呢？",
+                    "明天怎么样", "明天怎么样?", "明天怎么样？",
+                }
+                if query in follow_up_weather_queries:
+                    prev_user_msg = ""
+                    for msg in reversed(state.get("context", {}).get("messages", [])):
+                        if msg.get("role") == "user":
+                            prev_user_msg = (msg.get("content") or "").lower()
+                            break
+                    if prev_user_msg and any(kw in prev_user_msg for kw in ["天气", "气温", "降雨", "降水", "温度"]):
+                        state["is_realtime_query"] = True
+                        state["realtime_category"] = "weather"
+                        state["realtime_detect_reason"] = "follow_up:weather"
+                        state["intent"] = "general_query"
+                        logger.info("Query classified: realtime follow-up: category=weather")
+                        return state
+
+                # 按优先级匹配：天气/新闻/行情 > 时间，避免“今天天气”误判时间
+                realtime_keywords_ordered = [
+                    ("weather", ["天气", "气温", "降雨", "降水", "温度"]),
+                    ("news", ["新闻", "热点", "最新", "资讯", "动态", "头条"]),
+                    ("market", ["股价", "汇率", "行情", "股市", "价格", "金价", "银价", "油价", "多少钱"]),
                     # 中英实时触发词，避免LLM返回过期/幻觉内容
-                    "time": [
+                    ("time", [
                         "今天", "明天", "昨天", "最近", "现在", "本周", "本月", "当前", "几月几号", "几号", "几点",
                         "today", "date", "what's the date", "what is the date", "what day is it", "current date", "today's date",
                         "time", "what time", "current time", "now"
-                    ],
-                    "weather": ["天气", "气温", "降雨", "降水", "温度"],
-                    "news": ["新闻", "热点", "最新", "资讯", "动态", "头条"],
-                    "market": ["股价", "汇率", "行情", "股市", "价格", "金价", "银价", "油价", "多少钱"],
-                }
-                for category, keywords in realtime_keywords.items():
-                    if any(kw in query for kw in keywords):
+                    ]),
+                ]
+                for category, keywords in realtime_keywords_ordered:
+                    matched_kw = next((kw for kw in keywords if kw in query), None)
+                    if matched_kw:
                         state["is_realtime_query"] = True
                         state["realtime_category"] = category
-                        state["realtime_detect_reason"] = f"keyword:{keywords[0] if keywords else category}"
+                        state["realtime_detect_reason"] = f"keyword:{matched_kw}"
                         state["intent"] = "general_query"
-                        logger.info(f"Query classified: realtime: category={category}")
+                        logger.info(
+                            f"Query classified: realtime: category={category}, matched={matched_kw}"
+                        )
                         return state
             
             # 4. 默认为一般查询
@@ -650,21 +727,50 @@ class ConversationNodes:
                 direct_text = state.get("direct_text_answer")
                 if not direct_text:
                     now = datetime.now()
-                    weekday_cn = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"][now.weekday()]
-                    # 根据用户输入语言生成中文/英文时间句子
                     user_query = state.get("user_query", "")
+                    q_lower = (user_query or "").strip().lower()
+
+                    # 解析相对日期偏移
+                    resolved_offset = _relative_calendar_day_offset(q_lower)
+                    day_offset = resolved_offset if resolved_offset is not None else 0
+
+                    target_dt = now + timedelta(days=day_offset)
+                    weekday_cn = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"][target_dt.weekday()]
+                    # 判断是否需要附带具体时间
+                    asks_clock_only = any(
+                        k in q_lower
+                        for k in ("几点", "什么时间", "现在几点", "当前时间", "时辰")
+                    ) or any(k in q_lower for k in ("what time", "current time"))
+                    asks_date_focus = ("日期" in q_lower) or ("几号" in q_lower)
+                    append_now_time = asks_clock_only or (
+                        day_offset == 0 and not asks_date_focus
+                    )
+
+                    # 根据用户输入语言生成中文/英文时间句子
                     prefer_zh_output = re.search(r"[\u4e00-\u9fff]", user_query) is not None
                     if prefer_zh_output:
-                        direct_text = f"今天是{now.year}年{now.month}月{now.day}日（{weekday_cn}），当前时间{now.strftime('%H:%M:%S')}。"
-                    else:
-                        weekday_en = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"][now.weekday()]
+                        day_word = _DAY_LABEL_ZH.get(day_offset, "今天")
                         direct_text = (
-                            f"Today is {now.strftime('%B')} {now.day}, {now.year} ({weekday_en}). "
-                            f"The current time is {now.strftime('%H:%M:%S')}."
+                            f"{day_word}是{target_dt.year}年{target_dt.month}月{target_dt.day}日（{weekday_cn}）。"
                         )
+                        if append_now_time:
+                            direct_text = direct_text[:-1] + f"，当前时间{now.strftime('%H:%M:%S')}。"
+                    else:
+                        weekday_en = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"][target_dt.weekday()]
+                        day_word = _DAY_LABEL_EN.get(day_offset, "Today")
+                        en_verb = "is" if day_offset == 0 else ("was" if day_offset < 0 else "will be")
+                        asks_date_focus_en = (" date" in f" {q_lower}") or ("what date" in q_lower) or ("what day" in q_lower)
+                        append_now_time_en = asks_clock_only or (
+                            day_offset == 0 and not asks_date_focus_en
+                        )
+                        direct_text = (
+                            f"{day_word} {en_verb} {target_dt.strftime('%B')} {target_dt.day}, {target_dt.year} ({weekday_en})."
+                        )
+                        if append_now_time_en:
+                            direct_text += f" The current time is {now.strftime('%H:%M:%S')}."
                     state["direct_text_answer"] = direct_text
 
-                # 清空 LLM 相关配置，确保不调用模型
+                # 直接文本输出，不调用模型
                 state["streaming_llm"] = None
                 state["streaming_messages"] = None
                 state["streaming_type"] = "direct_text" # 设置流式类型为【直接文本输出】
