@@ -347,7 +347,15 @@ class ConversationNodes:
                 # 按优先级匹配：天气/新闻/行情 > 时间，避免“今天天气”误判时间
                 realtime_keywords_ordered = [
                     ("weather", ["天气", "气温", "降雨", "降水", "温度"]),
-                    ("news", ["新闻", "热点", "最新", "资讯", "动态", "头条"]),
+                    # news 也包含英文“当前领导/职位”类问法，确保走联网拿最新信息
+                    ("news", [
+                        "新闻", "热点", "最新", "资讯", "动态", "头条",
+                        "目前", "现任", "现在", "当前", "最新",
+                        "总理", "国务院总理", "国家总理", "国家领导人", "领导是谁", "是哪位领导", "是谁",
+                        "current", "who is the current", "who is current",
+                        "premier", "prime minister", "state council", "president",
+                        "who is the", "incumbent",
+                    ]),
                     ("market", ["股价", "汇率", "行情", "股市", "价格", "金价", "银价", "油价", "多少钱"]),
                     # 中英实时触发词，避免LLM返回过期/幻觉内容
                     ("time", [

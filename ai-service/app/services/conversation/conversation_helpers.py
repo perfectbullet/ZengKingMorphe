@@ -306,9 +306,14 @@ def build_greeting_messages(
 {state["user_query"]}
 """
 
+    prefer_zh_output = state.get("prefer_zh_output", True)
     messages = [SystemMessage(content=system_prompt)]
     messages.extend(_build_conversation_history(state, max_turns=3))
-    messages.append(HumanMessage(content=state["user_query"]))
+    # 按语言追加提问：英文提问强制要求英文回复
+    if prefer_zh_output:
+        messages.append(HumanMessage(content=state["user_query"]))
+    else:
+        messages.append(HumanMessage(content=f"Please reply in English.\n\n{state['user_query']}"))
 
     logger.debug(
         "Greeting messages built",
@@ -350,9 +355,11 @@ def build_generation_messages(state: ConversationState) -> List:
 
     context_text = build_context_text(state)
     source_indicator = get_source_indicator(state)
+    prefer_zh_output = state.get("prefer_zh_output", True)
 
-    # Build base system prompt
-    base_prompt = f"""你是 {name}，{role}。
+    # 构建基础系统提示（中文/英文）
+    if prefer_zh_output:
+        base_prompt = f"""你是 {name}，{role}。
 
 角色定位：
 {description}
@@ -364,6 +371,17 @@ def build_generation_messages(state: ConversationState) -> List:
 
 开场白：
 {greeting}
+"""
+    else:
+        base_prompt = f"""You are {name}, a helpful assistant.
+
+Role:
+{description}
+
+Style:
+- Tone: {tone_desc}
+- Communication: {style_desc}
+- Formality: {formality_desc}
 """
 
     # Add scenario-specific instructions
@@ -386,6 +404,23 @@ def build_generation_messages(state: ConversationState) -> List:
 用户问题：
 {state["user_query"]}
 """
+            if not prefer_zh_output:
+                requirements = f"""IMPORTANT: The user asks about weather. The system has retrieved up-to-date web results.
+
+Requirements:
+1. Answer strictly based on the web context below
+2. Keep it very short (about one sentence)
+3. One sentence only (no lists / bullets)
+4. Extract concrete data (temperature, wind, etc.)
+5. Keep a {tone_desc} tone
+6. Do NOT include sources, links, or the words "source" / "references"
+
+Context {source_indicator}:
+{context_text}
+
+User question:
+{state["user_query"]}
+"""
         elif realtime_category == "news":
             requirements = f"""**重要提示**：用户询问的是新闻信息，系统已通过网络搜索获取了最新数据。
 
@@ -400,6 +435,22 @@ def build_generation_messages(state: ConversationState) -> List:
 {context_text}
 
 用户问题：
+{state["user_query"]}
+"""
+            if not prefer_zh_output:
+                requirements = f"""IMPORTANT: The user asks about news. The system has retrieved up-to-date web results.
+
+Requirements:
+1. Answer strictly based on the web context below
+2. Keep it under ~100 words
+3. Plain text, key points only (no lists / bullets)
+4. Keep a {tone_desc} tone
+5. Do NOT include sources, links, or the words "source" / "references"
+
+Context {source_indicator}:
+{context_text}
+
+User question:
 {state["user_query"]}
 """
         elif realtime_category == "market":
@@ -419,6 +470,22 @@ def build_generation_messages(state: ConversationState) -> List:
 {state["user_query"]}
 
 """
+            if not prefer_zh_output:
+                requirements = f"""IMPORTANT: The user asks about prices/market. The system has retrieved up-to-date web results.
+
+Requirements:
+1. Answer strictly based on the web context below
+2. Keep it under ~50 words
+3. Prefer directly stating numbers
+4. Keep a {tone_desc} tone
+5. Do NOT include sources, links, or the words "source" / "references"
+
+Context {source_indicator}:
+{context_text}
+
+User question:
+{state["user_query"]}
+"""
         else:
             requirements = f"""**重要提示**：用户询问的是实时信息，系统已通过网络搜索获取了最新数据。
 
@@ -436,6 +503,21 @@ def build_generation_messages(state: ConversationState) -> List:
 {state["user_query"]}
 
 请基于上述网络资料，提供准确的实时信息回答。"""
+            if not prefer_zh_output:
+                requirements = f"""IMPORTANT: The user asks about real-time information. The system has retrieved up-to-date web results.
+
+Requirements:
+1. Answer strictly based on the web context below
+2. Extract key facts and numbers
+3. Keep a {tone_desc} tone
+4. Do NOT include sources, links, or the words "source" / "references"
+
+Context {source_indicator}:
+{context_text}
+
+User question:
+{state["user_query"]}
+"""
     else:
         requirements = f"""回答要求：
 1. 严格基于提供的上下文信息回答，不编造内容
@@ -452,12 +534,31 @@ def build_generation_messages(state: ConversationState) -> List:
 {state["user_query"]}
 
 """
+        if not prefer_zh_output:
+            requirements = f"""Requirements:
+1. Answer strictly based on the provided context; do not fabricate
+2. If context is insufficient, say so and suggest contacting human support
+3. Keep a {tone_desc} tone
+4. Be concise and clear
+5. Do NOT include sources, links, or the words "source" / "references"
+
+Context {source_indicator}:
+{context_text}
+
+User question:
+{state["user_query"]}
+"""
 
     system_prompt = base_prompt + "\n" + requirements
+    if not prefer_zh_output:
+        system_prompt = "Answer in English only.\n\n" + system_prompt
 
     messages = [SystemMessage(content=system_prompt)]
     messages.extend(_build_conversation_history(state, max_turns=5))
-    messages.append(HumanMessage(content=state["user_query"]))
+    if prefer_zh_output:
+        messages.append(HumanMessage(content=state["user_query"]))
+    else:
+        messages.append(HumanMessage(content=f"Please answer in English only.\n\n{state['user_query']}"))
 
     return messages
 

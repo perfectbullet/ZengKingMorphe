@@ -546,6 +546,8 @@ async def generate_openai_stream_v1(
     prefer_zh_output = _prefer_zh_output(user_query)
 
     initial_state = _build_initial_state(request, session_id, user_query)
+    # 工作流全局输出语言偏好
+    initial_state["prefer_zh_output"] = prefer_zh_output
 
     sentence_buffer = SentenceBuffer(
         max_chars=SENTENCE_BUFFER_MAX_CHARS,
