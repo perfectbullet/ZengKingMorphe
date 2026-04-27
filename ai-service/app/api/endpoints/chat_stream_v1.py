@@ -675,6 +675,17 @@ async def generate_openai_stream_v1(
                 ]
             )
             
+            # 发送统一过渡话术，按输入语言适配
+            preface = TALKING_POINTS[0] + ("\n" if prefer_zh_output else "\n")
+            chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
+                preface, revise_llm, chat_id, created, request.model,
+                db, chunk_sequence, session_id, request.user_id,
+                request.employee_id, current_state.get("conversation_id"),
+                prefer_zh_output=prefer_zh_output,
+                log_prefix="Preface"
+            )
+            yield json.dumps(chunk_data)
+
             if not first_token_received:
                 first_token_received = True
                 ttfb_ms = int((time.time() - initial_state["workflow_start_time"]) * 1000)
@@ -683,18 +694,6 @@ async def generate_openai_stream_v1(
             model_name = streaming_type or model_name
             # 根据 streaming_type 选择不同的流式输出方式
             if streaming_type == "raganything_stream":
-                # 输出话术，因为有点延迟
-                talking_point = "好的，我正在梳理您的问题要点。\n"
-                chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
-                    talking_point, revise_llm, chat_id, created, request.model,
-                    db, chunk_sequence, session_id, request.user_id,
-                    request.employee_id, current_state.get("conversation_id"),
-                    prefer_zh_output=prefer_zh_output,
-                    log_prefix="RAGAnything"
-                )
-                yield json.dumps(chunk_data)
-
-                
                 # RAGAnything 流式输出
                 query = current_state.get("raganything_query", current_state.get("user_query", ""))
                 # 按输入语言追加回答指令，避免中英文不匹配
