@@ -74,6 +74,15 @@ def _relative_calendar_day_offset(q_lower: str) -> int | None:
     return None
 
 
+def _split_user_questions(text: str) -> list[str]:
+    """按标点切分用户问题，返回清理后的问题列表"""
+    if not text:
+        return []
+    # 按中英文句末标点分割
+    parts = re.split(r"[?？!！。；;\n]+", text)
+    return [p.strip() for p in parts if p and p.strip()]
+
+
 _DAY_LABEL_ZH: dict[int, str] = {
     -3: "大前天",
     -2: "前天",
@@ -738,44 +747,46 @@ class ConversationNodes:
                     user_query = state.get("user_query", "")
                     q_lower = (user_query or "").strip().lower()
 
-                    # 解析相对日期偏移
-                    resolved_offset = _relative_calendar_day_offset(q_lower)
-                    day_offset = resolved_offset if resolved_offset is not None else 0
+                    # 一句多问：按标点切分为多个子问题，按顺序逐条回答
+                    sub_questions = _split_user_questions(user_query)
+                    if not sub_questions:
+                        sub_questions = [user_query]
 
-                    target_dt = now + timedelta(days=day_offset)
-                    weekday_cn = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"][target_dt.weekday()]
-                    # 判断是否需要附带具体时间
-                    asks_clock_only = any(
-                        k in q_lower
-                        for k in ("几点", "什么时间", "现在几点", "当前时间", "时辰")
-                    ) or any(k in q_lower for k in ("what time", "current time"))
-                    asks_date_focus = ("日期" in q_lower) or ("几号" in q_lower)
-                    append_now_time = asks_clock_only or (
-                        day_offset == 0 and not asks_date_focus
-                    )
-
-                    # 根据用户输入语言生成中文/英文时间句子
                     prefer_zh_output = re.search(r"[\u4e00-\u9fff]", user_query) is not None
-                    if prefer_zh_output:
-                        day_word = _DAY_LABEL_ZH.get(day_offset, "今天")
-                        direct_text = (
-                            f"{day_word}是{target_dt.year}年{target_dt.month}月{target_dt.day}日（{weekday_cn}）。"
-                        )
-                        if append_now_time:
-                            direct_text = direct_text[:-1] + f"，当前时间{now.strftime('%H:%M:%S')}。"
-                    else:
-                        weekday_en = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"][target_dt.weekday()]
-                        day_word = _DAY_LABEL_EN.get(day_offset, "Today")
-                        en_verb = "is" if day_offset == 0 else ("was" if day_offset < 0 else "will be")
-                        asks_date_focus_en = (" date" in f" {q_lower}") or ("what date" in q_lower) or ("what day" in q_lower)
-                        append_now_time_en = asks_clock_only or (
-                            day_offset == 0 and not asks_date_focus_en
-                        )
-                        direct_text = (
-                            f"{day_word} {en_verb} {target_dt.strftime('%B')} {target_dt.day}, {target_dt.year} ({weekday_en})."
-                        )
-                        if append_now_time_en:
-                            direct_text += f" The current time is {now.strftime('%H:%M:%S')}."
+                    answers: list[str] = []
+                    for sq in sub_questions:
+                        sq_lower = sq.strip().lower()
+                        # 解析相对日期
+                        resolved_offset = _relative_calendar_day_offset(sq_lower)
+                        day_offset = resolved_offset if resolved_offset is not None else 0
+                        target_dt = now + timedelta(days=day_offset)
+
+                        # 判断是否询问具体时间
+                        asks_clock_only = any(
+                            k in sq_lower
+                            for k in ("几点", "什么时间", "现在几点", "当前时间", "时辰")
+                        ) or any(k in sq_lower for k in ("what time", "current time"))
+                        asks_date_focus = ("日期" in sq_lower) or ("几号" in sq_lower)
+
+                         # 生成中英文回答
+                        if prefer_zh_output:
+                            weekday_cn = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"][target_dt.weekday()]
+                            day_word = _DAY_LABEL_ZH.get(day_offset, "今天")
+                            line = f"{day_word}是{target_dt.year}年{target_dt.month}月{target_dt.day}日（{weekday_cn}）。"
+                            # 只有明确问“几点/什么时间”才附带当前时刻
+                            if asks_clock_only:
+                                line = line[:-1] + f"，当前时间{now.strftime('%H:%M:%S')}。"
+                            answers.append(line)
+                        else:
+                            weekday_en = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"][target_dt.weekday()]
+                            day_word = _DAY_LABEL_EN.get(day_offset, "Today")
+                            en_verb = "is" if day_offset == 0 else ("was" if day_offset < 0 else "will be")
+                            line = f"{day_word} {en_verb} {target_dt.strftime('%B')} {target_dt.day}, {target_dt.year} ({weekday_en})."
+                            if asks_clock_only:
+                                line += f" The current time is {now.strftime('%H:%M:%S')}."
+                            answers.append(line)
+
+                    direct_text = "\n".join(answers) if answers else ""
                     state["direct_text_answer"] = direct_text
 
                 # 直接文本输出，不调用模型
