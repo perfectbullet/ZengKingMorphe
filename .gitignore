@@ -90,3 +90,5 @@ ai-service/phi4_test_result/椭圆的离心率E的变，这个E是什么？E的�
 ai-service/phi4_test_result/求抛物线y的平方等于8x的交点坐标，准线方程，并求抛物线上与交点距离为6的点的坐标。.json
 ai-service/phi4_test_result/求曲线y等于x的三次方减去3x，在点一负二处的切线方程。.json
 ai-service/phi4_test_result/求椭圆X平方除以25，加上Y的平方除以9等于1的焦距和离心率。.json
+ai-service/scripts/*.json
+ai-service/scripts/*.txt
