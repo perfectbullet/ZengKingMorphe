@@ -590,19 +590,7 @@ async def generate_openai_stream_v1(
 
             first_token_received = False
             full_answer = ""
-            TALKING_POINTS: list = [
-                "好的，我正在梳理您的问题要点…",
-                "等我一小下下······",
-            ]
-            talking_point = random.choice(TALKING_POINTS)
-            full_answer += full_answer
-            chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
-                talking_point, revise_llm, chat_id, created, request.model,
-                db, chunk_sequence, session_id, request.user_id,
-                request.employee_id, current_state.get("conversation_id"),
-                log_prefix="RAGAnything"
-            )
-            yield json.dumps(chunk_data)
+            
             if not first_token_received:
                 first_token_received = True
                 ttfb_ms = int((time.time() - initial_state["workflow_start_time"]) * 1000)
@@ -611,6 +599,17 @@ async def generate_openai_stream_v1(
             model_name = streaming_type or model_name
             # 根据 streaming_type 选择不同的流式输出方式
             if streaming_type == "raganything_stream":
+                # 输出话术，因为有点延迟
+                talking_point = "好的，我正在梳理您的问题要点。\n"
+                chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
+                    talking_point, revise_llm, chat_id, created, request.model,
+                    db, chunk_sequence, session_id, request.user_id,
+                    request.employee_id, current_state.get("conversation_id"),
+                    log_prefix="RAGAnything"
+                )
+                yield json.dumps(chunk_data)
+
+                
                 # RAGAnything 流式输出
                 query = current_state.get("raganything_query", current_state.get("user_query", ""))
                 mode = current_state.get("raganything_mode", "hybrid")
@@ -710,6 +709,17 @@ async def generate_openai_stream_v1(
 
 
             elif streaming_type == "phi4_math":
+                # 增加话术 因为接下来要推理
+                talking_point_math_think = "我需要思考一下这个数学问题，请稍等。"
+                chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
+                    talking_point_math_think, revise_llm, chat_id, created, request.model,
+                    db, chunk_sequence, session_id, request.user_id,
+                    request.employee_id, current_state.get("conversation_id"),
+                    log_prefix="RAGAnything"
+                )
+                yield json.dumps(chunk_data)
+                
+                
                 # Phi-4 数学推理流式输出
                 streaming_llm = current_state.get("streaming_llm")
                 messages = current_state.get("streaming_messages")
@@ -726,10 +736,8 @@ async def generate_openai_stream_v1(
                 async for chunk in streaming_llm.astream(messages):
                     token = chunk.content if hasattr(chunk, 'content') else str(chunk)
                     if token:
-                        
                         # 过滤 think 标签
                         filtered_token = think_tag_buffer.add(token)
-
                         if not filtered_token:
                             # logger.info(f'跟踪但不输出: {token!r}') # 本行日志疯狂打印，不要随意开启
                             full_answer += token  # 跟踪但不输出
@@ -765,8 +773,8 @@ async def generate_openai_stream_v1(
                 final_state = current_state
                 final_state["final_answer"] = full_answer
 
-            elif streaming_type == "langchain_llm":
-                # LangChain LLM 流式输出（原有逻辑）
+            elif streaming_type == "langchain_llm":              
+                # LangChain LLM 流式输出（原有逻辑）, 可以不使用话术                
                 streaming_llm = current_state.get("streaming_llm")
                 messages = current_state.get("streaming_messages")
                 if not streaming_llm or not messages:

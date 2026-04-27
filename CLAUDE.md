@@ -6,12 +6,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A LangGraph-based conversational AI service providing RAG (Retrieval-Augmented Generation), multi-turn dialogue, knowledge base management, and web search for digital employee interactions. Built with FastAPI, supporting multiple LLM backends with intelligent routing.
 
-**Tech Stack**: FastAPI + LangGraph + DeepSeek/Qwen (Ollama/OpenAI) + ChromaDB + ElasticSearch + MongoDB + Tavily + BGE Reranker
+**Tech Stack**: FastAPI + LangGraph + DeepSeek/Qwen/Phi-4 (Ollama/OpenAI/vLLM) + ChromaDB + ElasticSearch + MongoDB + Tavily + RAGAnything
 
 **Service Architecture**:
 - **ai-service** - FastAPI backend (port 8100 in Docker, 8000 local)
-- **mongodb** - Document metadata and conversations (port 27017)
-- **chroma** - Vector embeddings (port 8001)
+- **mongodb** - Document metadata and conversations (external, not in docker-compose)
+- **chroma** - Vector embeddings (port 8200)
 - **elasticsearch** - BM25 keyword search (port 9200)
 
 ---
@@ -21,7 +21,6 @@ A LangGraph-based conversational AI service providing RAG (Retrieval-Augmented G
 ### Python Environment (Critical!)
 **ALL Python commands MUST use the project virtual environment** - dependencies are installed in conda environment `morphe`.
 
-**WSL/Ubuntu**:
 ```bash
 # Activate conda environment
 conda activate morphe
@@ -37,7 +36,7 @@ conda activate morphe
 docker-compose up -d
 
 # Start databases only (for local AI service development)
-docker-compose up -d mongodb elasticsearch chroma
+docker-compose up -d elasticsearch chroma
 
 # Check service status
 docker-compose ps
@@ -58,15 +57,21 @@ docker-compose down -v
 
 ```bash
 # Start databases only (for local AI service development)
-docker-compose up -d mongodb elasticsearch chroma
+docker-compose up -d elasticsearch chroma
 
 # Run AI service locally
 cd ai-service
 conda activate morphe
 uvicorn main:app --reload --port 8000
 
-# Access API docs at http://localhost:8000/docs
+# Or use the startup script
+./start_ai_service.sh start     # Start
+./start_ai_service.sh status    # Status
+./start_ai_service.sh logs      # View logs
+./start_ai_service.sh stop      # Stop
 ```
+
+Access API docs at http://localhost:8000/docs
 
 ### Testing
 
@@ -80,23 +85,13 @@ python -m pytest tests/
 # Run specific test file
 python -m pytest tests/test_web_search.py -v
 
-# Reranker test (BGE API)
+# Run with coverage
+pytest --cov=app --cov-report=html
+
+# Scripts require PYTHONPATH=. when run from ai-service/
 PYTHONPATH=. python scripts/test_ollama_reranker.py
-
-# RAG e2e test with query mode
 PYTHONPATH=. python scripts/test_rag_e2e.py --query-only --kb-id kb_5f2a02bd5dfe --query "test query"
-
-# RAG e2e test with sample data view
-PYTHONPATH=. python scripts/test_rag_e2e.py --sample-only --kb-id kb_5f2a02bd5dfe
-
-# Full RAG e2e test with JSON input
-PYTHONPATH=. python scripts/test_rag_e2e.py --json input.json --kb-id kb_5f2a02bd5dfe
-
-# Stream client test (v2 API)
 PYTHONPATH=. python scripts/stream_client.py --query "你好"
-
-# Stream client with custom host
-PYTHONPATH=. python scripts/stream_client.py --host http://192.168.8.233:8100 --query "失蜡铸造的原理"
 ```
 
 ---
@@ -105,85 +100,66 @@ PYTHONPATH=. python scripts/stream_client.py --host http://192.168.8.233:8100 --
 
 ### LangGraph Conversation Workflow
 
-The core conversation engine is a **17-node StateGraph** ([ai-service/app/services/conversation_service.py](ai-service/app/services/conversation_service.py)):
+The core conversation engine is a **9-node StateGraph** ([ai-service/app/services/conversation_service.py](ai-service/app/services/conversation_service.py)):
 
-**Flow**: `load_employee_config → load_session_context → input_validation → classify_query_type → [conditional branches] → evaluate_complexity → rewrite_query → check_realtime_query → match_faq → recognize_intent → knowledge_retrieval → rerank_documents → compress_context → [conditional: low_relevance?] → web_search → generate_answer → verify_answer → save_conversation`
+**Flow**: `load_employee_config → load_session_context → input_validation → classify_query_type → [conditional branches] → check_math_problem → evaluate_complexity → web_search → generate_answer → save_conversation`
+
+**Node count**: 9 nodes (simplified from 17). Removed: intent_recognition, knowledge_retrieval, grade_documents, compress_context, match_faq, rewrite_query. RAG retrieval is now handled by RAGAnything.
 
 **Key Routing Logic**:
-- **classify_query_type**: Detects greetings or forbidden topics
-- **Realtime queries** → bypass FAQ/RAG, direct to web search
-- **FAQ matched** → skip RAG, generate answer directly
-- **Greeting intent** → skip RAG, generate answer directly
-- **Low relevance score** (< `settings.relevance_threshold`, default 0.6) → trigger web search as fallback
-- **Otherwise** → RAG retrieval → reranking → context compression → LLM generation
+- **classify_query_type** → `greeting` (direct to generate_answer), `realtime` (→ web_search → generate_answer), `normal` (→ check_math_problem)
+- **check_math_problem** → `math` (skip complexity eval, direct to generate_answer with Phi-4 LLM), `normal` (→ evaluate_complexity → generate_answer)
+- RAGAnything handles all RAG retrieval within `generate_answer`
 
-**Note - Interruption Detection Removed**:
-- Previously, keywords like "停"、"停下"、"别说了" would trigger a quick interruption response
-- This functionality has been removed (2026-03-03)
-- These keywords now flow through the normal RAG processing pipeline
-- Files affected: `conversation_nodes.py`, `conversation_helpers.py`, `conversation_state.py`
+**Triple LLM Pattern**:
+- `self.local_llm` - ChatOllama for fast, simple responses (greetings, short queries)
+- `self.remote_llm` - ChatOpenAI (SiliconFlow) for complex queries and RAG
+- `get_phi4_streaming_llm()` - Dynamic vLLM instance for math problems (configurable via `PHI4_*` env vars)
 
-**Summary Language Requirement**:
-- All document summaries (chunk/section/document level) are generated in Chinese
-- Implementation in `app/services/semantic_chunking.py`
-- Chunk summary: "请用简洁的中文总结以下文本的核心内容，不超过50字"
-- Section summary: "请用简洁的中文总结以下章节内容的主要观点，不超过100字"
-- Document summary: "请用简洁的中文总结以下文档的整体内容和主要要点，不超过200字"
-
-**State Management**: `ConversationState` TypedDict with 28 fields flows through all nodes, including:
+**State Management**: `ConversationState` TypedDict with ~40 fields in [conversation_state.py](ai-service/app/services/conversation/conversation_state.py), including:
 - Core: `user_query`, `user_id`, `session_id`, `employee_id`
 - Config: `employee_config`, `faq_matched`
-- RAG: `retrieved_docs`, `relevance_score`, `compressed_context`
+- RAG: `retrieved_docs`, `relevance_score`, `kb_used`
+- Math: `is_math_problem`, `direct_match`
 - Web search: `web_search_results`, `is_realtime_query`
-- Performance: `node_timings`, `ttf_ms`, `response_time_ms`
+- Streaming: `streaming_type` ("langchain_llm" or "raganything_stream"), `streaming_llm`, `raganything_query`, `raganything_mode`
+- Performance: `node_timings`, `ttfb_ms`, `response_time_ms`
+- LLM params: `llm_temperature`, `llm_top_p`, `llm_max_tokens`, etc.
 
-**Dual LLM Pattern**: Two separate LLM instances:
-- `self.llm` - Answer generation (supports streaming)
-- `self.grader_llm` - Document relevance scoring (forced JSON output mode via `format="json"` or `response_format={"type": "json_object"}`)
+**Conversation Subdirectory**: The workflow logic is split across:
+- `conversation_service.py` - Workflow class, LLM initialization, graph building
+- `conversation/conversation_state.py` - State TypedDict and constants (greeting keywords, sensitive words)
+- `conversation/conversation_nodes.py` - All node implementations (ConversationNodes class)
+- `conversation/conversation_helpers.py` - Node timing, LLM selection (`select_llm`), message building
 
-### Three-Tier RAG Architecture
+### RAGAnything Integration
 
-Knowledge base documents stored across **3 databases** ([ai-service/app/services/rag_service.py](ai-service/app/services/rag_service.py)):
+RAG retrieval is handled by [RAGAnything](https://github.com/xxx) via `raganything_wrapper.py`, replacing the previous custom hybrid search. RAGAnything provides:
+- Knowledge graph + vector retrieval with streaming
+- Multiple query modes: `hybrid`, `local`, `global`, `naive`
+- Configured via `RAGAnythingConfig` with OpenAI-style LLM and embedding endpoints
 
-1. **ChromaDB** - Vector embeddings for semantic similarity search
-2. **ElasticSearch** - BM25 keyword search for exact term matching
-3. **MongoDB** - Document metadata, full content, and conversation records
+### Sensitive Word Filtering
 
-**Hybrid Search Fusion**: Uses **RRF (Reciprocal Rank Fusion)**:
-```python
-rrf_score = 1 / (rank + k)  # where k=60 is the constant
-```
-- Combines vector search and keyword search results
-- Optionally reranks with BGE Reranker API (default: enabled)
-- Default `top_k=5` for each search method
+Default sensitive words loaded from `DEFAULT_SENSITIVE_WORDS.txt` at ai-service root. Custom per-employee sensitive words synced from Java platform via `thesaurus_sensitive_service.py`.
+
+### Employee Sync Service
+
+`employee_sync_service.py` handles fetching employee config from Java API (`EXTERNAL_EMPLOYEE_API_URL`) and syncing to MongoDB. For `employee_id="hutao"`, falls back to local test data in `outer_api_docs/`.
 
 ### MinerU PDF Parsing
 
-Enhanced PDF parsing service with caching and parallel processing ([ai-service/app/services/mineru_client.py](ai-service/app/services/mineru_client.py)):
-
-- **Auto-splitting**: Large PDFs split into 8-page chunks (configurable via `mineru_pages_per_chunk`) for processing
-- **MD5 caching**: Results cached in MongoDB `mineru_cache` collection to avoid reprocessing
-- **Job tracking**: Processing status tracked in `mineru_jobs` collection with states (pending/processing/completed/failed)
-- **Web API**: `/api/mineru/jobs`, `/api/mineru/jobs/{id}/markdown`, `/api/mineru/view`
-- **Chunk merging**: Automatically merges processed chunks back into complete markdown output
-
-### Task Processing
-
-Background task processor for async operations ([ai-service/app/services/task_processor.py](ai-service/app/services/task_processor.py)):
-- Runs on startup via lifespan management in `main.py`
-- Handles async document processing, embedding generation, etc.
-- Stops gracefully on shutdown
+Enhanced PDF parsing with caching and parallel processing ([ai-service/app/services/mineru_client.py](ai-service/app/services/mineru_client.py)):
+- Auto-splitting large PDFs into 8-page chunks
+- MD5 caching in MongoDB `mineru_cache` collection
+- Job tracking in `mineru_jobs` collection
 
 ### Ollama Keep-Alive
 
 Background service to prevent Ollama model unloading ([ai-service/app/services/ollama_keepalive.py](ai-service/app/services/ollama_keepalive.py)):
-- Sends periodic requests to Ollama API at `ollama_keep_alive_interval` (default 180s)
-- Set to 0 to disable
-- Critical for maintaining fast response times with local models
+- Periodic requests at `OLLAMA_KEEP_ALIVE_INTERVAL` (default 180s, 0 to disable)
 
 ---
-
-## Critical Conventions
 
 ## Critical Conventions
 
@@ -199,10 +175,10 @@ logger.error(f"RAG search failed, error={e}", exc_info=True)  # Always exc_info=
 ```
 
 **Rules**:
-- ✅ Use f-string for all log formatting
-- ✅ Truncate user queries to 100 chars (PII prevention)
-- ✅ Error logs must include `exc_info=True`
-- ❌ Never use keyword arguments (Loguru ignores them)
+- Use f-string for all log formatting
+- Truncate user queries to 100 chars (PII prevention)
+- Error logs must include `exc_info=True`
+- Never use keyword arguments (Loguru ignores them)
 
 ### API Response Schema
 
@@ -210,68 +186,26 @@ All endpoints follow unified structure ([ai-service/app/models/schemas.py](ai-se
 
 ```python
 class ChatResponse(BaseModel):
-    code: int = 200  # HTTP status code
-    message: str = "success"  # Status message
-    data: ChatResponseData  # Actual response data
+    code: int = 200
+    message: str = "success"
+    data: ChatResponseData
 ```
-
-**Key Schemas**:
-- `ChatRequest`/`ChatResponse` - Chat endpoints
-- `SourceAttribution` - Contains `rag_sources[]` (top 3) + `web_sources[]` (top 5)
-- `StreamChunkResponse` - SSE chunks with `type` field (user_query/role/token/done/error)
 
 ### Streaming Implementation
 
-**IMPORTANT**: This API supports **streaming responses only**. There is no non-streaming chat endpoint.
+**Streaming responses only** - there is no non-streaming chat endpoint.
 
-Chat streaming uses SSE (Server-Sent Events) via `sse-starlette` ([ai-service/app/api/endpoints/chat.py](ai-service/app/api/endpoints/chat.py)):
+Chat streaming uses SSE via `sse-starlette` ([ai-service/app/api/endpoints/chat.py](ai-service/app/api/endpoints/chat.py)):
 
 **API Versions**:
-- `/api/chat/v1/chat/completions` - Original chat completions endpoint
-- `/api/chat/v2/chat/completions` - Enhanced version with math textbook direct match and TTS support
+- `/api/chat/v1/chat/completions` - Original chat completions
+- `/api/chat/v2/chat/completions` - Enhanced with math textbook direct match and TTS support
 
-**Event Types**:
-- `user_query` - Echoes the original query
-- `role` - Message role (assistant)
-- `token` - Individual LLM output tokens
-- `status` - Status messages during workflow (e.g., "好的，我正在梳理您的问题要点…")
-- `done` - Stream completion (includes timing and sources)
-- `error` - Error information
+**Event Types**: `user_query`, `role`, `token`, `status`, `done`, `error`
 
-**TTFB Tracking**: Time To First Byte is tracked via `state["ttfb_ms"]` in the workflow.
+**WebSocket**: `/api/chat/ws/chunks` and `/api/chat/ws/view/chunks` for real-time monitoring.
 
-**Chunk Storage**: Streaming chunks stored in MongoDB `stream_chunks` collection for debugging and WebSocket monitoring.
-
-**WebSocket Endpoints**:
-- `/api/chat/ws/chunks` - Real-time stream chunks updates
-- `/api/chat/ws/view/chunks` - Frontend-optimized version with improved disconnect handling
-
-**Stream Chunks Query**: REST API `/api/chat/stream/chunks` for querying historical chunks with pagination and filters.
-
-**Math Textbook Direct Match (v2 only)**:
-When a math textbook query directly matches a document chunk:
-- Skips LLM generation, streams pre-generated answer by punctuation segments
-- Checks for `teaching_script_tts` field in document chunk for voice-friendly output
-- Falls back to LLM-based text revision if `teaching_script_tts` is not available
-
-**Non-Streaming Usage**: If you need the complete response without handling streaming, consume the stream internally:
-```python
-# Example for scripts/tests that need full response
-response = requests.post(url, json=payload, stream=True)
-full_content = ""
-for line in response.iter_lines(decode_unicode=True):
-    if not line or line.startswith(":"):
-        continue
-    if line == "data: [DONE]":
-        break
-    if line.startswith("data: "):
-        line = line[6:]
-        chunk_data = json.loads(line)
-        if "choices" in chunk_data:
-            delta = chunk_data["choices"][0].get("delta", {})
-            if "content" in delta:
-                full_content += delta["content"]
-```
+**Math Textbook Direct Match (v2)**: When a math textbook query directly matches a document chunk, skips LLM generation and streams pre-generated answer. Uses `teaching_script_tts` field for voice-friendly output.
 
 ### Authentication Status
 
@@ -283,8 +217,6 @@ for line in response.iter_lines(decode_unicode=True):
 
 ### LLM Routing Modes
 
-The system supports three routing modes (configured via `llm_routing_mode`):
-
 | Mode | Description | Use Case |
 |------|-------------|----------|
 | `local_only` | Uses local Ollama for all queries | Offline, privacy, cost savings |
@@ -293,79 +225,39 @@ The system supports three routing modes (configured via `llm_routing_mode`):
 
 ### Switching Backends
 
-**Option 1: OpenAI-style API** (SiliconFlow/DeepSeek - default for complex queries)
+**OpenAI-style API** (SiliconFlow/DeepSeek):
 ```bash
-# .env-local file
 OPENAI_API_KEY=sk-...
 OPENAI_API_BASE=https://api.siliconflow.cn/v1
 OPENAI_MODEL=deepseek-ai/DeepSeek-V3.1-Terminus
-OPENAI_GRADER_MODEL=deepseek-ai/DeepSeek-V3
 ```
 
-**Option 2: Local Ollama** (default for simple queries)
+**Local Ollama**:
 ```bash
-# .env-local file
 OLLAMA_BASE_URL=http://192.168.8.233:11434
 OLLAMA_MODEL=qwen2.5:7b
-OLLAMA_GRADER_MODEL=qwen2.5:7b
-OLLAMA_KEEP_ALIVE_INTERVAL=180  # Seconds, 0 to disable
 ```
 
-### BGE Reranker Configuration
+### Phi-4 Math Model (vLLM)
 
-**BGE API Reranker** (default, no text length limits):
 ```bash
-BGE_RERANKER_API_URL=http://192.168.8.233:8091
-BGE_RERANKER_API_KEY=sk-aaabbbcccdddeeefffggghhhiiijjjkkk
-BGE_RERANKER_MODEL=bge-reranker-v2-m3
-RERANKER_TYPE=bge_api
-```
-
-**Local BGE Reranker** (requires FlagEmbedding):
-```bash
-RERANKER_TYPE=bge
+PHI4_ENABLED=true
+PHI4_BASE_URL=http://192.168.8.235:8000/v1
+PHI4_TEMPERATURE=0.0
+PHI4_MAX_TOKENS=16384
 ```
 
 ### Embedding Configuration
 
-Embeddings are handled separately from LLM:
-
 ```bash
-# Option 1: OpenAI-style embedding API (default)
 EMBEDDING_TYPE=openai_style
 EMBEDDING_MODEL=BAAI/bge-large-zh-v1.5
 EMBEDDING_BASE_URL=http://localhost:50009
-
-# Option 2: SiliconFlow embeddings
-EMBEDDING_TYPE=siliconflow
-SILICONFLOW_API_KEY=sk-...
 ```
 
-**Embedding Cache**: LRU cache in `app/services/embedding_cache.py` reduces redundant API calls.
+### Revise LLM for Voice Output
 
-### Revise LLM for Voice Output (数学公式口语化讲解)
-
-**代码位置**: `app/api/endpoints/chat_stream_v2.py:58-123`
-
-**用途**: 将数学公式和概念转换为流畅的语音播报文本
-
-**配置**:
-```bash
-REVISE_PROVIDER=siliconflow  # or ollama
-
-# SiliconFlow (推荐)
-OPENAI_API_KEY=sk-...
-OPENAI_API_BASE=https://api.siliconflow.cn/v1
-OPENAI_REVISE_MODEL=deepseek-ai/DeepSeek-V3
-
-# Ollama (备选)
-OLLAMA_BASE_URL=http://192.168.8.233:11434
-OLLAMA_REVISE_MODEL=qwen2.5:7b
-```
-
-**提示词模板**: `prompts/数学公式口语化讲解.txt`
-
-**触发条件**: v2 API 匹配数学教材知识库，但 `teaching_script_tts` 字段为空时
+Converts math formulas to speech-friendly text. Configured via `REVISE_PROVIDER` (siliconflow or ollama). Prompt template at `prompts/数学公式口语化讲解.txt`.
 
 ---
 
@@ -375,9 +267,7 @@ OLLAMA_REVISE_MODEL=qwen2.5:7b
 
 AI service calls Java backend via `JAVA_API_BASE_URL`:
 - Employee config validation: `POST /api/ai/employee/config`
-- FAQ/sensitive word sync webhooks ([ai-service/app/api/endpoints/webhook.py](ai-service/app/api/endpoints/webhook.py))
-
-**Test Mode**: For `employee_id="hutao"`, loads local test data from `outer_api_docs/按员工id返回的数据-hutao.json`.
+- Employee sync via `EmployeeSyncService`
 
 ### External APIs
 
@@ -391,35 +281,38 @@ AI service calls Java backend via `JAVA_API_BASE_URL`:
 
 | Component | Path | Description |
 |-----------|------|-------------|
-| LangGraph workflow | [ai-service/app/services/conversation_service.py](ai-service/app/services/conversation_service.py) | 17-node StateGraph for conversation flow |
-| RAG hybrid search | [ai-service/app/services/rag_service.py](ai-service/app/services/rag_service.py) | Vector + keyword search with RRF fusion |
-| BGE Reranker | [ai-service/app/services/reranker_service.py](ai-service/app/services/reranker_service.py) | BGEAPIReranker for document reranking |
+| LangGraph workflow | [ai-service/app/services/conversation_service.py](ai-service/app/services/conversation_service.py) | 9-node StateGraph, LLM init, graph building |
+| Workflow nodes | [ai-service/app/services/conversation/conversation_nodes.py](ai-service/app/services/conversation/conversation_nodes.py) | All node implementations |
+| Workflow state | [ai-service/app/services/conversation/conversation_state.py](ai-service/app/services/conversation/conversation_state.py) | ConversationState TypedDict + constants |
+| Workflow helpers | [ai-service/app/services/conversation/conversation_helpers.py](ai-service/app/services/conversation/conversation_helpers.py) | LLM selection, timing, message building |
+| RAGAnything wrapper | [ai-service/app/services/raganything_wrapper.py](ai-service/app/services/raganything_wrapper.py) | RAGAnything integration with streaming |
+| Math retrieval | [ai-service/app/services/math_textbook_retrieval.py](ai-service/app/services/math_textbook_retrieval.py) | Math textbook direct match |
+| Employee sync | [ai-service/app/services/employee_sync_service.py](ai-service/app/services/employee_sync_service.py) | Java API employee data sync |
 | Document service | [ai-service/app/services/document_service.py](ai-service/app/services/document_service.py) | Document CRUD and chunk management |
 | MinerU client | [ai-service/app/services/mineru_client.py](ai-service/app/services/mineru_client.py) | PDF parsing with caching/chunking |
 | MinerU API | [ai-service/app/api/endpoints/mineru.py](ai-service/app/api/endpoints/mineru.py) | Web interface for PDF processing |
-| Chat endpoints | [ai-service/app/api/endpoints/chat.py](ai-service/app/api/endpoints/chat.py) | Streaming chat SSE (v1/v2), stream chunks query |
+| Chat endpoints | [ai-service/app/api/endpoints/chat.py](ai-service/app/api/endpoints/chat.py) | Streaming chat SSE (v1/v2) |
 | Chat stream v1 | [ai-service/app/api/endpoints/chat_stream_v1.py](ai-service/app/api/endpoints/chat_stream_v1.py) | v1 stream generator |
-| Chat stream v2 | [ai-service/app/api/endpoints/chat_stream_v2.py](ai-service/app/api/endpoints/chat_stream_v2.py) | v2 stream generator with math TTS support |
-| WebSocket endpoints | [ai-service/app/api/endpoints/websocket.py](ai-service/app/api/endpoints/websocket.py) | Real-time stream chunks updates |
-| WebSocket view | [ai-service/app/api/endpoints/websocket_view.py](ai-service/app/api/endpoints/websocket_view.py) | Frontend-optimized WebSocket with better disconnect handling |
-| Session endpoints | [ai-service/app/api/endpoints/session.py](ai-service/app/api/endpoints/session.py) | Session CRUD operations |
-| Employee endpoints | [ai-service/app/api/endpoints/employee.py](ai-service/app/api/endpoints/employee.py) | Digital employee management |
-| Knowledge base endpoints | [ai-service/app/api/endpoints/knowledge_base.py](ai-service/app/api/endpoints/knowledge_base.py) | KB and document upload |
-| Webhook endpoints | [ai-service/app/api/endpoints/webhook.py](ai-service/app/api/endpoints/webhook.py) | Java platform sync webhooks |
+| Chat stream v2 | [ai-service/app/api/endpoints/chat_stream_v2.py](ai-service/app/api/endpoints/chat_stream_v2.py) | v2 stream with math TTS support |
+| WebSocket | [ai-service/app/api/endpoints/websocket.py](ai-service/app/api/endpoints/websocket.py) | Real-time stream chunks |
+| WebSocket view | [ai-service/app/api/endpoints/websocket_view.py](ai-service/app/api/endpoints/websocket_view.py) | Frontend-optimized WebSocket |
+| Session | [ai-service/app/api/endpoints/session.py](ai-service/app/api/endpoints/session.py) | Session CRUD |
+| Employee | [ai-service/app/api/endpoints/employee.py](ai-service/app/api/endpoints/employee.py) | Digital employee management |
+| Knowledge base | [ai-service/app/api/endpoints/knowledge_base_kb.py](ai-service/app/api/endpoints/knowledge_base_kb.py) | KB and document upload |
+| Sensitive words | [ai-service/app/api/endpoints/thesaurus_sensitive.py](ai-service/app/api/endpoints/thesaurus_sensitive.py) | Sensitive word sync |
+| Major thesaurus | [ai-service/app/api/endpoints/thesaurus_major.py](ai-service/app/api/endpoints/thesaurus_major.py) | Professional term sync |
 | Configuration | [ai-service/app/core/config.py](ai-service/app/core/config.py) | Pydantic Settings with .env detection |
-| Logging wrapper | [ai-service/app/core/logging.py](ai-service/app/core/logging.py) | Loguru-based structured logging |
-| Database connections | [ai-service/app/core/database.py](ai-service/app/core/database.py) | MongoDB (Motor) connection |
-| Chroma connection | [ai-service/app/core/chroma.py](ai-service/app/core/chroma.py) | ChromaDB client wrapper |
-| ElasticSearch connection | [ai-service/app/core/elasticsearch.py](ai-service/app/core/elasticsearch.py) | ES client wrapper (index prefix: `digital_employee_`) |
+| Logging | [ai-service/app/core/logging.py](ai-service/app/core/logging.py) | Loguru-based structured logging |
+| Database | [ai-service/app/core/database.py](ai-service/app/core/database.py) | MongoDB (Motor) connection |
+| ElasticSearch | [ai-service/app/core/elasticsearch.py](ai-service/app/core/elasticsearch.py) | ES client (index prefix: `digital_employee_`) |
 | Data models | [ai-service/app/models/database.py](ai-service/app/models/database.py) | MongoDB document models |
 | API schemas | [ai-service/app/models/schemas.py](ai-service/app/models/schemas.py) | Pydantic request/response models |
 | App entry | [ai-service/main.py](ai-service/main.py) | FastAPI app with lifespan management |
-| Task processor | [ai-service/app/services/task_processor.py](ai-service/app/services/task_processor.py) | Background task queue |
-| Embedding cache | [ai-service/app/services/embedding_cache.py](ai-service/app/services/embedding_cache.py) | LRU cache for embeddings |
+| Revise LLM | [ai-service/app/services/revise_llm.py](ai-service/app/services/revise_llm.py) | Math formula to speech text conversion |
 | Ollama keep-alive | [ai-service/app/services/ollama_keepalive.py](ai-service/app/services/ollama_keepalive.py) | Prevents model unloading |
-| Reranker test | [ai-service/scripts/test_ollama_reranker.py](ai-service/scripts/test_ollama_reranker.py) | BGE Reranker API test script |
-| RAG e2e test | [ai-service/scripts/test_rag_e2e.py](ai-service/scripts/test_rag_e2e.py) | End-to-end RAG testing |
-| Stream client | [ai-service/scripts/stream_client.py](ai-service/scripts/stream_client.py) | OpenAI-style streaming test client for v2 API |
+| VLLM model util | [ai-service/app/utils/get_vllm_first_model.py](ai-service/app/utils/get_vllm_first_model.py) | Dynamic vLLM model list retrieval |
+| TTS formatter | [ai-service/app/utils/tts_formatter.py](ai-service/app/utils/tts_formatter.py) | TTS output formatting |
+| Think tag buffer | [ai-service/app/utils/think_tag_buffer.py](ai-service/app/utils/think_tag_buffer.py) | Buffer for stripping think tags from LLM output |
 
 ---
 
@@ -427,20 +320,17 @@ AI service calls Java backend via `JAVA_API_BASE_URL`:
 
 ### Adding New Conversation Nodes
 
-To add a new node to the LangGraph workflow:
-
-1. Define the node method in `ConversationWorkflow` class ([conversation_service.py](ai-service/app/services/conversation_service.py)):
+1. Define the node method in `ConversationNodes` class ([conversation_nodes.py](ai-service/app/services/conversation/conversation_nodes.py)):
 ```python
 async def my_new_node(self, state: ConversationState) -> ConversationState:
-    async with self._time_node("my_new_node", state):
-        # Your logic here
+    async with time_node("my_new_node", state):
         state["some_field"] = "value"
         return state
 ```
 
-2. Add the node to the graph in `_build_workflow()`:
+2. Add the node to the graph in `_build_workflow()` ([conversation_service.py](ai-service/app/services/conversation_service.py)):
 ```python
-graph.add_node("my_new_node", self.my_new_node)
+graph.add_node("my_new_node", self.nodes.my_new_node)
 ```
 
 3. Add edges to connect the node:
@@ -451,9 +341,9 @@ graph.add_edge("my_new_node", "next_node")
 
 ### Adding New API Endpoints
 
-1. Create router function in `app/api/endpoints/` (e.g., `my_feature.py`):
+1. Create router in `app/api/endpoints/`:
 ```python
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -482,11 +372,9 @@ The config system ([app/core/config.py](ai-service/app/core/config.py)) automati
 
 ### Debugging LangGraph Flow
 
-The workflow automatically exports graph structure to Mermaid format:
+The workflow can export graph structure to Mermaid format:
 - Output directory: `graph_debug/` (configurable via `CRAG_GRAPH_DIR`)
-- Disable with: `CRAG_DUMP_GRAPH=0`
-
-View the workflow graph at `graph_debug/crag_graph.mmd`.
+- Enable/disable with: `CRAG_DUMP_GRAPH=0` or `1`
 
 ---
 
@@ -494,33 +382,10 @@ View the workflow graph at `graph_debug/crag_graph.mmd`.
 
 ### Common Issues
 
-**Issue**: Ollama responses are slow
-- **Cause**: Model being unloaded from memory
-- **Fix**: Increase `OLLAMA_KEEP_ALIVE_INTERVAL` or verify keep-alive service is running
+**Ollama responses are slow**: Model being unloaded from memory. Increase `OLLAMA_KEEP_ALIVE_INTERVAL` or verify keep-alive service is running.
 
-**Issue**: Embedding API errors
-- **Cause**: Incorrect `EMBEDDING_BASE_URL` or `EMBEDDING_TYPE` mismatch
-- **Fix**: Verify embedding service is running and configuration matches
+**Embedding API errors**: Incorrect `EMBEDDING_BASE_URL` or `EMBEDDING_TYPE` mismatch. Verify embedding service is running.
 
-**Issue**: ChromaDB connection errors
-- **Cause**: Chroma container not running or wrong port
-- **Fix**: `docker-compose ps chroma` - should be port 8101 (Docker) or 8000 (local)
+**ChromaDB connection errors**: Chroma container not running. `docker-compose ps chroma` - should show port 8200.
 
-**Issue**: "No module named" errors
-- **Cause**: Not using virtual environment
-- **Fix**: Always activate conda environment with `conda activate morphe` or use full python path `/home/zj/miniconda3/envs/morphe/bin/python`
-
-**Issue**: Test failures with database connection
-- **Cause**: Test fixtures not properly isolated
-- **Fix**: Check `tests/conftest.py` for proper `@pytest.fixture` setup
-
-### Performance Optimization
-
-- **Enable streaming**: Use `/api/chat/stream` instead of `/api/chat/message` for better UX
-- **Adjust top_k**: Reduce `top_k` in RAG queries for faster retrieval
-- **Cache embeddings**: The `embedding_cache.py` LRU cache reduces redundant API calls
-- **Monitor node timings**: Check `state["node_timings"]` in logs to identify bottlenecks
-
----
-
-**Documentation**: See `docs/` directory for detailed feature documentation, performance guides, and architecture diagrams.
+**"No module named" errors**: Not using virtual environment. Always activate conda: `conda activate morphe` or use full path `/home/zj/miniconda3/envs/morphe/bin/python`.

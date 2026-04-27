@@ -74,3 +74,19 @@ ai-service/tests/stream.out
 .ipynb_checkpoints
 
 docs_claude_code
+questions-Phi-4-mini-reasoning-W8A8-FP8-by-LLMC.log
+test_phi4_api_openai_sdk_query_result-v2.log
+test_phi4_api_openai_sdk_query_result-v4.log
+ai-service/正则过滤后剩余.json
+ai-service/scripts/典型高中数学问题集.txt
+ai-service/scripts/entity_names_result.json
+ai-service/phi4_test_result/在实际问题中，常常需要求函数的闭区间上的最大值和最小值。已请以函数FX等于三分之一X三次方减去四X加四在区间零到三上为闭区间为例，说明求最值的步骤，并解释为什么.json
+ai-service/phi4_test_result/在空间向量与立体几何中，我们学习了空间向量的数量及运算。请结合教材中的例题说明如何利用空间向量的数量及证明直线与平行、平面垂直的判定定理，并写出用向量法证明该定.json
+ai-service/phi4_test_result/已知双曲线X平方除以9减去y的平方除以16等于1，求它的实半周长、虚半周长、交点坐标、倍心率和渐近线方程。.json
+ai-service/phi4_test_result/已知圆C的方程为X平方加Y的平方减四X加六Y减十二等于零，求圆心坐标、半径，并判断点M为一负二时在圆内圆上还是圆外。.json
+ai-service/phi4_test_result/已知数列AN的前N项和SN等于N乘以四分之一加上N平方乘以三分之二加三，求通项公式AN，并判断数列是否为等差数列。.json
+ai-service/phi4_test_result/椭圆的标准方程是通过将椭圆的几何定义到两定点距离之和为常数，转化为代数方程，并化简得到的。请叙述这两个推导过程，并说明为什么要令B的平方等于A的平方减C的平方，.json
+ai-service/phi4_test_result/椭圆的离心率E的变，这个E是什么？E的取值范围是多少？E的大小如何影响椭圆的形状啊？为什么？.json
+ai-service/phi4_test_result/求抛物线y的平方等于8x的交点坐标，准线方程，并求抛物线上与交点距离为6的点的坐标。.json
+ai-service/phi4_test_result/求曲线y等于x的三次方减去3x，在点一负二处的切线方程。.json
+ai-service/phi4_test_result/求椭圆X平方除以25，加上Y的平方除以9等于1的焦距和离心率。.json

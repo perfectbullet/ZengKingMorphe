@@ -30,6 +30,7 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.services.conversation.conversation_state import ConversationState
 from app.services.conversation.conversation_nodes import ConversationNodes
+from app.utils.get_vllm_first_model import get_vllm_first_model
 
 logger = get_logger(__name__)
 
@@ -226,18 +227,22 @@ class ConversationWorkflow:
 
         # 读取配置
         base_url = os.getenv("PHI4_BASE_URL", "http://192.168.8.235:8000/v1")
-        model_id = os.getenv("PHI4_MODEL_ID", "/home/phi-4-mini-reasoning")
-        temperature = float(os.getenv("PHI4_TEMPERATURE", "0.1"))
-        max_tokens = int(os.getenv("PHI4_MAX_TOKENS", "8192"))
+        model_id = get_vllm_first_model(base_url)
+        temperature = float(os.getenv("PHI4_TEMPERATURE", "0.0"))
+        max_tokens = int(os.getenv("PHI4_MAX_TOKENS", "16384"))
 
         # 动态创建 ChatOpenAI 实例
         phi4_llm = ChatOpenAI(
             base_url=base_url,
             api_key="dummy-key",  # vLLM 不需要真实 key
             model=model_id,
-            temperature=temperature,
-            max_tokens=max_tokens,
+            temperature=0.6,
+            max_tokens=16384,
             streaming=True,
+            top_p=0.95,
+            # extra_body={
+            #     "repetition_penalty": 1.2,  # vLLM 特有参数
+            # }
         )
 
         logger.info(
