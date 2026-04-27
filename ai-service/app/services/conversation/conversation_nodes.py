@@ -17,7 +17,7 @@ Removed nodes: intent_recognition, knowledge_retrieval, grade_documents,
 import hashlib
 import time
 from datetime import datetime
-from datetime import timezone
+import re
 
 from langchain_community.tools.tavily_search import TavilySearchResults
 
@@ -272,7 +272,12 @@ class ConversationNodes:
             # 2. 检测实时查询
             if settings.realtime_query_enabled:
                 realtime_keywords = {
-                    "time": ["今天", "明天", "昨天", "最近", "现在", "本周", "本月", "当前", "几月几号", "几号", "几点"],
+                    # 中英实时触发词，避免LLM返回过期/幻觉内容
+                    "time": [
+                        "今天", "明天", "昨天", "最近", "现在", "本周", "本月", "当前", "几月几号", "几号", "几点",
+                        "today", "date", "what's the date", "what is the date", "what day is it", "current date", "today's date",
+                        "time", "what time", "current time", "now"
+                    ],
                     "weather": ["天气", "气温", "降雨", "降水", "温度"],
                     "news": ["新闻", "热点", "最新", "资讯", "动态", "头条"],
                     "market": ["股价", "汇率", "行情", "股市", "价格", "金价", "银价", "油价", "多少钱"],
@@ -640,14 +645,23 @@ class ConversationNodes:
             intent = state.get("intent")
             web_search_used = state.get("web_search_used", False)
 
-            # 实时时间查询：直接生成时间文本，不走模型流式输出
             if state.get("is_realtime_query") and state.get("realtime_category") == "time":
                 # 尝试获取已生成的时间文本，若无则重新生成
                 direct_text = state.get("direct_text_answer")
                 if not direct_text:
                     now = datetime.now()
                     weekday_cn = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"][now.weekday()]
-                    direct_text = f"今天是{now.year}年{now.month}月{now.day}日（{weekday_cn}），当前时间{now.strftime('%H:%M:%S')}。"
+                    # 根据用户输入语言生成中文/英文时间句子
+                    user_query = state.get("user_query", "")
+                    prefer_zh_output = re.search(r"[\u4e00-\u9fff]", user_query) is not None
+                    if prefer_zh_output:
+                        direct_text = f"今天是{now.year}年{now.month}月{now.day}日（{weekday_cn}），当前时间{now.strftime('%H:%M:%S')}。"
+                    else:
+                        weekday_en = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"][now.weekday()]
+                        direct_text = (
+                            f"Today is {now.strftime('%B')} {now.day}, {now.year} ({weekday_en}). "
+                            f"The current time is {now.strftime('%H:%M:%S')}."
+                        )
                     state["direct_text_answer"] = direct_text
 
                 # 清空 LLM 相关配置，确保不调用模型

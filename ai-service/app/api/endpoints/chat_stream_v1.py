@@ -80,6 +80,16 @@ def _clean_user_query(text: str) -> str:
     text = re.sub(r'^[，。！？、；：,.?!;:\s]+', '', text)
     return text.lstrip()
 
+def _prefer_zh_output(user_query: str) -> bool:
+    """
+    根据用户输入判断输出语言
+    规则：包含中文字符 → 输出中文；否则 → 输出英文
+    """
+    # 空查询默认返回中文
+    if not user_query:
+        return True
+    return re.search(r"[\u4e00-\u9fff]", user_query) is not None
+
 # =============================================================================
 # Source Attribution
 # =============================================================================
@@ -160,6 +170,7 @@ async def _process_segment_for_output(
     segment: str,
     revise_llm: ChatOpenAI,
     log_prefix: str = "",
+    prefer_zh_output: bool = True,
 ) -> tuple[str, str]:
     """
     Process a text segment for output.
@@ -186,9 +197,9 @@ async def _process_segment_for_output(
 
     display_content = normalize_latex_formulas(segment)
 
-    # 英文到中文映射（处理 RAGAnything LLM 可能返回的英文回复）
-    display_content = map_english_to_chinese(display_content)
-
+    # 中文提问时，英文结果转中文（避免“英文问中文答”）
+    if prefer_zh_output:
+        display_content = map_english_to_chinese(display_content)
 
     if has_latex_formula(display_content):
         logger.info(f"[{log_prefix} 公式转换] 转换前长度={len(display_content)}, 转换前={repr(display_content)}")
@@ -241,13 +252,14 @@ async def _stream_segment_with_formula_conversion(
     employee_id: str,
     conversation_id: Optional[str],
     log_prefix: str = "",
+    prefer_zh_output: bool = True,
 ) -> tuple[int, dict]:
     """
     Process a text segment and handle streaming with formula conversion.
 
     Args:
         segment: Text segment to process
-        revise_llm: LLM for formula-to-voice conversion
+        revise_llm: LLM for formula-to-voic，e conversion
         chat_id: Chat completion ID
         created: Creation timestamp
         model: Model name
@@ -263,7 +275,7 @@ async def _stream_segment_with_formula_conversion(
         Tuple of (updated_sequence, voice_chunk_data_for_yielding)
     """
     display_content, voice_content = await _process_segment_for_output(
-        segment, revise_llm, log_prefix
+        segment, revise_llm, log_prefix, prefer_zh_output=prefer_zh_output
     )
 
     voice_chunk_data = _build_token_chunk_data(chat_id, created, model, voice_content)
@@ -478,6 +490,7 @@ async def generate_openai_stream_v1(
     created = int(time.time())
 
     user_query = _clean_user_query(_extract_user_query(request.messages))
+    prefer_zh_output = _prefer_zh_output(user_query)
 
     initial_state = _build_initial_state(request, session_id, user_query)
 
@@ -547,7 +560,12 @@ async def generate_openai_stream_v1(
         # 检测敏感词并提前终止
         if node_name == "input_validation" and state_update.get("has_sensitive"):
             # 发送拒绝消息
-            reject_message = "抱歉，您的问题包含敏感内容，请规范用语后再试。"
+            reject_message = (
+                "抱歉，您的问题包含敏感内容，请规范用语后再试。"
+                if prefer_zh_output
+                else "Sorry, your question contains sensitive content. Please rephrase and try again."
+            )
+
             reject_chunk_data = {
                 "id": chat_id,
                 "object": "chat.completion.chunk",
@@ -590,6 +608,17 @@ async def generate_openai_stream_v1(
 
             first_token_received = False
             full_answer = ""
+            TALKING_POINTS: list = (
+                [
+                    "好的，我正在梳理您的问题要点…",
+                    "等我一小下下······",
+                ]
+                if prefer_zh_output
+                else [
+                    "Got it—let me think for a moment…",
+                    "One sec, I'm putting this together…",
+                ]
+            )
             
             if not first_token_received:
                 first_token_received = True
@@ -605,6 +634,7 @@ async def generate_openai_stream_v1(
                     talking_point, revise_llm, chat_id, created, request.model,
                     db, chunk_sequence, session_id, request.user_id,
                     request.employee_id, current_state.get("conversation_id"),
+                    prefer_zh_output=prefer_zh_output,
                     log_prefix="RAGAnything"
                 )
                 yield json.dumps(chunk_data)
@@ -612,9 +642,15 @@ async def generate_openai_stream_v1(
                 
                 # RAGAnything 流式输出
                 query = current_state.get("raganything_query", current_state.get("user_query", ""))
+                # 按输入语言追加回答指令，避免中英文不匹配
+                if prefer_zh_output:
+                    query = f"请用中文回答。\n\n{query}"
+                else:
+                    query = f"Please answer in English.\n\n{query}"
+
                 mode = current_state.get("raganything_mode", "hybrid")
                 logger.info(f"Using RAGAnything stream | query={query[:50]} | mode={mode}")
-                async for chunk in get_raganything_stream(query, mode=mode):
+                async for chunk in get_raganything_stream(query, mode=mode, prefer_zh_output=prefer_zh_output):
                     chunk_type = chunk.get("type")
                     content = chunk.get("content")
                     if chunk_type == "chunk":
@@ -628,6 +664,7 @@ async def generate_openai_stream_v1(
                                 segment, revise_llm, chat_id, created, request.model,
                                 db, chunk_sequence, session_id, request.user_id,
                                 request.employee_id, current_state.get("conversation_id"),
+                                prefer_zh_output=prefer_zh_output,
                                 log_prefix="RAGAnything"
                             )
                             yield json.dumps(chunk_data)
@@ -641,12 +678,15 @@ async def generate_openai_stream_v1(
                         sources = content
                         
                         # 【调试代码】
-                        # 保存 sources 为 JSON 文件
-                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        json_file_path = f"json格式数据/{timestamp}_sources.json"
-                        with open(json_file_path, 'w', encoding='utf-8') as f:
-                            json.dump(sources, f, ensure_ascii=False, indent=2)
-                        print(f"📁 来源数据已保存到: {json_file_path}")
+                        try:
+                            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                            os.makedirs("json格式数据", exist_ok=True)
+                            json_file_path = f"json格式数据/{timestamp}_sources.json"
+                            with open(json_file_path, 'w', encoding='utf-8') as f:
+                                json.dump(sources, f, ensure_ascii=False, indent=2)
+                            print(f"📁 来源数据已保存到: {json_file_path}")
+                        except Exception as e:
+                            logger.warning(f"Failed to save sources debug json: error={e}")
                         # 【调试代码】
                         
                         # 处理实体引用
@@ -677,6 +717,7 @@ async def generate_openai_stream_v1(
                         final_segment.content, revise_llm, chat_id, created, request.model,
                         db, chunk_sequence, session_id, request.user_id,
                         request.employee_id, current_state.get("conversation_id"),
+                        prefer_zh_output=prefer_zh_output,
                         log_prefix="RAGAnything FinalSegment"
                     )
                     yield json.dumps(chunk_data)
@@ -749,6 +790,7 @@ async def generate_openai_stream_v1(
                                     segment, revise_llm, chat_id, created, request.model,
                                     db, chunk_sequence, session_id, request.user_id,
                                     request.employee_id, current_state.get("conversation_id"),
+                                    prefer_zh_output=prefer_zh_output,
                                     log_prefix="Phi-4-Math-Stream"
                                 )
                                 yield json.dumps(chunk_data)
@@ -766,6 +808,7 @@ async def generate_openai_stream_v1(
                         final_segment.content, revise_llm, chat_id, created, request.model,
                         db, chunk_sequence, session_id, request.user_id,
                         request.employee_id, current_state.get("conversation_id"),
+                        prefer_zh_output=prefer_zh_output,
                         log_prefix="Phi-4-Math FinalSegment"
                     )
                     yield json.dumps(chunk_data)
@@ -799,6 +842,7 @@ async def generate_openai_stream_v1(
                                 segment, revise_llm, chat_id, created, request.model,
                                 db, chunk_sequence, session_id, request.user_id,
                                 request.employee_id, current_state.get("conversation_id"),
+                                prefer_zh_output=prefer_zh_output,
                                 log_prefix=""
                             )
                             yield json.dumps(chunk_data)
@@ -808,6 +852,7 @@ async def generate_openai_stream_v1(
                         final_segment.content, revise_llm, chat_id, created, request.model,
                         db, chunk_sequence, session_id, request.user_id,
                         request.employee_id, current_state.get("conversation_id"),
+                        prefer_zh_output=prefer_zh_output,
                         log_prefix="FinalSegment"
                     )
                     yield json.dumps(chunk_data)

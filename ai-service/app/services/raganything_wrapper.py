@@ -451,7 +451,7 @@ async def get_raganything_instance():
 
 
 async def get_raganything_stream(
-    query: str, mode: str = "hybrid"
+    query: str, mode: str = "hybrid", prefer_zh_output: bool = True
 ) -> AsyncIterator[Dict[str, Any]]:
     """
     流式查询接口
@@ -468,10 +468,23 @@ async def get_raganything_stream(
             - {"type": "error", "content": str}: 错误信息
     """
     rag = await get_raganything_instance()
+    
+    # 中英文提示词适配：中文提问用中文prompt，英文提问用英文prompt
+    system_prompt = (
+        get_chinese_query_prompt()
+        if prefer_zh_output
+        else (
+            "You are a helpful assistant.\n"
+            "Answer the user's question in English.\n"
+            "Use the retrieved information when relevant, and do not invent citations or links.\n"
+            "Do not include a 'References' section.\n"
+        )
+    )
+
     async for chunk in rag.aquery_stream_with_sources(
         query,
         mode=mode,
-        system_prompt=get_chinese_query_prompt(),  # 中文系统提示词（无 References）
+        system_prompt=system_prompt,
         top_k=2,  # 召回实体/关系数量
         chunk_top_k=3,  # (默认10) - 召回文档块数量
         enable_rerank=True,  # (默认True) - 是否启用重排序
