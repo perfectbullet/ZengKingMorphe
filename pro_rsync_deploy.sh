@@ -7,8 +7,16 @@
 # 配置变量
 REMOTE_HOST="192.168.8.234"
 REMOTE_USER="zenking"
-SSH_KEY="/home/zj/.ssh/id_rsa"
-LOCAL_DIR="/home/zj/ZengKingMorphe"
+
+# 自动适配不同用户的路径
+if [ "$(whoami)" = "summer" ]; then
+    SSH_KEY="/Users/summer/.ssh/id_rsa"
+    LOCAL_DIR="/Users/summer/Documents/metahuman_work/ZengKingMorphe"
+else
+    SSH_KEY="/home/zj/.ssh/id_rsa"
+    LOCAL_DIR="/home/zj/ZengKingMorphe"
+fi
+
 REMOTE_DIR="/data/metahuman_work/ZengKingMorphe"
 
 # rsync 选项
