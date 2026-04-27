@@ -16,6 +16,7 @@
 """
 
 import json
+import time
 from typing import Literal
 
 from langchain_openai import ChatOpenAI
@@ -275,11 +276,15 @@ class QueryClassifier:
         ]
 
         try:
+            start_time = time.time()
+
             response = await self.llm.ainvoke(messages)
+
+            duration = time.time() - start_time
             result = self._parse_llm_response(response.content)
             logger.info(
                 f"Query classified: label={result.label}, confidence={result.confidence}, "
-                f"reason={result.reason}, query={query[:50]}"
+                f"reason={result.reason}, query={query[:50]}, duration={duration:.3f}s"
             )
             return result
         except Exception as e:
@@ -309,11 +314,15 @@ class QueryClassifier:
         ]
 
         try:
+            start_time = time.time()
+
             response = self.llm.invoke(messages)
+
+            duration = time.time() - start_time
             result = self._parse_llm_response(response.content)
             logger.debug(
                 f"Query classified: label={result.label}, confidence={result.confidence}, "
-                f"reason={result.reason}, query={query[:50]}"
+                f"reason={result.reason}, query={query[:50]}, duration={duration:.3f}s"
             )
             return result
         except Exception as e:
@@ -357,6 +366,7 @@ def get_query_classifier() -> QueryClassifier:
             api_key="no-key",
             model=model,
             temperature=0.0,
+            max_tokens=128,
         )
         _query_classifier = QueryClassifier(llm)
         logger.info("QueryClassifier singleton initialized")
