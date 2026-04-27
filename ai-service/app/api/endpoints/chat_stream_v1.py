@@ -80,6 +80,59 @@ def _clean_user_query(text: str) -> str:
     text = re.sub(r'^[，。！？、；：,.?!;:\s]+', '', text)
     return text.lstrip()
 
+def _build_history_prefix_for_query(
+    context_messages: list,
+    prefer_zh_output: bool,
+    max_turns: int = 6,
+    max_chars: int = 1200,
+) -> str:
+    """
+    为 RAG 查询构建精简对话历史前缀，支持多轮上下文承接
+    用于处理指代、追问、纠错类需求
+    """
+    if not context_messages:
+        return ""
+
+    # 取最近 N 轮对话
+    recent = context_messages[-max_turns:]
+    lines: list[str] = []
+    for m in recent:
+        role = (m.get("role") or "").strip()
+        content = (m.get("content") or "").strip()
+        if not content:
+            continue
+        # 截断过长内容
+        if len(content) > 300:
+            content = content[:300] + "…"
+        # 角色标签（中英适配）
+        role_label = "User" if role == "user" else "Assistant" if role == "assistant" else role or "Message"
+        if prefer_zh_output:
+            role_label = "用户" if role == "user" else "助手" if role == "assistant" else role_label
+        lines.append(f"{role_label}: {content}")
+
+    history_text = "\n".join(lines).strip()
+    if not history_text:
+        return ""
+    # 总长度截断
+    if len(history_text) > max_chars:
+        history_text = history_text[-max_chars:]
+
+    # 带指令的对话历史前缀（中英）
+    if prefer_zh_output:
+        return (
+            "【对话历史（用于承接上下文）】\n"
+            f"{history_text}\n\n"
+            "要求：如果用户追问里出现“它/这个/为什么/结果不对/再算一遍”等指代或纠错，请优先回指上文的题目、条件、结论、关键变量、公式与定义来回答；"
+            "若上文信息仍不足，再向用户追问缺失条件。\n\n"
+        )
+    return (
+        "[Conversation history (for context)]\n"
+        f"{history_text}\n\n"
+        "Requirement: If the user uses pronouns or follow-ups like \"it/this/why/the result seems wrong/recalculate\", "
+        "resolve them by referring to the prior problem statement, conditions, conclusion, key variables, formulas, definitions, "
+        "and your previous steps. If information is still missing, ask for the missing details.\n\n"
+    )
+
 def _prefer_zh_output(user_query: str) -> bool:
     """
     根据用户输入判断输出语言
@@ -648,6 +701,14 @@ async def generate_openai_stream_v1(
                 else:
                     query = f"Please answer in English.\n\n{query}"
 
+                # 拼接最近对话历史，解决“多轮失忆/无法承接/指代词无法回指”
+                context_messages = (current_state.get("context") or {}).get("messages") or []
+                history_prefix = _build_history_prefix_for_query(
+                    context_messages=context_messages,
+                    prefer_zh_output=prefer_zh_output,
+                )
+                if history_prefix:
+                    query = history_prefix + query
                 mode = current_state.get("raganything_mode", "hybrid")
                 logger.info(f"Using RAGAnything stream | query={query[:50]} | mode={mode}")
                 async for chunk in get_raganything_stream(query, mode=mode, prefer_zh_output=prefer_zh_output):
