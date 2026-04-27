@@ -206,12 +206,13 @@ def classify_single(client: OpenAI, model: str, query: str) -> tuple:
 
     # 尝试使用 JSON mode（如果 API 支持）
     # SiliconFlow/Qwen 等部分支持
+    # 本地模型是 本地环境变量.env 中的 OLLAMA_BASE_URL OLLAMA_MODEL
     try:
         response = client.chat.completions.create(
             model=model,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": f"请对以下 query 进行分类：\n\n{query[:500]}"},
+                {"role": "user", "content": f"请对以下 query 进行分类：\n\n{query[:100]}"},
             ],
             temperature=0.0,
             max_tokens=128,  # 分类返回的JSON很小，降低即可

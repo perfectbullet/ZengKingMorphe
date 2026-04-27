@@ -30,6 +30,7 @@ from app.services.conversation.conversation_state import (
     DEFAULT_SENSITIVE_WORDS,
     DEFAULT_SENSITIVE_WORDS_LOWER,
 )
+from app.services.query_classifier import get_query_classifier
 from app.services.conversation.conversation_helpers import (
     time_node,
     heuristic_complexity,
@@ -235,12 +236,18 @@ class ConversationNodes:
     # -------------------------------------------------------------------------
     async def classify_query_type(self, state: ConversationState) -> ConversationState:
         """
-        Query Classification - 快速识别查询类型并路由。
+        Query Classification - 使用 LLM 进行细粒度查询分类并路由。
 
-        检测顺序 (从快到慢):
-        1. 问候语检测 (关键词匹配)
-        2. 实时查询检测 (关键词匹配)
-        3. 其他 (继续正常流程)
+        使用 QueryClassifier 进行分类，支持 9 种类别：
+        - math_problem, concept_explain, greeting, english_query
+        - realtime_query, general_knowledge, chit_chat, noise, other
+
+        分类结果映射到 workflow state：
+        - greeting → intent="greeting", complexity_score=0.0
+        - realtime_query → is_realtime_query=True
+        - math_problem → is_math_problem=True
+        - noise → 返回友好提示后结束
+        - 其他 → 继续正常流程
 
         Args:
             state: Current conversation state
@@ -249,11 +256,25 @@ class ConversationNodes:
             Updated state with query_type classification
         """
         async with time_node("classify_query_type", state):
-            query = state["user_query"].strip().lower()
+            query = state["user_query"].strip()
 
-            # 1. 检测问候语
-            for category, keywords in GREETING_KEYWORDS.items():
-                if any(kw in query for kw in keywords):
+            # 使用 LLM 分类
+            classifier = get_query_classifier()
+            result = await classifier.aclassify(query)
+
+            logger.info(
+                f"LLM classification: label={result.label}, confidence={result.confidence}, "
+                f"reason={result.reason}, query={query[:50]}"
+            )
+
+            # 将分类结果保存到 state（用于调试和追溯）
+            state["classification_label"] = result.label
+            state["classification_confidence"] = result.confidence
+            state["classification_reason"] = result.reason
+
+            # 根据分类结果设置 state
+            match result.label:
+                case "greeting":
                     state["intent"] = "greeting"
                     state["complexity_score"] = 0.0
                     state["complexity_reason"] = "greeting"
@@ -265,30 +286,33 @@ class ConversationNodes:
                         "text": query,
                         "citations": []
                     })
-                    logger.info(f"Query classified: greeting: category={category}")
-                    return state
 
-            # 2. 检测实时查询
-            if settings.realtime_query_enabled:
-                realtime_keywords = {
-                    "time": ["今天", "明天", "昨天", "最近", "现在", "本周", "本月", "当前"],
-                    "weather": ["天气", "气温", "降雨", "降水", "温度"],
-                    "news": ["新闻", "热点", "最新", "资讯", "动态", "头条"],
-                    "market": ["股价", "汇率", "行情", "股市", "价格", "金价", "银价", "油价", "多少钱"],
-                }
-                for category, keywords in realtime_keywords.items():
-                    if any(kw in query for kw in keywords):
-                        state["is_realtime_query"] = True
-                        state["realtime_category"] = category
-                        state["realtime_detect_reason"] = f"keyword:{keywords[0] if keywords else category}"
-                        state["intent"] = "general_query"
-                        logger.info(f"Query classified: realtime: category={category}")
-                        return state
-            
-            # 4. 默认为一般查询
-            state["is_realtime_query"] = False
-            state["intent"] = "general_query"
-            logger.debug("Query classified as general")
+                case "realtime_query":
+                    state["is_realtime_query"] = True
+                    state["realtime_category"] = result.reason or "general"
+                    state["realtime_detect_reason"] = f"llm:{result.confidence}"
+                    state["intent"] = "general_query"
+
+                case "math_problem":
+                    state["is_math_problem"] = True
+                    state["intent"] = "general_query"
+
+                case "noise":
+                    # 噪声输入，返回友好提示
+                    state["intent"] = "noise"
+                    state["sources"].append({
+                        "type": "text",
+                        "from": "noise_response",
+                        "text": "抱歉，我没有听清您的问题，请再重复一次。",
+                        "citations": []
+                    })
+
+                case _:
+                    # concept_explain, english_query, general_knowledge, chit_chat, other
+                    # 默认为一般查询，继续正常流程
+                    state["is_realtime_query"] = False
+                    state["intent"] = "general_query"
+
         return state
 
     # -------------------------------------------------------------------------
@@ -398,8 +422,8 @@ class ConversationNodes:
             目标节点名称 (greeting/realtime/normal)
         """
         intent = state.get("intent")
-        # 问候语直接跳到生成答案
-        if intent == "greeting":
+        # 问候语和噪声输入直接跳到生成答案
+        if intent in ("greeting", "noise"):
             return "greeting"
         if state.get("is_realtime_query"):
             return "realtime"
@@ -638,6 +662,24 @@ class ConversationNodes:
 
             intent = state.get("intent")
             web_search_used = state.get("web_search_used", False)
+
+            # 噪声输入：使用预设的友好响应，不需要调用 LLM
+            if intent == "noise":
+                # 从 sources 中获取预设的响应
+                noise_source = next((s for s in state.get("sources", []) if s.get("from") == "noise_response"), None)
+                if noise_source:
+                    state["final_answer"] = noise_source.get("text", "抱歉，我没有听清您的问题，请再重复一次。")
+                    state["confidence"] = 0.99
+                    state["streaming_llm"] = None
+                    state["streaming_type"] = "text"  # 标记为纯文本输出
+                    logger.info("Noise input detected, using preset response")
+                else:
+                    # 回退到 greeting 逻辑
+                    state["final_answer"] = "抱歉，我没有听清您的问题，请再重复一次。"
+                    state["confidence"] = 0.99
+                    state["streaming_llm"] = None
+                    state["streaming_type"] = "text"
+                return state
 
             # 计算置信度
             confidence = 0.5  # Base confidence

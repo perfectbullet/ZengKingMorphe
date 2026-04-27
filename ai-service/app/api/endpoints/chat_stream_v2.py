@@ -309,6 +309,10 @@ async def generate_openai_stream_v2(
             # Additional context
             "channel_name": request.channel_name,
             "team_id": request.team_id,
+            # LLM-based classification (from QueryClassifier)
+            "classification_label": None,
+            "classification_confidence": None,
+            "classification_reason": None,
         }
 
         # Save user query chunk to DB
@@ -485,11 +489,14 @@ async def generate_openai_stream_v2(
             if should_generate and final_state:
                 should_generate = False
 
-                # 检查是否已有预生成的答案（仅数学教材知识库的 direct match）
+                # 检查是否已有预生成的答案
+                # 包括：数学教材知识库的 direct match，或者 noise 输入的预设响应
                 existing_answer = final_state.get("final_answer", "")
                 direct_match = final_state.get("direct_match")
+                streaming_type = final_state.get("streaming_type")
 
-                if existing_answer and direct_match and not final_state.get("faq_matched"):
+                # 数学教材直接匹配 或 噪声输入预设响应
+                if (existing_answer and direct_match and not final_state.get("faq_matched")) or streaming_type == "text":
                     # 规范化 LaTeX 公式：定界符、空格清理、反斜杠转义
                     from app.utils.latex import normalize_latex_formulas
                     existing_answer = normalize_latex_formulas(existing_answer)

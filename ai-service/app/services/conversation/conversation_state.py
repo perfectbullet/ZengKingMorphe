@@ -161,3 +161,7 @@ class ConversationState(TypedDict):
     raganything_mode: Optional[str]  # RAGAnything mode (hybrid, local, global, naive)
     sources: List[Dict[str, Any]]  # 累积的数据源列表
     is_math_problem: bool  # 是否为数学题目
+    # LLM-based classification results (from QueryClassifier)
+    classification_label: Optional[str]  # 分类标签 (math_problem, concept_explain, greeting, etc.)
+    classification_confidence: Optional[str]  # 置信度 (high/medium/low)
+    classification_reason: Optional[str]  # 分类理由

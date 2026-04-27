@@ -341,6 +341,10 @@ def _build_initial_state(request: OpenAIChatRequest, session_id: str, user_query
         "raganything_query": None,
         "raganything_mode": None,
         "sources": [],
+        # LLM-based classification (from QueryClassifier)
+        "classification_label": None,
+        "classification_confidence": None,
+        "classification_reason": None,
     }
 
 def _build_finish_chunk_data(
@@ -583,10 +587,53 @@ async def generate_openai_stream_v1(
                 f"web_search_used={current_state.get('web_search_used', False)}"
             )
 
-            # 检查是否有预生成的答案（direct_match）
-            # existing_answer = current_state.get("final_answer", "")
-            # direct_match = current_state.get("direct_match")
-            # 先不做预生产答案
+            # 检查是否有预生成的答案（direct_match 或 noise 响应）
+            existing_answer = current_state.get("final_answer", "")
+            streaming_type = current_state.get("streaming_type")
+
+            if existing_answer and streaming_type == "text":
+                # 噪声输入或其他预设响应，直接返回
+                ttfb_ms = int((time.time() - initial_state["workflow_start_time"]) * 1000)
+                current_state["ttfb_ms"] = ttfb_ms
+                logger.info(f"Using preset answer | length={len(existing_answer)} | ttfb_ms={ttfb_ms}")
+
+                # 流式返回预设答案
+                for char in existing_answer:
+                    token_chunk_data = {
+                        "id": chat_id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": request.model,
+                        "choices": [{
+                            "index": 0,
+                            "delta": {"content": char},
+                            "finish_reason": None,
+                        }],
+                    }
+                    chunk_sequence += 1
+                    await save_stream_chunk(
+                        db, chat_id, chunk_sequence, session_id, request.user_id,
+                        request.employee_id, "token", token_chunk_data,
+                        current_state.get("conversation_id")
+                    )
+                    yield json.dumps(token_chunk_data)
+
+                # 发送结束标记
+                chunk_sequence += 1
+                finish_chunk_data["metadata"]["conversation_id"] = current_state.get("conversation_id", "")
+                finish_chunk_data["metadata"]["sources"] = current_state.get("sources", [])
+                finish_chunk_data["metadata"]["intent"] = current_state.get("intent", "")
+                finish_chunk_data["metadata"]["is_realtime_query"] = current_state.get("is_realtime_query", False)
+                finish_chunk_data["metadata"]["realtime_category"] = current_state.get("realtime_category", "")
+                finish_chunk_data["metadata"]["confidence"] = 0.99
+                await save_stream_chunk(
+                    db, chat_id, chunk_sequence, session_id, request.user_id,
+                    request.employee_id, "done", finish_chunk_data,
+                    current_state.get("conversation_id", "")
+                )
+                yield "[DONE]"
+                await conversation_workflow.save_conversation(current_state)
+                continue
 
             first_token_received = False
             full_answer = ""
