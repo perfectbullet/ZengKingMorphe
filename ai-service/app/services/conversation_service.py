@@ -236,12 +236,13 @@ class ConversationWorkflow:
             base_url=base_url,
             api_key="dummy-key",  # vLLM 不需要真实 key
             model=model_id,
-            temperature=temperature,
-            max_tokens=max_tokens,
+            temperature=0.6,
+            max_tokens=16384,
             streaming=True,
-            extra_body={
-                "repetition_penalty": 1.2,  # vLLM 特有参数
-            }
+            top_p=0.95,
+            # extra_body={
+            #     "repetition_penalty": 1.2,  # vLLM 特有参数
+            # }
         )
 
         logger.info(

@@ -17,7 +17,7 @@ from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.services.conversation.conversation_state import ConversationState
-
+from prompts.prompts import PHI4_SYSTEM_PROMPT
 logger = get_logger(__name__)
 
 
@@ -472,15 +472,8 @@ def build_math_generation_messages(state: ConversationState) -> List:
     Returns:
         List of Message objects for Phi-4 LLM
     """
-    # Phi-4 专用系统提示词
-    SYSTEM_PROMPT = (
-        "你是 Phi-4-Mini-Reasoning，一个专门从事数学和逻辑推理的强大 AI 模型。\n"
-        "请简洁的回答。\n"
-        "请使用中文回复。\n"
-    )
-
     # 使用 Phi-4 模型进行数学推理
-    messages = [SystemMessage(content=SYSTEM_PROMPT)]
+    messages = [SystemMessage(content=PHI4_SYSTEM_PROMPT)]
 
     # 添加用户问题
     messages.append(HumanMessage(content=state["user_query"]))
