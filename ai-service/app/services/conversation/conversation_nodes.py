@@ -83,6 +83,59 @@ def _split_user_questions(text: str) -> list[str]:
     return [p.strip() for p in parts if p and p.strip()]
 
 
+_WEEKDAY_CN_INDEX: dict[str, int] = {"一": 0, "二": 1, "三": 2, "四": 3, "五": 4, "六": 5, "日": 6, "天": 6}
+_WEEK_PREFIX_OFFSET: dict[str, int] = {
+    "上上上周": -3,
+    "上上周": -2,
+    "上周": -1,
+    "本周": 0,
+    "这周": 0,
+    "本星期": 0,
+    "这星期": 0,
+    "下周": 1,
+    "下下周": 2,
+    "下下下周": 3,
+}
+
+
+def _parse_weekday_date_cn(q_lower: str, now: datetime) -> tuple[str, datetime] | None:
+    """解析中文星期日期（上周六/下周一），返回标签+日期"""
+    # 必须含周/星期关键词，避免误判
+    if ("周" not in q_lower) and ("星期" not in q_lower) and not any(
+        p in q_lower for p in _WEEK_PREFIX_OFFSET.keys()
+    ):
+        return None
+
+    # 正则提取前缀+星期
+    m = re.search(
+        r"(?P<prefix>上上上周|上上周|上周|本周|这周|本星期|这星期|下周|下下周|下下下周|上星期|本星期|这星期|下星期|上上星期|下下星期)?(?:(?:周|星期)?)(?P<wd>[一二三四五六日天])",
+        q_lower,
+    )
+    if not m:
+        return None
+    prefix = m.group("prefix") or "本周"
+    wd = m.group("wd")
+    prefix_norm = prefix.replace("星期", "周")
+    if prefix_norm not in _WEEK_PREFIX_OFFSET:
+        prefix_norm = prefix_norm.replace("上上周", "上上周").replace("下下周", "下下周")
+    # 获取偏移量与星期索引
+    week_off = _WEEK_PREFIX_OFFSET.get(prefix_norm)
+    wd_idx = _WEEKDAY_CN_INDEX.get(wd)
+    if week_off is None or wd_idx is None:
+        return None
+
+    # 计算目标日期（周一为一周起点）
+    monday = now.date() - timedelta(days=now.weekday())
+    target_date = monday + timedelta(days=week_off * 7 + wd_idx)
+    # 生成标签
+    if "星期" in q_lower or "星期" in (prefix or ""):
+        label = prefix_norm.replace("周", "星期") + wd
+    else:
+        label = prefix_norm + wd
+    target_dt = datetime.combine(target_date, now.time())
+    return label, target_dt
+
+
 _DAY_LABEL_ZH: dict[int, str] = {
     -3: "大前天",
     -2: "前天",
@@ -780,10 +833,17 @@ class ConversationNodes:
                     answers: list[str] = []
                     for sq in sub_questions:
                         sq_lower = sq.strip().lower()
-                        # 解析相对日期
-                        resolved_offset = _relative_calendar_day_offset(sq_lower)
-                        day_offset = resolved_offset if resolved_offset is not None else 0
-                        target_dt = now + timedelta(days=day_offset)
+                        # 优先解析星期日期，再解析相对日期
+                        label = None
+                        week_parsed = _parse_weekday_date_cn(sq_lower, now)
+                        if week_parsed:
+                            label, target_dt = week_parsed
+                            day_offset = (target_dt.date() - now.date()).days
+                        else:
+                            # 解析昨天/前天等偏移量
+                            resolved_offset = _relative_calendar_day_offset(sq_lower)
+                            day_offset = resolved_offset if resolved_offset is not None else 0
+                            target_dt = now + timedelta(days=day_offset)
 
                         # 判断是否询问具体时间
                         asks_clock_only = any(
@@ -795,7 +855,7 @@ class ConversationNodes:
                          # 生成中英文回答
                         if prefer_zh_output:
                             weekday_cn = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"][target_dt.weekday()]
-                            day_word = _DAY_LABEL_ZH.get(day_offset, "今天")
+                            day_word = label or _DAY_LABEL_ZH.get(day_offset, "今天")
                             line = f"{day_word}是{target_dt.year}年{target_dt.month}月{target_dt.day}日（{weekday_cn}）。"
                             # 只有明确问“几点/什么时间”才附带当前时刻
                             if asks_clock_only:
