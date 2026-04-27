@@ -419,14 +419,19 @@ class ConversationNodes:
             state: Current conversation state
 
         Returns:
-            目标节点名称 (greeting/realtime/normal)
+            目标节点名称 (greeting/realtime/math/normal)
         """
         intent = state.get("intent")
         # 问候语和噪声输入直接跳到生成答案
         if intent in ("greeting", "noise"):
             return "greeting"
+        # 实时查询 → web search
         if state.get("is_realtime_query"):
             return "realtime"
+        # 数学问题 → 直接生成答案（使用 Phi-4）
+        if state.get("is_math_problem"):
+            return "math"
+        # 其他 → 复杂度评估
         return "normal"
 
     # -------------------------------------------------------------------------
