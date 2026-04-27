@@ -684,7 +684,31 @@ async def generate_openai_stream_v1(
 
                 final_state = current_state
                 final_state["final_answer"] = full_answer
-                
+
+            # 直接文本输出
+            elif streaming_type == "direct_text":
+                # 获取直接回答内容（如时间、固定回答）
+                direct_text = current_state.get("direct_text_answer", "")
+                if not direct_text:
+                    direct_text = current_state.get("final_answer", "")
+
+                # 存在直接文本则进行流式输出
+                if direct_text:
+                    full_answer += direct_text
+                    # 调用流式输出工具，分段发送文本并转换公式格式
+                    chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
+                        direct_text, revise_llm, chat_id, created, request.model,
+                        db, chunk_sequence, session_id, request.user_id,
+                        request.employee_id, current_state.get("conversation_id"),
+                        log_prefix="DirectText"
+                    )
+                    yield json.dumps(chunk_data)
+
+                # 更新最终状态，保存完整答案
+                final_state = current_state
+                final_state["final_answer"] = full_answer
+
+
             elif streaming_type == "phi4_math":
                 # Phi-4 数学推理流式输出
                 streaming_llm = current_state.get("streaming_llm")

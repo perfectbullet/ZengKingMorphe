@@ -17,6 +17,7 @@ Removed nodes: intent_recognition, knowledge_retrieval, grade_documents,
 import hashlib
 import time
 from datetime import datetime
+from datetime import timezone
 
 from langchain_community.tools.tavily_search import TavilySearchResults
 
@@ -266,7 +267,7 @@ class ConversationNodes:
             # 2. 检测实时查询
             if settings.realtime_query_enabled:
                 realtime_keywords = {
-                    "time": ["今天", "明天", "昨天", "最近", "现在", "本周", "本月", "当前"],
+                    "time": ["今天", "明天", "昨天", "最近", "现在", "本周", "本月", "当前", "几月几号", "几号", "几点"],
                     "weather": ["天气", "气温", "降雨", "降水", "温度"],
                     "news": ["新闻", "热点", "最新", "资讯", "动态", "头条"],
                     "market": ["股价", "汇率", "行情", "股市", "价格", "金价", "银价", "油价", "多少钱"],
@@ -634,6 +635,26 @@ class ConversationNodes:
             intent = state.get("intent")
             web_search_used = state.get("web_search_used", False)
 
+            # 实时时间查询：直接生成时间文本，不走模型流式输出
+            if state.get("is_realtime_query") and state.get("realtime_category") == "time":
+                # 尝试获取已生成的时间文本，若无则重新生成
+                direct_text = state.get("direct_text_answer")
+                if not direct_text:
+                    now = datetime.now()
+                    weekday_cn = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"][now.weekday()]
+                    direct_text = f"今天是{now.year}年{now.month}月{now.day}日（{weekday_cn}），当前时间{now.strftime('%H:%M:%S')}。"
+                    state["direct_text_answer"] = direct_text
+
+                # 清空 LLM 相关配置，确保不调用模型
+                state["streaming_llm"] = None
+                state["streaming_messages"] = None
+                state["streaming_type"] = "direct_text" # 设置流式类型为【直接文本输出】
+                state["confidence"] = 0.99
+                state["final_answer"] = ""  # 占位符，流式输出无需预生成
+                logger.info("Streaming configured: type=direct_text, realtime_category=time")
+                return state
+
+
             # 计算置信度
             confidence = 0.5  # Base confidence
             if intent == "greeting":
@@ -671,16 +692,35 @@ class ConversationNodes:
                     f"web_search_used={web_search_used}, model={model_name}"
                 )
             else:  # normal - 需要召回文档，使用 RAGAnything
-                state["streaming_llm"] = None
-                state["streaming_messages"] = None
-                state["streaming_type"] = "raganything_stream"
-                state["raganything_query"] = state["user_query"]
-                state["raganything_mode"] = "hybrid"
+                employee_config = state.get("employee_config", {})
+                kb_ids = employee_config.get("kb_ids", []) or employee_config.get("capabilities", {}).get("kb_ids", [])
+                raganything_enabled = getattr(settings, "raganything_enabled", True)
 
-                logger.info(
-                    f"Streaming configured: type=raganything_stream, intent={intent}, "
-                    f"mode=hybrid, query={state['user_query'][:50]}..."
-                )
+                # 如果 RAG 未启用 或 无知识库 → 降级为普通 LLM 生成
+                if (not raganything_enabled) or (not kb_ids):
+                    messages = build_generation_messages(state)
+                    streaming_llm, model_name = self.workflow.get_streaming_llm(state)
+                    state["streaming_llm"] = streaming_llm
+                    state["streaming_messages"] = messages
+                    state["streaming_type"] = "langchain_llm"
+                    logger.info(
+                        f"Streaming configured: type=langchain_llm (fallback), "
+                        f"reason={'raganything_disabled' if not raganything_enabled else 'no_kb_ids'}, "
+                        f"model={model_name}"
+                    )
+                # 启用 RAG → 使用 RAGAnything 混合检索
+                else:
+                    # 需要召回文档，使用 RAGAnything
+                    state["streaming_llm"] = None
+                    state["streaming_messages"] = None
+                    state["streaming_type"] = "raganything_stream"
+                    state["raganything_query"] = state["user_query"]
+                    state["raganything_mode"] = "hybrid"
+
+                    logger.info(
+                        f"Streaming configured: type=raganything_stream, intent={intent}, "
+                        f"mode=hybrid, query={state['user_query'][:50]}..."
+                    )
 
             state["confidence"] = confidence
             state["final_answer"] = ""  # Placeholder for streaming
