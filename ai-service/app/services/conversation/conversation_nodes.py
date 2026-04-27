@@ -314,9 +314,32 @@ class ConversationNodes:
         async with time_node("classify_query_type", state):
             query = state["user_query"].strip().lower()
 
+            # 预判是否含业务/实时信号（避免“请问xx天气”被误判为 greeting）
+            realtime_signal = False
+            if settings.realtime_query_enabled:
+                # 实时关键词（与 realtime_keywords_ordered 保持一致）
+                _realtime_keywords_for_guard = [
+                    # weather
+                    "天气", "气温", "降雨", "降水", "温度",
+                    # 新闻/政务
+                    "新闻", "热点", "最新", "资讯", "动态", "头条",
+                    "目前", "现任", "现在", "当前", "总理", "国务院总理", "国家总理", "国家领导人",
+                    # 行情
+                    "股价", "汇率", "行情", "股市", "价格", "金价", "银价", "油价", "多少钱",
+                    # 时间
+                    "今天", "明天", "昨天", "前天", "大前天", "后天", "大后天", "几月几号", "几号", "几点", "日期",
+                    # 英文
+                    "current", "premier", "prime minister", "state council", "president",
+                    "today", "date", "time", "weather", "news", "market",
+                ]
+                realtime_signal = any(k in query for k in _realtime_keywords_for_guard)
+
             # 1. 检测问候语
             for category, keywords in GREETING_KEYWORDS.items():
                 if any(kw in query for kw in keywords):
+                    # 若同时包含明显的业务/实时信号，则不要走 greeting，继续后续 realtime 检测
+                    if realtime_signal:
+                        break
                     state["intent"] = "greeting"
                     state["complexity_score"] = 0.0
                     state["complexity_reason"] = "greeting"
