@@ -136,16 +136,17 @@ class QueryClassifier:
 - "What is the Pythagorean theorem?"
 
 ### 5. realtime_query（需要联网检索）
-用户询问需要最新信息的问题，如天气、新闻、实时行情等。
+用户询问需要最新信息的问题，如天气、新闻、实时行情、路况拥堵等。
 **特征**：
 - 时间敏感：今天、明天、最近、当前、现在、最新
-- 领域：天气、新闻、股价、汇率、行情、价格
+- 领域：天气、新闻、股价、汇率、行情、价格、路况、拥堵
 
 **示例**：
 - "北京今天天气怎么样"
 - "最近有什么新闻"
 - "现在黄金价格是多少"
 - "明天会下雨吗"
+- "今天成都堵不堵"
 
 ### 6. general_knowledge（常识性问题）
 用户询问一般知识、百科、常识类问题，不需要联网获取最新信息。
@@ -202,11 +203,21 @@ class QueryClassifier:
 {
   "label": "类别名称",
   "confidence": "high/medium/low",
-  "reason": "简短理由（不超过20字）"
+  "reason": "简短理由或类别（不超过20字）"
 }
 ```
 
 **label 取值**：`math_problem`, `concept_explain`, `greeting`, `realtime_query`, `general_knowledge`, `chit_chat`, `noise`, `other`
+
+**重要约束（为了可维护的下游路由）**：
+- 当 `label` 为 `realtime_query` 时，`reason` 必须返回下面枚举之一（全小写英文）：
+  - `weather`（天气）
+  - `time`（日期/时间）
+  - `news`（新闻/时事）
+  - `market`（股价/汇率/价格/行情）
+  - `traffic`（路况/拥堵/堵车）
+  - `general`（其它需要联网的实时信息）
+- 其它 label 时，`reason` 仍然返回简短中文理由即可。
 
 **confidence 说明**：
 - `high`：类别判断非常明确，无明显歧义

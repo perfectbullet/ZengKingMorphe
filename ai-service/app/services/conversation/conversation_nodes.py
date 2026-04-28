@@ -373,6 +373,7 @@ class ConversationNodes:
         """
         async with time_node("classify_query_type", state):
             query = state["user_query"].strip()
+            query_lower = query.lower()
 
             # 使用 LLM 分类
             classifier = get_query_classifier()
@@ -405,7 +406,10 @@ class ConversationNodes:
 
                 case "realtime_query":
                     state["is_realtime_query"] = True
-                    state["realtime_category"] = result.reason or "general"
+                    # 校验实时查询类别，若不在枚举中，则降级为 general
+                    raw_category = (result.reason or "").strip().lower()
+                    allowed = {"weather", "time", "news", "market", "traffic", "general"}
+                    state["realtime_category"] = raw_category if raw_category in allowed else "general"
                     state["realtime_detect_reason"] = f"llm:{result.confidence}"
                     state["intent"] = "general_query"
 

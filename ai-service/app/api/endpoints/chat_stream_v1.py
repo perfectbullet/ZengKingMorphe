@@ -224,6 +224,7 @@ async def _process_segment_for_output(
     revise_llm: ChatOpenAI,
     log_prefix: str = "",
     prefer_zh_output: bool = True,
+    enable_math_sentence_conversion: bool = False,
 ) -> tuple[str, str]:
     """
     Process a text segment for output.
@@ -258,7 +259,7 @@ async def _process_segment_for_output(
         logger.info(f"[{log_prefix} 公式转换] 转换前长度={len(display_content)}, 转换前={repr(display_content)}")
         voice_content = await convert_formula_to_voice(display_content, revise_llm)
         logger.info(f"[{log_prefix} 公式转换] 转换后长度={len(voice_content)}, 转换后={repr(voice_content)}")
-    elif _has_math_symbols_simple(display_content):
+    elif enable_math_sentence_conversion and _has_math_symbols_simple(display_content):
         logger.info(f"[{log_prefix} 数学句子转换] 转换前长度={len(display_content)}, 转换前={repr(display_content)}")
         voice_content = await convert_math_sentence_to_voice(display_content, revise_llm)
         logger.info(f"[{log_prefix} 数学句子转换] 转换后长度={len(voice_content)}, 转换后={repr(voice_content)}")
@@ -306,6 +307,7 @@ async def _stream_segment_with_formula_conversion(
     conversation_id: Optional[str],
     log_prefix: str = "",
     prefer_zh_output: bool = True,
+    enable_math_sentence_conversion: bool = False,
 ) -> tuple[int, dict]:
     """
     Process a text segment and handle streaming with formula conversion.
@@ -328,7 +330,11 @@ async def _stream_segment_with_formula_conversion(
         Tuple of (updated_sequence, voice_chunk_data_for_yielding)
     """
     display_content, voice_content = await _process_segment_for_output(
-        segment, revise_llm, log_prefix, prefer_zh_output=prefer_zh_output
+        segment,
+        revise_llm,
+        log_prefix,
+        prefer_zh_output=prefer_zh_output,
+        enable_math_sentence_conversion=enable_math_sentence_conversion,
     )
 
     voice_chunk_data = _build_token_chunk_data(chat_id, created, model, voice_content)
@@ -724,11 +730,13 @@ async def generate_openai_stream_v1(
             
             # 发送统一过渡话术，按输入语言适配
             preface = TALKING_POINTS[0] + ("\n" if prefer_zh_output else "\n")
+            enable_math_sentence_conversion = bool(current_state.get("is_math_problem", False))
             chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
                 preface, revise_llm, chat_id, created, request.model,
                 db, chunk_sequence, session_id, request.user_id,
                 request.employee_id, current_state.get("conversation_id"),
                 prefer_zh_output=prefer_zh_output,
+                enable_math_sentence_conversion=enable_math_sentence_conversion,
                 log_prefix="Preface"
             )
             yield json.dumps(chunk_data)
@@ -774,6 +782,7 @@ async def generate_openai_stream_v1(
                                 db, chunk_sequence, session_id, request.user_id,
                                 request.employee_id, current_state.get("conversation_id"),
                                 prefer_zh_output=prefer_zh_output,
+                                enable_math_sentence_conversion=enable_math_sentence_conversion,
                                 log_prefix="RAGAnything"
                             )
                             yield json.dumps(chunk_data)
@@ -827,6 +836,7 @@ async def generate_openai_stream_v1(
                         db, chunk_sequence, session_id, request.user_id,
                         request.employee_id, current_state.get("conversation_id"),
                         prefer_zh_output=prefer_zh_output,
+                        enable_math_sentence_conversion=enable_math_sentence_conversion,
                         log_prefix="RAGAnything FinalSegment"
                     )
                     yield json.dumps(chunk_data)
@@ -849,6 +859,7 @@ async def generate_openai_stream_v1(
                         direct_text, revise_llm, chat_id, created, request.model,
                         db, chunk_sequence, session_id, request.user_id,
                         request.employee_id, current_state.get("conversation_id"),
+                        enable_math_sentence_conversion=enable_math_sentence_conversion,
                         log_prefix="DirectText"
                     )
                     yield json.dumps(chunk_data)
@@ -865,6 +876,7 @@ async def generate_openai_stream_v1(
                     talking_point_math_think, revise_llm, chat_id, created, request.model,
                     db, chunk_sequence, session_id, request.user_id,
                     request.employee_id, current_state.get("conversation_id"),
+                    enable_math_sentence_conversion=True,
                     log_prefix="RAGAnything"
                 )
                 yield json.dumps(chunk_data)
@@ -900,6 +912,7 @@ async def generate_openai_stream_v1(
                                     db, chunk_sequence, session_id, request.user_id,
                                     request.employee_id, current_state.get("conversation_id"),
                                     prefer_zh_output=prefer_zh_output,
+                                    enable_math_sentence_conversion=True,
                                     log_prefix="Phi-4-Math-Stream"
                                 )
                                 yield json.dumps(chunk_data)
@@ -918,6 +931,7 @@ async def generate_openai_stream_v1(
                         db, chunk_sequence, session_id, request.user_id,
                         request.employee_id, current_state.get("conversation_id"),
                         prefer_zh_output=prefer_zh_output,
+                        enable_math_sentence_conversion=True,
                         log_prefix="Phi-4-Math FinalSegment"
                     )
                     yield json.dumps(chunk_data)
@@ -952,6 +966,7 @@ async def generate_openai_stream_v1(
                                 db, chunk_sequence, session_id, request.user_id,
                                 request.employee_id, current_state.get("conversation_id"),
                                 prefer_zh_output=prefer_zh_output,
+                                enable_math_sentence_conversion=enable_math_sentence_conversion,
                                 log_prefix=""
                             )
                             yield json.dumps(chunk_data)
@@ -962,6 +977,7 @@ async def generate_openai_stream_v1(
                         db, chunk_sequence, session_id, request.user_id,
                         request.employee_id, current_state.get("conversation_id"),
                         prefer_zh_output=prefer_zh_output,
+                        enable_math_sentence_conversion=enable_math_sentence_conversion,
                         log_prefix="FinalSegment"
                     )
                     yield json.dumps(chunk_data)
