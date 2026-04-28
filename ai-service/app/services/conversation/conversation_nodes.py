@@ -17,7 +17,6 @@ Removed nodes: intent_recognition, knowledge_retrieval, grade_documents,
 import hashlib
 import time
 from datetime import datetime
-import re
 from datetime import timedelta
 
 from langchain_community.tools.tavily_search import TavilySearchResults
@@ -32,129 +31,62 @@ from app.services.conversation.conversation_state import (
     DEFAULT_SENSITIVE_WORDS,
     DEFAULT_SENSITIVE_WORDS_LOWER,
 )
-from app.services.query_classifier import get_query_classifier
+from app.services.query_classifier import ClassificationResult, get_query_classifier
+from app.services.realtime_intent_heuristic import heuristic_realtime_category
 from app.services.conversation.conversation_helpers import (
     time_node,
     heuristic_complexity,
     build_generation_messages,
     build_math_generation_messages
 )
+from app.services.calendar_time_resolver import calendar_direct_text_answer
+from app.services.web_search_recency import (
+    DEFAULT_POLICIES,
+    build_time_anchored_query,
+    filter_and_sort_by_recency,
+)
 
 logger = get_logger(__name__)
 
-# 相对日历日的偏移（天）：列表顺序很重要——长的、更具体的词必须排在前面，
-# 例如「大前天」若排在「前天」之后会错判。
-_RELATIVE_DAY_OFFSET_ZH: tuple[tuple[str, int], ...] = (
-    ("大前天", -3),
-    ("前天", -2),
-    ("昨天", -1),
-    ("今天", 0),
-    ("明天", 1),
-    ("后天", 2),
-    ("大后天", 3),
-)
-_RELATIVE_DAY_OFFSET_EN: tuple[tuple[str, int], ...] = (
-    ("three days ago", -3),
-    ("day before yesterday", -2),
-    ("yesterday", -1),
-    ("today", 0),
-    ("tomorrow", 1),
-    ("day after tomorrow", 2),
-    ("three days later", 3),
-)
+# 启发式联网补位：不覆盖问候、噪声、数学题；也不重复覆盖已是实时的分支
+_REALTIME_HEURISTIC_SKIP_LABELS = frozenset({"greeting", "noise", "math_problem", "realtime_query"})
 
 
-def _relative_calendar_day_offset(q_lower: str) -> int | None:
-    """命中「今天/昨天/前天/大前天…」等表述时返回 timedelta 天数偏移，否则 None。"""
-    for phrase, off in _RELATIVE_DAY_OFFSET_ZH:
-        if phrase in q_lower:
-            return off
-    for phrase, off in _RELATIVE_DAY_OFFSET_EN:
-        if phrase in q_lower:
-            return off
-    return None
-
-
-def _split_user_questions(text: str) -> list[str]:
-    """按标点切分用户问题，返回清理后的问题列表"""
-    if not text:
-        return []
-    # 按中英文句末标点分割
-    parts = re.split(r"[?？!！。；;\n]+", text)
-    return [p.strip() for p in parts if p and p.strip()]
-
-
-_WEEKDAY_CN_INDEX: dict[str, int] = {"一": 0, "二": 1, "三": 2, "四": 3, "五": 4, "六": 5, "日": 6, "天": 6}
-_WEEK_PREFIX_OFFSET: dict[str, int] = {
-    "上上上周": -3,
-    "上上周": -2,
-    "上周": -1,
-    "本周": 0,
-    "这周": 0,
-    "本星期": 0,
-    "这星期": 0,
-    "下周": 1,
-    "下下周": 2,
-    "下下下周": 3,
-}
-
-
-def _parse_weekday_date_cn(q_lower: str, now: datetime) -> tuple[str, datetime] | None:
-    """解析中文星期日期（上周六/下周一），返回标签+日期"""
-    # 必须含周/星期关键词，避免误判
-    if ("周" not in q_lower) and ("星期" not in q_lower) and not any(
-        p in q_lower for p in _WEEK_PREFIX_OFFSET.keys()
-    ):
-        return None
-
-    # 正则提取前缀+星期
-    m = re.search(
-        r"(?P<prefix>上上上周|上上周|上周|本周|这周|本星期|这星期|下周|下下周|下下下周|上星期|本星期|这星期|下星期|上上星期|下下星期)?(?:(?:周|星期)?)(?P<wd>[一二三四五六日天])",
-        q_lower,
-    )
-    if not m:
-        return None
-    prefix = m.group("prefix") or "本周"
-    wd = m.group("wd")
-    prefix_norm = prefix.replace("星期", "周")
-    if prefix_norm not in _WEEK_PREFIX_OFFSET:
-        prefix_norm = prefix_norm.replace("上上周", "上上周").replace("下下周", "下下周")
-    # 获取偏移量与星期索引
-    week_off = _WEEK_PREFIX_OFFSET.get(prefix_norm)
-    wd_idx = _WEEKDAY_CN_INDEX.get(wd)
-    if week_off is None or wd_idx is None:
-        return None
-
-    # 计算目标日期（周一为一周起点）
-    monday = now.date() - timedelta(days=now.weekday())
-    target_date = monday + timedelta(days=week_off * 7 + wd_idx)
-    # 生成标签
-    if "星期" in q_lower or "星期" in (prefix or ""):
-        label = prefix_norm.replace("周", "星期") + wd
-    else:
-        label = prefix_norm + wd
-    target_dt = datetime.combine(target_date, now.time())
-    return label, target_dt
-
-
-_DAY_LABEL_ZH: dict[int, str] = {
-    -3: "大前天",
-    -2: "前天",
-    -1: "昨天",
-    0: "今天",
-    1: "明天",
-    2: "后天",
-    3: "大后天",
-}
-_DAY_LABEL_EN: dict[int, str] = {
-    -3: "Three days ago",
-    -2: "The day before yesterday",
-    -1: "Yesterday",
-    0: "Today",
-    1: "Tomorrow",
-    2: "The day after tomorrow",
-    3: "Three days from now",
-}
+def _normalize_realtime_category(reason: str | None) -> str:
+    """将QueryClassifier的reason映射为内部统一枚举：weather/time/news/market/traffic/general"""
+    if not reason:
+        return "general"
+    r = reason.strip().lower()
+    # 别名映射表（集中维护）
+    aliases = {
+        # 英文 / 规范值
+        "weather": "weather",
+        "time": "time",
+        "news": "news",
+        "market": "market",
+        "traffic": "traffic",
+        "general": "general",
+        # 常见中文别名（可按需追加）
+        "天气": "weather",
+        "气象": "weather",
+        "时间": "time",
+        "日期": "time",
+        "时刻": "time",
+        "时钟": "time",
+        "新闻": "news",
+        "时事": "news",
+        "资讯": "news",
+        "股市": "market",
+        "股票": "market",
+        "行情": "market",
+        "汇率": "market",
+        "金价": "market",
+        "交通": "traffic",
+        "路况": "traffic",
+        "堵车": "traffic",
+        "拥堵": "traffic",
+    }
+    return aliases.get(r, r if r in {"weather", "time", "news", "market", "traffic", "general"} else "general")
 
 
 # =============================================================================
@@ -377,7 +309,21 @@ class ConversationNodes:
 
             # 使用 LLM 分类
             classifier = get_query_classifier()
-            result = await classifier.aclassify(query)
+            result_llm = await classifier.aclassify(query)
+
+            boost = heuristic_realtime_category(query)
+            if boost is not None and result_llm.label not in _REALTIME_HEURISTIC_SKIP_LABELS:
+                logger.info(
+                    f"Realtime heuristic upgrade: boost={boost}, llm_label={result_llm.label}, "
+                    f"query={query[:80]}"
+                )
+                result = ClassificationResult(
+                    label="realtime_query",
+                    confidence=result_llm.confidence,
+                    reason=boost,
+                )
+            else:
+                result = result_llm
 
             logger.info(
                 f"LLM classification: label={result.label}, confidence={result.confidence}, "
@@ -406,10 +352,7 @@ class ConversationNodes:
 
                 case "realtime_query":
                     state["is_realtime_query"] = True
-                    # 校验实时查询类别，若不在枚举中，则降级为 general
-                    raw_category = (result.reason or "").strip().lower()
-                    allowed = {"weather", "time", "news", "market", "traffic", "general"}
-                    state["realtime_category"] = raw_category if raw_category in allowed else "general"
+                    state["realtime_category"] = _normalize_realtime_category(result.reason)
                     state["realtime_detect_reason"] = f"llm:{result.confidence}"
                     state["intent"] = "general_query"
 
@@ -432,6 +375,17 @@ class ConversationNodes:
                     # 默认为一般查询，继续正常流程
                     state["is_realtime_query"] = False
                     state["intent"] = "general_query"
+
+            # 日期/时间类：本地计算
+            direct = calendar_direct_text_answer(
+                query,
+                bool(state.get("prefer_zh_output", True)),
+            )
+            if direct:
+                state["direct_text_answer"] = direct
+                state["is_realtime_query"] = True
+                state["realtime_category"] = "time"
+                state["realtime_detect_reason"] = "local_calendar_resolver"
         return state
 
     # -------------------------------------------------------------------------
@@ -666,18 +620,46 @@ class ConversationNodes:
                     state["web_search_error"] = None
                     return state
 
+                # 日历问题：优先本地推算，避免分类器把 reason 标成 general 仍去联网抄错误示例
+                if state.get("is_realtime_query"):
+                    direct_cal = calendar_direct_text_answer(
+                        state.get("user_query", ""),
+                        bool(state.get("prefer_zh_output", True)),
+                    )
+                    if direct_cal:
+                        state["web_search_results"] = []
+                        state["web_search_used"] = False
+                        state["web_search_error"] = None
+                        state["direct_text_answer"] = direct_cal
+                        state["realtime_category"] = "time"
+                        logger.info(
+                            "Web search skipped: local_calendar_resolver, "
+                            f"query={state.get('user_query', '')[:80]}"
+                        )
+                        return state
+
                 query = state["user_query"]
                 logger.info(
                     f"Web search started: query={query[:100]}, "
                     f"is_realtime={state.get('is_realtime_query')}"
                 )
 
-                # Perform search
+                now = datetime.now()
+                realtime_category = state.get("realtime_category", "") or "general"
+                policy = DEFAULT_POLICIES.get(realtime_category, DEFAULT_POLICIES["general"])
+                anchored_query = query
+
+                # 实时类查询追加时间锚点（今日/实时）
+                if state.get("is_realtime_query") and policy.prefer_today:
+                    anchored_query = build_time_anchored_query(query, now, policy)
+
+                # 执行联网搜索
                 web_search_tool = TavilySearchResults(
-                    max_results=5,  # 返回结果数量，默认 5
-                    search_depth="basic" # 搜索深度："basic" (免费) 或 "advanced" (付费)
+                    max_results=10,  # 返回结果数量，默认 5
+                    search_depth="advanced", # 搜索深度："basic" (免费) 或 "advanced" (付费)
+                    tavily_api_key=settings.tavily_api_key,
                 )
-                search_results = await web_search_tool.ainvoke({"query": query})
+                search_results = await web_search_tool.ainvoke({"query": anchored_query})
 
                 # Format results
                 formatted_results = []
@@ -708,7 +690,8 @@ class ConversationNodes:
 
                         # 只有没有 API 错误时才格式化结果
                         if not api_error_message:
-                            for i, result in enumerate(search_results[:settings.web_search_max_results], 1):
+                            sorted_results = filter_and_sort_by_recency(search_results, now, policy)
+                            for i, result in enumerate(sorted_results[:settings.web_search_max_results], 1):
                                 if not isinstance(result, dict):
                                     logger.warning(
                                         f"Invalid search result type: result_type={type(result).__name__}, "
@@ -720,7 +703,7 @@ class ConversationNodes:
                                     "rank": i,
                                     "title": result.get("title", ""),
                                     "url": result.get("url", ""),
-                                    "content": result.get("content", "")[:500],
+                                    "content": result.get("content", "")[:2000],
                                     "score": result.get("score", 0.0)
                                 })
 
@@ -736,7 +719,7 @@ class ConversationNodes:
                             "title": result.get("title", ""),
                             "url": result.get("url", ""),
                             "score": result.get("score", 0.0),
-                            "snippet": result.get("content", "")[:100]
+                            "snippet": result.get("content", "")[:300]
                         })
 
                     state["sources"].append({
@@ -804,6 +787,27 @@ class ConversationNodes:
                     state["streaming_llm"] = None
                     state["streaming_type"] = "text"
                 return state
+
+            # 纯日期/星期类：本地确定性推算，直接输出（不依赖分类 reason=time，也不依赖联网）
+            if state.get("is_realtime_query"):
+                direct = state.get("direct_text_answer")
+                if not direct:
+                    direct = calendar_direct_text_answer(
+                        state.get("user_query", ""),
+                        bool(state.get("prefer_zh_output", True)),
+                    )
+                if direct:
+                    state["direct_text_answer"] = direct
+                    state["realtime_category"] = "time"
+                    state["streaming_llm"] = None
+                    state["streaming_messages"] = None
+                    state["streaming_type"] = "direct_text"
+                    state["confidence"] = 0.99
+                    state["final_answer"] = ""
+                    logger.info(
+                        "Streaming configured: type=direct_text, realtime_category=time (local_calendar_resolver)"
+                    )
+                    return state
 
             # 计算置信度
             confidence = 0.5  # Base confidence

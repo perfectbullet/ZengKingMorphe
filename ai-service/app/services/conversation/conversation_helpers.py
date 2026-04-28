@@ -190,9 +190,17 @@ def build_context_text(state: ConversationState) -> str:
     web_results = state.get("web_search_results", [])
     if web_results and state.get("web_search_used", False):
         for i, web_result in enumerate(web_results[:3], 1):
+            content = str(web_result.get("content", "") or "")
+            # 网络文本截断：超过阈值取头+尾，否则取头部
+            if len(content) > 2400:
+                content_excerpt = (
+                    content[:1200] + "\n...\n" + content[-800:]
+                )
+            else:
+                content_excerpt = content[:1200]
             context_parts.append(
                 f"[网络资料{i}]\n标题: {web_result.get('title', '')}\n"
-                f"内容: {web_result.get('content', '')[:400]}\n"
+                f"内容: {content_excerpt}\n"
                 f"来源: {web_result.get('url', '')}"
             )
 
@@ -430,7 +438,8 @@ User question:
 3. 格式：直接说要点，不用列表、减号、复杂格式
 4. 保持{tone_desc}的语气风格
 5. **禁止：信息来源、网站链接、"信息来源"字样**
-6. 简单直接地提供新闻要点。
+6. 若问题属于“某职务/某角色目前是谁/哪位”的人物归属查询：必须输出**网络资料中明确出现的人名**；禁止凭记忆猜测或输出不在资料中的人名；如资料未出现该人名，必须说明“未从当前网络资料中确认到答案”并建议重试检索。
+7. 简单直接地提供新闻要点。
 上下文信息{source_indicator}：
 {context_text}
 
@@ -479,6 +488,42 @@ Requirements:
 3. Prefer directly stating numbers
 4. Keep a {tone_desc} tone
 5. Do NOT include sources, links, or the words "source" / "references"
+
+Context {source_indicator}:
+{context_text}
+
+User question:
+{state["user_query"]}
+"""
+        elif realtime_category == "traffic":
+            requirements = f"""**重要提示**：用户询问的是路况/拥堵信息，系统已通过网络搜索获取了相关资料。
+
+回答要求：
+1. **必须基于下方提供的网络资料回答**
+2. **优先判断资料是否包含“今天/当前/更新时间/日期”线索**：若包含，则你必须给出结论性判断（例如“整体偏堵/较通畅/高峰更明显”）并简要说明依据（如车流量增加、交警提示、高峰提前等）
+3. **禁止把与今天无关的历史文章当成“今天路况”**：只能把它作为“通常/容易拥堵时段或路段”的补充背景
+4. **关于“假期/节日/放假”之类的判断**：除非网络资料中明确给出了具体日期且能对应到今天，并明确说明“假期/放假/节日”，否则禁止把“假期第一天/节假日”等当作今天事实写进结论
+5. **禁止在回答中出现“假期/节假日/放假/长假/假期第一天”等字样**，除非满足第4条的“同一天日期+明确假期”条件
+6. 若资料完全缺少任何时间线索或与用户问题不相关，才可以说明无法确定；否则不要用“无法确认”来回避结论
+7. 保持{tone_desc}的语气风格
+8. **禁止：信息来源、网站链接、"信息来源"字样**
+
+上下文信息{source_indicator}：
+{context_text}
+
+用户问题：
+{state["user_query"]}
+"""
+            if not prefer_zh_output:
+                requirements = f"""IMPORTANT: The user asks about traffic/congestion. The system has retrieved relevant web results.
+
+Requirements:
+1. Answer strictly based on the web context below
+2. First check whether the context contains clear \"today/now/update time/date\" signals; if yes, you MUST provide a conclusion (e.g., \"likely congested\" / \"smooth\" / \"peak hours worse\") and briefly justify it (traffic volume increase, police advisory, peak starts earlier, etc.)
+3. Do NOT treat unrelated historical articles as today's traffic; they can only be used as general background
+4. You may say \"cannot determine\" ONLY if the context has no time signals or is irrelevant; otherwise do not evade giving a conclusion
+5. Keep a {tone_desc} tone
+6. Do NOT include sources, links, or the words \"source\" / \"references\"
 
 Context {source_indicator}:
 {context_text}
