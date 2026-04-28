@@ -870,18 +870,6 @@ async def generate_openai_stream_v1(
 
 
             elif streaming_type == "phi4_math":
-                # 增加话术 因为接下来要推理
-                talking_point_math_think = "我需要思考一下这个数学问题，请稍等。"
-                chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
-                    talking_point_math_think, revise_llm, chat_id, created, request.model,
-                    db, chunk_sequence, session_id, request.user_id,
-                    request.employee_id, current_state.get("conversation_id"),
-                    enable_math_sentence_conversion=True,
-                    log_prefix="RAGAnything"
-                )
-                yield json.dumps(chunk_data)
-                
-                
                 # Phi-4 数学推理流式输出
                 streaming_llm = current_state.get("streaming_llm")
                 messages = current_state.get("streaming_messages")
