@@ -32,6 +32,7 @@ from app.services.conversation.conversation_state import (
     DEFAULT_SENSITIVE_WORDS,
     DEFAULT_SENSITIVE_WORDS_LOWER,
 )
+from app.services.query_classifier import get_query_classifier
 from app.services.conversation.conversation_helpers import (
     time_node,
     heuristic_complexity,
@@ -351,12 +352,18 @@ class ConversationNodes:
     # -------------------------------------------------------------------------
     async def classify_query_type(self, state: ConversationState) -> ConversationState:
         """
-        Query Classification - 快速识别查询类型并路由。
+        Query Classification - 使用 LLM 进行细粒度查询分类并路由。
 
-        检测顺序 (从快到慢):
-        1. 问候语检测 (关键词匹配)
-        2. 实时查询检测 (关键词匹配)
-        3. 其他 (继续正常流程)
+        使用 QueryClassifier 进行分类，支持 9 种类别：
+        - math_problem, concept_explain, greeting, english_query
+        - realtime_query, general_knowledge, chit_chat, noise, other
+
+        分类结果映射到 workflow state：
+        - greeting → intent="greeting", complexity_score=0.0
+        - realtime_query → is_realtime_query=True
+        - math_problem → is_math_problem=True
+        - noise → 返回友好提示后结束
+        - 其他 → 继续正常流程
 
         Args:
             state: Current conversation state
@@ -365,34 +372,25 @@ class ConversationNodes:
             Updated state with query_type classification
         """
         async with time_node("classify_query_type", state):
-            query = state["user_query"].strip().lower()
+            query = state["user_query"].strip()
 
-            # 预判是否含业务/实时信号（避免“请问xx天气”被误判为 greeting）
-            realtime_signal = False
-            if settings.realtime_query_enabled:
-                # 实时关键词（与 realtime_keywords_ordered 保持一致）
-                _realtime_keywords_for_guard = [
-                    # weather
-                    "天气", "气温", "降雨", "降水", "温度",
-                    # 新闻/政务
-                    "新闻", "热点", "最新", "资讯", "动态", "头条",
-                    "目前", "现任", "现在", "当前", "总理", "国务院总理", "国家总理", "国家领导人",
-                    # 行情
-                    "股价", "汇率", "行情", "股市", "价格", "金价", "银价", "油价", "多少钱",
-                    # 时间
-                    "今天", "明天", "昨天", "前天", "大前天", "后天", "大后天", "几月几号", "几号", "几点", "日期",
-                    # 英文
-                    "current", "premier", "prime minister", "state council", "president",
-                    "today", "date", "time", "weather", "news", "market",
-                ]
-                realtime_signal = any(k in query for k in _realtime_keywords_for_guard)
+            # 使用 LLM 分类
+            classifier = get_query_classifier()
+            result = await classifier.aclassify(query)
 
-            # 1. 检测问候语
-            for category, keywords in GREETING_KEYWORDS.items():
-                if any(kw in query for kw in keywords):
-                    # 若同时包含明显的业务/实时信号，则不要走 greeting，继续后续 realtime 检测
-                    if realtime_signal:
-                        break
+            logger.info(
+                f"LLM classification: label={result.label}, confidence={result.confidence}, "
+                f"reason={result.reason}, query={query[:50]}"
+            )
+
+            # 将分类结果保存到 state（用于调试和追溯）
+            state["classification_label"] = result.label
+            state["classification_confidence"] = result.confidence
+            state["classification_reason"] = result.reason
+
+            # 根据分类结果设置 state
+            match result.label:
+                case "greeting":
                     state["intent"] = "greeting"
                     state["complexity_score"] = 0.0
                     state["complexity_reason"] = "greeting"
@@ -404,68 +402,32 @@ class ConversationNodes:
                         "text": query,
                         "citations": []
                     })
-                    logger.info(f"Query classified: greeting: category={category}")
-                    return state
 
-            # 2. 检测实时查询
-            if settings.realtime_query_enabled:
-                # 天气追问兜底：识别“明天呢？”等短问，避免误判为时间
-                follow_up_weather_queries = {
-                    "明天呢", "明天呢?", "明天呢？",
-                    "那明天呢", "那明天呢?", "那明天呢？",
-                    "明天怎么样", "明天怎么样?", "明天怎么样？",
-                }
-                if query in follow_up_weather_queries:
-                    prev_user_msg = ""
-                    for msg in reversed(state.get("context", {}).get("messages", [])):
-                        if msg.get("role") == "user":
-                            prev_user_msg = (msg.get("content") or "").lower()
-                            break
-                    if prev_user_msg and any(kw in prev_user_msg for kw in ["天气", "气温", "降雨", "降水", "温度"]):
-                        state["is_realtime_query"] = True
-                        state["realtime_category"] = "weather"
-                        state["realtime_detect_reason"] = "follow_up:weather"
-                        state["intent"] = "general_query"
-                        logger.info("Query classified: realtime follow-up: category=weather")
-                        return state
+                case "realtime_query":
+                    state["is_realtime_query"] = True
+                    state["realtime_category"] = result.reason or "general"
+                    state["realtime_detect_reason"] = f"llm:{result.confidence}"
+                    state["intent"] = "general_query"
 
-                # 按优先级匹配：天气/新闻/行情 > 时间，避免“今天天气”误判时间
-                realtime_keywords_ordered = [
-                    ("weather", ["天气", "气温", "降雨", "降水", "温度"]),
-                    # news 也包含英文“当前领导/职位”类问法，确保走联网拿最新信息
-                    ("news", [
-                        "新闻", "热点", "最新", "资讯", "动态", "头条",
-                        "目前", "现任", "现在", "当前", "最新",
-                        "总理", "国务院总理", "国家总理", "国家领导人", "领导是谁", "是哪位领导", "是谁",
-                        "current", "who is the current", "who is current",
-                        "premier", "prime minister", "state council", "president",
-                        "who is the", "incumbent",
-                    ]),
-                    ("market", ["股价", "汇率", "行情", "股市", "价格", "金价", "银价", "油价", "多少钱"]),
-                    # 中英实时触发词，避免LLM返回过期/幻觉内容
-                    ("time", [
-                        "今天", "明天", "昨天", "前天", "大前天", "后天", "大后天",
-                        "最近", "现在", "本周", "本月", "当前", "几月几号", "几号", "几点", "日期",
-                        "today", "date", "what's the date", "what is the date", "what day is it", "current date", "today's date",
-                        "time", "what time", "current time", "now"
-                    ]),
-                ]
-                for category, keywords in realtime_keywords_ordered:
-                    matched_kw = next((kw for kw in keywords if kw in query), None)
-                    if matched_kw:
-                        state["is_realtime_query"] = True
-                        state["realtime_category"] = category
-                        state["realtime_detect_reason"] = f"keyword:{matched_kw}"
-                        state["intent"] = "general_query"
-                        logger.info(
-                            f"Query classified: realtime: category={category}, matched={matched_kw}"
-                        )
-                        return state
-            
-            # 4. 默认为一般查询
-            state["is_realtime_query"] = False
-            state["intent"] = "general_query"
-            logger.debug("Query classified as general")
+                case "math_problem":
+                    state["is_math_problem"] = True
+                    state["intent"] = "general_query"
+
+                case "noise":
+                    # 噪声输入，返回友好提示
+                    state["intent"] = "noise"
+                    state["sources"].append({
+                        "type": "text",
+                        "from": "noise_response",
+                        "text": "抱歉，我没有听清您的问题，请再重复一次。",
+                        "citations": []
+                    })
+
+                case _:
+                    # concept_explain, english_query, general_knowledge, chit_chat, other
+                    # 默认为一般查询，继续正常流程
+                    state["is_realtime_query"] = False
+                    state["intent"] = "general_query"
         return state
 
     # -------------------------------------------------------------------------
@@ -572,14 +534,19 @@ class ConversationNodes:
             state: Current conversation state
 
         Returns:
-            目标节点名称 (greeting/realtime/normal)
+            目标节点名称 (greeting/realtime/math/normal)
         """
         intent = state.get("intent")
-        # 问候语直接跳到生成答案
-        if intent == "greeting":
+        # 问候语和噪声输入直接跳到生成答案
+        if intent in ("greeting", "noise"):
             return "greeting"
+        # 实时查询 → web search
         if state.get("is_realtime_query"):
             return "realtime"
+        # 数学问题 → 直接生成答案（使用 Phi-4）
+        if state.get("is_math_problem"):
+            return "math"
+        # 其他 → 复杂度评估
         return "normal"
 
     # -------------------------------------------------------------------------
@@ -816,72 +783,23 @@ class ConversationNodes:
             intent = state.get("intent")
             web_search_used = state.get("web_search_used", False)
 
-            if state.get("is_realtime_query") and state.get("realtime_category") == "time":
-                # 尝试获取已生成的时间文本，若无则重新生成
-                direct_text = state.get("direct_text_answer")
-                if not direct_text:
-                    now = datetime.now()
-                    user_query = state.get("user_query", "")
-                    q_lower = (user_query or "").strip().lower()
-
-                    # 一句多问：按标点切分为多个子问题，按顺序逐条回答
-                    sub_questions = _split_user_questions(user_query)
-                    if not sub_questions:
-                        sub_questions = [user_query]
-
-                    prefer_zh_output = re.search(r"[\u4e00-\u9fff]", user_query) is not None
-                    answers: list[str] = []
-                    for sq in sub_questions:
-                        sq_lower = sq.strip().lower()
-                        # 优先解析星期日期，再解析相对日期
-                        label = None
-                        week_parsed = _parse_weekday_date_cn(sq_lower, now)
-                        if week_parsed:
-                            label, target_dt = week_parsed
-                            day_offset = (target_dt.date() - now.date()).days
-                        else:
-                            # 解析昨天/前天等偏移量
-                            resolved_offset = _relative_calendar_day_offset(sq_lower)
-                            day_offset = resolved_offset if resolved_offset is not None else 0
-                            target_dt = now + timedelta(days=day_offset)
-
-                        # 判断是否询问具体时间
-                        asks_clock_only = any(
-                            k in sq_lower
-                            for k in ("几点", "什么时间", "现在几点", "当前时间", "时辰")
-                        ) or any(k in sq_lower for k in ("what time", "current time"))
-                        asks_date_focus = ("日期" in sq_lower) or ("几号" in sq_lower)
-
-                         # 生成中英文回答
-                        if prefer_zh_output:
-                            weekday_cn = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"][target_dt.weekday()]
-                            day_word = label or _DAY_LABEL_ZH.get(day_offset, "今天")
-                            line = f"{day_word}是{target_dt.year}年{target_dt.month}月{target_dt.day}日（{weekday_cn}）。"
-                            # 只有明确问“几点/什么时间”才附带当前时刻
-                            if asks_clock_only:
-                                line = line[:-1] + f"，当前时间{now.strftime('%H:%M:%S')}。"
-                            answers.append(line)
-                        else:
-                            weekday_en = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"][target_dt.weekday()]
-                            day_word = _DAY_LABEL_EN.get(day_offset, "Today")
-                            en_verb = "is" if day_offset == 0 else ("was" if day_offset < 0 else "will be")
-                            line = f"{day_word} {en_verb} {target_dt.strftime('%B')} {target_dt.day}, {target_dt.year} ({weekday_en})."
-                            if asks_clock_only:
-                                line += f" The current time is {now.strftime('%H:%M:%S')}."
-                            answers.append(line)
-
-                    direct_text = "\n".join(answers) if answers else ""
-                    state["direct_text_answer"] = direct_text
-
-                # 直接文本输出，不调用模型
-                state["streaming_llm"] = None
-                state["streaming_messages"] = None
-                state["streaming_type"] = "direct_text" # 设置流式类型为【直接文本输出】
-                state["confidence"] = 0.99
-                state["final_answer"] = ""  # 占位符，流式输出无需预生成
-                logger.info("Streaming configured: type=direct_text, realtime_category=time")
+            # 噪声输入：使用预设的友好响应，不需要调用 LLM
+            if intent == "noise":
+                # 从 sources 中获取预设的响应
+                noise_source = next((s for s in state.get("sources", []) if s.get("from") == "noise_response"), None)
+                if noise_source:
+                    state["final_answer"] = noise_source.get("text", "抱歉，我没有听清您的问题，请再重复一次。")
+                    state["confidence"] = 0.99
+                    state["streaming_llm"] = None
+                    state["streaming_type"] = "text"  # 标记为纯文本输出
+                    logger.info("Noise input detected, using preset response")
+                else:
+                    # 回退到 greeting 逻辑
+                    state["final_answer"] = "抱歉，我没有听清您的问题，请再重复一次。"
+                    state["confidence"] = 0.99
+                    state["streaming_llm"] = None
+                    state["streaming_type"] = "text"
                 return state
-
 
             # 计算置信度
             confidence = 0.5  # Base confidence

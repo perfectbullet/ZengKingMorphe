@@ -3,21 +3,22 @@ LangGraph-based Conversation Workflow for Digital Employee.
 
 This module implements a state-based conversation workflow using LangGraph, supporting:
 - Multi-source knowledge retrieval (RAG + FAQ + Web Search)
-- Query optimization (rewriting, compression)
+- LLM-based query classification (QueryClassifier)
 - Dual-LLM architecture (local Ollama + remote OpenAI-style API)
 - Streaming responses with performance monitoring
 
-Workflow Graph (10 nodes):
+Workflow Graph (8 nodes):
     load_employee_config → load_session_context → input_validation
         → classify_query_type
-        → [conditional: greeting?] → generate_answer
+        → [conditional: greeting/noise?] → generate_answer
         → [conditional: realtime?] → web_search → generate_answer
+        → [conditional: math?] → generate_answer
         → [conditional: normal?] → evaluate_complexity → generate_answer
         → generate_answer → save_conversation → END
 
 Note: Simplified workflow using RAGAnything for RAG retrieval.
 Removed nodes: intent_recognition, knowledge_retrieval, grade_documents,
-               compress_context, match_faq, rewrite_query
+               compress_context, match_faq, rewrite_query, check_math_problem
 """
 import os
 from pathlib import Path
@@ -46,10 +47,10 @@ class ConversationWorkflow:
     - Dual-LLM support: Local Ollama for fast responses, remote API for complex tasks
     - Hybrid routing: Automatically select LLM based on query complexity
     - RAGAnything integration: Knowledge graph + vector retrieval with streaming
-    - Realtime query detection: Auto-route to web search for time-sensitive queries
-    - Simplified workflow: 10 nodes (down from 17)
+    - LLM-based query classification: QueryClassifier with 9 categories
+    - Simplified workflow: 8 nodes
 
-    Workflow consists of 10 nodes connected by conditional edges.
+    Workflow consists of 8 nodes connected by conditional edges.
 
     LLM Routing Strategy (hybrid mode):
     - Use local Ollama for: greetings, simple queries (<30 chars), early turns
@@ -273,7 +274,7 @@ class ConversationWorkflow:
 
         Graph structure:
         - Entry: load_employee_config
-        - Middle: 8 processing nodes with conditional routing
+        - Middle: classify_query_type with conditional routing
         - Exit: save_conversation → END
 
         Simplified workflow using RAGAnything for RAG retrieval.
@@ -288,7 +289,6 @@ class ConversationWorkflow:
         graph.add_node("load_session_context", self.nodes.load_session_context)
         graph.add_node("input_validation", self.nodes.validate_input)
         graph.add_node("classify_query_type", self.nodes.classify_query_type)
-        graph.add_node("check_math_problem", self.nodes.check_math_problem)
         graph.add_node("evaluate_complexity", self.nodes.evaluate_complexity)
         graph.add_node("web_search", self.nodes.web_search)
         graph.add_node("generate_answer", self.nodes.generate_answer)
@@ -307,18 +307,9 @@ class ConversationWorkflow:
             "classify_query_type",
             self.nodes.route_after_classification,
             {
-                "greeting": "generate_answer",      # Greeting → direct to answer
+                "greeting": "generate_answer",      # Greeting/Noise → direct to answer
                 "realtime": "web_search",           # Realtime query → web search
-                "normal": "check_math_problem"     # Normal query → math detection
-            }
-        )
-
-        # Math detection routing
-        graph.add_conditional_edges(
-            "check_math_problem",
-            self.nodes.route_after_math_check,
-            {
-                "math": "generate_answer",          # Math problem → skip complexity eval
+                "math": "generate_answer",          # Math problem → direct to answer (Phi-4)
                 "normal": "evaluate_complexity"     # Normal query → complexity eval
             }
         )
