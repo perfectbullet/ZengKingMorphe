@@ -999,5 +999,11 @@ async def generate_openai_stream_v1(
     with open(filepath, 'w', encoding='utf-8') as f:
         json.dump(finish_chunk_data, f, ensure_ascii=False, indent=2, default=str)
     logger.info(f"[调试] 保存 conversation_state 到 {filepath}")
-    
+
+    # 流式结束保存会话，保证上下文记忆
+    try:
+        await conversation_workflow.save_conversation(final_state)
+    except Exception as e:
+        logger.error(f"Failed to persist streaming conversation at end: {e}", exc_info=True)
+
     yield "[DONE]"
