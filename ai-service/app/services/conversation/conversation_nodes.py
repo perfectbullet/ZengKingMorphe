@@ -18,7 +18,10 @@ import hashlib
 import time
 from datetime import datetime
 from datetime import timedelta
+import re
 
+import httpx
+from bs4 import BeautifulSoup
 from langchain_community.tools.tavily_search import TavilySearchResults
 
 from app.core.config import settings
@@ -56,6 +59,167 @@ logger = get_logger(__name__)
 
 # 启发式联网补位：不覆盖问候、噪声、数学题；也不重复覆盖已是实时的分支
 _REALTIME_HEURISTIC_SKIP_LABELS = frozenset({"greeting", "noise", "math_problem", "realtime_query"})
+
+
+def _extract_weather_location(query: str) -> str | None:
+    """尽量从自然语言天气问句中提取地点，失败时返回 None。"""
+    q = (query or "").strip()
+    if not q:
+        return None
+    # 先尝试“X天气”结构
+    m = re.search(r"([\u4e00-\u9fffA-Za-z]{2,20})天气", q)
+    if m:
+        loc = m.group(1).strip()
+        loc = re.sub(r"^(请问|麻烦问下|问下|请帮我查一下|帮我查一下)", "", loc).strip()
+        loc = re.sub(r"(今天|今日|明天|后天|本周|这周|当前|现在)$", "", loc).strip()
+        if loc:
+            return loc
+    # 回退：保留中文/字母，截取前部作为 geocoding 查询
+    simple = re.sub(r"[^\u4e00-\u9fffA-Za-z]", "", q)
+    if 2 <= len(simple) <= 20:
+        return simple
+    return None
+
+
+def _extract_traffic_location(query: str) -> str | None:
+    """从路况问题提取城市，如“成都堵不堵”→“成都”"""
+    q = (query or "").strip()
+    if not q:
+        return None
+    m = re.search(r"([\u4e00-\u9fffA-Za-z]{2,20})(?:堵不堵|拥堵|路况|交通)", q)
+    if m:
+        loc = m.group(1).strip()
+        loc = re.sub(r"^(请问|我想了解一下|想了解一下|帮我查一下|查一下|今天|今日|现在)", "", loc).strip()
+        loc = re.sub(r"(今天|今日|现在)$", "", loc).strip()
+        if loc:
+            return loc
+    simple = re.sub(r"[^\u4e00-\u9fffA-Za-z]", "", q)
+    simple = re.sub(r"(堵不堵|拥堵|路况|交通|今天|今日|现在)", "", simple)
+    return simple if 2 <= len(simple) <= 20 else None
+
+
+async def _open_meteo_weather_fallback(query: str) -> dict | None:
+    """免费天气接口兜底查询，返回结构化天气结果"""
+    loc = _extract_weather_location(query)
+    if not loc:
+        return None
+    timeout = httpx.Timeout(8.0, connect=4.0)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        # 地理编码获取经纬度
+        geo_resp = await client.get(
+            "https://geocoding-api.open-meteo.com/v1/search",
+            params={"name": loc, "count": 1, "language": "zh", "format": "json"},
+        )
+        if geo_resp.status_code != 200:
+            return None
+        geo_data = geo_resp.json() or {}
+        results = geo_data.get("results") or []
+        if not results:
+            return None
+        top = results[0]
+        lat = top.get("latitude")
+        lon = top.get("longitude")
+        if lat is None or lon is None:
+            return None
+        city_name = top.get("name") or loc
+        country = top.get("country") or ""
+
+        # 查询天气
+        weather_resp = await client.get(
+            "https://api.open-meteo.com/v1/forecast",
+            params={
+                "latitude": lat,
+                "longitude": lon,
+                "current": "temperature_2m,apparent_temperature,weather_code,wind_speed_10m",
+                "timezone": "Asia/Shanghai",
+            },
+        )
+        if weather_resp.status_code != 200:
+            return None
+        weather_data = weather_resp.json() or {}
+        current = weather_data.get("current") or {}
+        temp = current.get("temperature_2m")
+        feels = current.get("apparent_temperature")
+        wind = current.get("wind_speed_10m")
+        code = current.get("weather_code")
+        obs_time = current.get("time")
+        if temp is None and feels is None and wind is None and code is None:
+            return None
+
+        content = (
+            f"{city_name}{('·' + country) if country else ''} 当前天气："
+            f"气温 {temp}°C，体感 {feels}°C，风速 {wind}km/h，天气代码 {code}，观测时间 {obs_time}。"
+        )
+        return {
+            "rank": 1,
+            "title": f"{city_name} 实时天气（Open-Meteo）",
+            "url": f"https://open-meteo.com/en/docs?latitude={lat}&longitude={lon}",
+            "content": content,
+            "score": 0.75,
+        }
+
+
+async def _duckduckgo_traffic_fallback(query: str) -> list[dict]:
+    """交通检索兜底：使用 DuckDuckGo 公共搜索抓取摘要。"""
+    try:
+        loc = _extract_traffic_location(query) or "当地"
+        search_q = f"{loc} 今天 路况 拥堵"
+        timeout = httpx.Timeout(10.0, connect=4.0)
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        }
+        async with httpx.AsyncClient(timeout=timeout, headers=headers, follow_redirects=True) as client:
+            resp = await client.get("https://duckduckgo.com/html/", params={"q": search_q})
+            if resp.status_code != 200:
+                return []
+            soup = BeautifulSoup(resp.text, "html.parser")
+            items: list[dict] = []
+            for i, node in enumerate(soup.select(".result"), 1):
+                a = node.select_one("a.result__a")
+                snip = node.select_one(".result__snippet")
+                if not a:
+                    continue
+                title = (a.get_text(" ", strip=True) or "").strip()
+                href = (a.get("href") or "").strip()
+                content = (snip.get_text(" ", strip=True) if snip else "").strip()
+                if not (title and href):
+                    continue
+                items.append(
+                    {
+                        "rank": i,
+                        "title": title[:200],
+                        "url": href,
+                        "content": content[:2000],
+                        "score": max(0.5, 0.9 - i * 0.1),
+                    }
+                )
+                if len(items) >= 5:
+                    break
+            return items
+    except Exception as e:
+        logger.warning(f"DuckDuckGo traffic fallback failed: {e}")
+        return []
+
+
+def _traffic_congestion_estimate(now: datetime) -> tuple[str, str]:
+    """无实时数据时，按时段估算拥堵等级"""
+    h = now.hour
+    weekday = now.weekday()  # Mon=0
+    is_workday = weekday < 5
+    # 早晚高峰
+    if is_workday and (7 <= h <= 9 or 17 <= h <= 19):
+        return "较拥堵", "工作日通勤高峰"
+     # 工作日白天
+    if is_workday and (10 <= h <= 16):
+        return "中等拥堵", "工作日白天车流较大"
+    # 工作日其他时间
+    if is_workday:
+        return "基本通畅", "非通勤高峰时段"
+    # 周末白天
+    if 10 <= h <= 20:
+        return "中等拥堵", "周末商圈/景点出行时段"
+    return "基本通畅", "周末非高峰时段"
 
 
 def _normalize_realtime_category(reason: str | None) -> str:
@@ -744,6 +908,7 @@ class ConversationNodes:
                 realtime_category = state.get("realtime_category", "") or "general"
                 policy = DEFAULT_POLICIES.get(realtime_category, DEFAULT_POLICIES["general"])
                 anchored_query = query
+                used_duck_fallback = False
 
                 # 实时类查询统一追加时间锚点（通用）：避免“今年/当前/最近”等相对时间漂移。
                 if state.get("is_realtime_query"):
@@ -752,7 +917,7 @@ class ConversationNodes:
                 # 执行联网搜索
                 web_search_tool = TavilySearchResults(
                     max_results=10,  # 返回结果数量，默认 5
-                    search_depth="advanced", # 搜索深度："basic" (免费) 或 "advanced" (付费)
+                    search_depth="basic", # 搜索深度："basic" (免费) 或 "advanced" (付费)
                     tavily_api_key=settings.tavily_api_key,
                 )
                 search_results = await web_search_tool.ainvoke({"query": anchored_query})
@@ -764,6 +929,25 @@ class ConversationNodes:
                 ):
                     logger.info("Web search retry with raw query after anchored miss")
                     search_results = await web_search_tool.ainvoke({"query": query})
+                # 交通类查询：首轮无结果时，使用更精准的关键词（地点+路况+拥堵）重试搜索
+                if (
+                    state.get("is_realtime_query")
+                    and state.get("realtime_category") == "traffic"
+                    and (not search_results)
+                ):
+                    loc = _extract_traffic_location(query) or "当地"
+                    focused_query = f"{loc} 实时路况 拥堵 情况"
+                    logger.info(f"Web search retry with traffic-focused query: {focused_query}")
+                    search_results = await web_search_tool.ainvoke({"query": focused_query})
+                # 重试仍无结果：启用 DuckDuckGo 兜底搜索
+                if (
+                    state.get("is_realtime_query")
+                    and state.get("realtime_category") == "traffic"
+                    and (not search_results)
+                ):
+                    logger.info("Web search fallback retry with DuckDuckGo for traffic")
+                    search_results = await _duckduckgo_traffic_fallback(query)
+                    used_duck_fallback = bool(search_results)
 
                 # Format results
                 formatted_results = []
@@ -794,8 +978,12 @@ class ConversationNodes:
 
                         # 只有没有 API 错误时才格式化结果
                         if not api_error_message:
-                            sorted_results = filter_and_sort_by_recency(search_results, now, policy)
-                            for i, result in enumerate(sorted_results[:settings.web_search_max_results], 1):
+                            selected_results = (
+                                search_results[:settings.web_search_max_results]
+                                if used_duck_fallback
+                                else filter_and_sort_by_recency(search_results, now, policy)[:settings.web_search_max_results]
+                            )
+                            for i, result in enumerate(selected_results, 1):
                                 if not isinstance(result, dict):
                                     logger.warning(
                                         f"Invalid search result type: result_type={type(result).__name__}, "
@@ -814,6 +1002,22 @@ class ConversationNodes:
                 state["web_search_results"] = formatted_results
                 state["web_search_used"] = len(formatted_results) > 0
                 state["web_search_error"] = api_error_message
+
+                # 天气兜底：无搜索结果且无API错误时，调用免费天气接口
+                if (
+                    not state["web_search_used"]
+                    and not api_error_message
+                    and state.get("realtime_category") == "weather"
+                ):
+                    fallback = await _open_meteo_weather_fallback(query)
+                    if fallback:
+                        formatted_results = [fallback]
+                        state["web_search_results"] = formatted_results
+                        state["web_search_used"] = True
+                        state["web_search_error"] = None
+                        logger.info(
+                            f"Web search fallback used: open_meteo, query={query[:80]}"
+                        )
 
                 # 添加 web_search source
                 if formatted_results:
@@ -915,25 +1119,37 @@ class ConversationNodes:
                     )
                     return state
 
-            # 实时查询无联网结果：禁止模型臆测，返回统一提示语
+            # 实时查询在“联网不可用/失败”时：返回统一提示语，避免模型臆测。
+            # 若仅是无足够结果（但无错误），继续走 LLM 流程，让模型基于已有上下文尽力作答。
             if state.get("is_realtime_query") and not state.get("web_search_used", False):
-                # 根据检索错误类型返回对应提示
                 err = state.get("web_search_error")
+                # 网络检索失败：返回固定提示
                 if err:
                     direct = "当前网络检索不可用，暂时无法确认实时信息，请稍后重试。"
-                else:
-                    direct = "未检索到足够的实时信息，暂时无法确认答案，请稍后重试或补充更具体条件。"
-                # 设置直接返回文本，跳过流式LLM生成
-                state["direct_text_answer"] = direct
-                state["streaming_llm"] = None
-                state["streaming_messages"] = None
-                state["streaming_type"] = "direct_text"
-                state["confidence"] = 0.7
-                state["final_answer"] = ""
-                logger.info(
-                    "Streaming configured: type=direct_text, realtime_without_web_results"
-                )
-                return state
+                    state["direct_text_answer"] = direct
+                    state["streaming_llm"] = None
+                    state["streaming_messages"] = None
+                    state["streaming_type"] = "direct_text"
+                    state["confidence"] = 0.7
+                    state["final_answer"] = ""
+                    logger.info(
+                        "Streaming configured: type=direct_text, realtime_web_error"
+                    )
+                    return state
+                # 交通类：按时段给出拥堵预估
+                if state.get("realtime_category") == "traffic":
+                    lvl, reason = _traffic_congestion_estimate(datetime.now())
+                    direct = f"当前路况判断：{lvl}。依据：{reason}。"
+                    state["direct_text_answer"] = direct
+                    state["streaming_llm"] = None
+                    state["streaming_messages"] = None
+                    state["streaming_type"] = "direct_text"
+                    state["confidence"] = 0.68
+                    state["final_answer"] = ""
+                    logger.info(
+                        "Streaming configured: type=direct_text, realtime_traffic_estimate"
+                    )
+                    return state
 
             # 计算置信度
             confidence = 0.5  # Base confidence
