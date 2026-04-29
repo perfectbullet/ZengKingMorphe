@@ -16,7 +16,10 @@
 """
 
 import json
+import os
+import re
 import time
+from datetime import datetime
 from typing import Literal
 
 from langchain_openai import ChatOpenAI
@@ -26,6 +29,101 @@ from app.core.config import settings
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
+
+# 上下文消歧提示词：把指代/省略型追问补全为独立完整问句
+_CONTEXT_RESOLVER_PROMPT = """你是「对话上下文消歧」模块。
+
+给定多轮对话摘要与用户最新一句话，请输出**一句**完整、可独立理解的问句或陈述（与用户使用同一语言）。
+规则：
+- 若最新一句已自洽、无需上文，则原样输出。
+- 若有省略、指代、承接上文，请根据对话补全缺失的主语/主题/时间范围，保持原意与语气。
+- 不要回答问题，不要解释，不要加引号或前缀，只输出这一行文本。
+- 若最新输入本质是提问（含“？”或语义上是追问），输出必须保持为提问句，不得直接给结论。
+- 可参考系统日期（用于「今年」「现在」等相对时间）：{system_date}
+"""
+
+
+_DATE_ANSWER_PATTERN = re.compile(r"(?:19|20)\d{2}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*[日号]")
+
+
+def sanitize_resolved_query(latest_query: str, resolved_line: str) -> str:
+    """
+    防止消歧模型把“改写”误做成“直接作答”。
+    若输出是日期结论句，则回退为同主题问句，避免打断后续路由。
+    """
+    out = (resolved_line or "").strip()
+    if not out:
+        return (latest_query or "").strip()
+    latest = (latest_query or "").strip()
+    asks_like_question = ("?" in latest) or ("？" in latest) or latest.endswith("呢")
+    if not asks_like_question:
+        return out
+    if _DATE_ANSWER_PATTERN.search(out) and ("?" not in out and "？" not in out):
+        # 消歧阶段只应“改写问题”，不应直接“作答”。
+        # 一旦模型输出了日期结论句，统一回退原问句，交由后续路由决定（避免误触发日期直出）。
+        return latest
+    return out
+
+
+def format_dialog_for_resolver(messages: list) -> str:
+    """格式化最近6轮对话，供消歧模型使用"""
+    if not messages:
+        return ""
+    lines: list[str] = []
+    # 取最近6轮，避免旧主题干扰
+    for m in messages[-6:]:
+        role = m.get("role")
+        content = (m.get("content") or "").strip()
+        if not content:
+            continue
+        if role == "user":
+            lines.append(f"用户：{content[:800]}")
+        elif role == "assistant":
+            lines.append(f"助手：{content[:600]}")
+    return "\n".join(lines)
+
+
+def normalize_utterance_text(s: str) -> str:
+    """用于比对是否同一句用户话（忽略首尾与中间空白差异）。"""
+    return " ".join((s or "").strip().split())
+
+
+def augment_dialog_with_persisted_turns(
+    session_dialog: str,
+    conversation_records_chronological: list[dict],
+    current_query: str,
+) -> str:
+    """
+    补充持久化对话记录：解决内存上下文不完整问题
+    从DB补全历史问答，保证消歧模型能看到完整对话
+    """
+    cur = normalize_utterance_text(current_query)
+    seen: set[str] = set()
+    for line in (session_dialog or "").split("\n"):
+        line = line.strip()
+        if line.startswith("用户："):
+            seen.add(normalize_utterance_text(line[len("用户："):]))
+    extra_blocks: list[str] = []
+    for rec in conversation_records_chronological:
+        uq = str(rec.get("user_query") or "").strip()
+        nu = normalize_utterance_text(uq)
+        if not nu or nu == cur or nu in seen:
+            continue
+        seen.add(nu)
+        ar = (str(rec.get("ai_response") or "") or "").strip()
+        if ar:
+            extra_blocks.append(f"用户：{uq[:800]}\n助手：{ar[:600]}")
+        else:
+            extra_blocks.append(f"用户：{uq[:800]}")
+    if not extra_blocks:
+        return session_dialog or ""
+    supplement = "\n\n".join(extra_blocks)
+    header = "[来自数据库会话记录的轮次补充·时间顺序与查询一致]\n"
+    base = (session_dialog or "").rstrip()
+    if base:
+        return f"{base}\n\n{header}{supplement}"
+    return f"{header}{supplement}".strip()
+
 
 # =============================================================================
 # 分类结果模型
@@ -238,6 +336,52 @@ class QueryClassifier:
         """
         self.llm = llm
 
+    async def aresolve_standalone_query(self, latest_query: str, dialog_text: str) -> str:
+        """
+        上下文消歧：将用户追问补全为独立可理解的问句
+        调用失败/无对话时直接返回原输入
+        """
+        # 开关关闭 或 无对话上下文 → 直接返回原文
+        if os.getenv("CONTEXT_RESOLVER_DISABLED", "").strip() in ("1", "true", "yes"):
+            return latest_query
+        if not (dialog_text or "").strip():
+            return latest_query
+        # 截断输入，构造提示词
+        truncated_latest = (latest_query or "")[:500]
+        system_date = datetime.now().strftime("%Y-%m-%d %H:%M")
+        sys_content = _CONTEXT_RESOLVER_PROMPT.format(system_date=system_date)
+        user_content = (
+            f"对话：\n{dialog_text}\n\n"
+            f"用户最新输入：\n{truncated_latest}\n\n"
+            "输出（仅一行）："
+        )
+        try:
+            llm = self.llm
+            # 消歧需要固定输出，调低温度
+            if hasattr(self.llm, "with_config"):
+                llm = self.llm.with_config(temperature=0, max_tokens=256)
+            # 调用模型消歧
+            response = await llm.ainvoke(
+                [
+                    {"role": "system", "content": sys_content},
+                    {"role": "user", "content": user_content},
+                ]
+            )
+            # 清理结果：去引号、取第一行
+            text = (getattr(response, "content", None) or "").strip()
+            if text.startswith('"') and text.endswith('"') and len(text) > 2:
+                text = text[1:-1].strip()
+            if text.startswith("「") and text.endswith("」") and len(text) > 2:
+                text = text[1:-1].strip()
+            first_line = (text.split("\n")[0] or "").strip() if text else ""
+            if not first_line:
+                return latest_query
+            # 安全校验并返回
+            return sanitize_resolved_query(latest_query, first_line)[:2000]
+        except Exception as e:
+            logger.warning(f"aresolve_standalone_query failed: {e}", exc_info=True)
+            return latest_query
+
     def _parse_llm_response(self, content: str) -> ClassificationResult:
         """
         解析 LLM 返回的分类结果。
@@ -271,7 +415,7 @@ class QueryClassifier:
                 reason=f"JSON解析失败: {str(e)[:20]}",
             )
 
-    async def aclassify(self, query: str) -> ClassificationResult:
+    async def aclassify(self, query: str, context_query: str | None = None) -> ClassificationResult:
         """
         异步分类单个查询。
 
@@ -284,9 +428,17 @@ class QueryClassifier:
         # 截断过长的查询
         truncated_query = query[:500]
 
+        user_prompt = f"请对以下 query 进行分类：\n\n{truncated_query}"
+        if context_query:
+            user_prompt = (
+                "你会看到上一轮用户问题和本轮追问。请优先根据本轮追问分类，"
+                "但要利用上一轮语境来消解省略指代。\n\n"
+                f"上一轮用户问题：{str(context_query)[:300]}\n"
+                f"本轮 query：{truncated_query}"
+            )
         messages = [
             {"role": "system", "content": self.SYSTEM_PROMPT},
-            {"role": "user", "content": f"请对以下 query 进行分类：\n\n{truncated_query}"},
+            {"role": "user", "content": user_prompt},
         ]
 
         try:

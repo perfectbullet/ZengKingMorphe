@@ -9,6 +9,8 @@ This module provides:
 """
 
 import time
+from datetime import datetime
+import re
 from contextlib import asynccontextmanager
 from typing import List, Dict, Any, Tuple
 
@@ -19,6 +21,60 @@ from app.core.logging import get_logger
 from app.services.conversation.conversation_state import ConversationState
 from prompts.prompts import PHI4_SYSTEM_PROMPT
 logger = get_logger(__name__)
+
+
+def _build_realtime_temporal_guardrail(prefer_zh_output: bool) -> str:
+    """通用时间一致性约束：统一时间锚点，避免混入冲突年份/时间线。"""
+    now = datetime.now()
+    if prefer_zh_output:
+        return (
+            f"时间一致性要求：当前系统日期为 {now.year}年{now.month}月{now.day}日。\n"
+            "先将用户问题中的时间指代映射到同一时间框架；最终结论只能对应一个目标时间，"
+            "不得混入其它年份或其它时间线。若检索证据时间冲突，优先采用与目标时间一致的证据；"
+            "若仍无法唯一确认，请明确说明不确定。"
+        )
+    return (
+        f"Temporal consistency: current system date is {now.strftime('%Y-%m-%d')}.\n"
+        "Resolve time references in one coherent timeline and provide one final answer aligned to a single target time."
+        " Do not mix other years/timelines. If evidence conflicts by time, prioritize target-time-consistent evidence;"
+        " if still ambiguous, state uncertainty clearly."
+    )
+
+
+def _build_system_time_context(prefer_zh_output: bool) -> str:
+    """注入当前系统时间，用于正确解析「今年/今天」等相对时间"""
+    now = datetime.now()
+    if prefer_zh_output:
+        return (
+            "系统时间上下文：\n"
+            f"- 当前本地日期时间：{now.strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"- 当前年份：{now.year}\n"
+            "当用户使用“今年/明年/去年/现在/今天”等相对时间表达时，默认基于上述系统时间解释，"
+            "除非用户明确指定了其他时间。"
+        )
+    return (
+        "System time context:\n"
+        f"- Current local datetime: {now.strftime('%Y-%m-%d %H:%M:%S')}\n"
+        f"- Current year: {now.year}\n"
+        "When the user uses relative time expressions (e.g. this year/next year/today/now), "
+        "interpret them using the system time above unless the user explicitly specifies otherwise."
+    )
+
+
+def resolve_target_year_from_query(query: str, now: datetime | None = None) -> int | None:
+    """从问题中解析目标年份：今年/明年/去年 → 对应数字年份"""
+    if now is None:
+        now = datetime.now()
+    q = (query or "").strip().lower()
+    if not q:
+        return None
+    if re.search(r"(今年|本年|this\s+year)", q, re.IGNORECASE):
+        return now.year
+    if re.search(r"(明年|下一年|next\s+year)", q, re.IGNORECASE):
+        return now.year + 1
+    if re.search(r"(去年|上一年|last\s+year)", q, re.IGNORECASE):
+        return now.year - 1
+    return None
 
 
 # =============================================================================
@@ -224,19 +280,20 @@ def get_source_indicator(state: ConversationState) -> str:
     return ""
 
 
-def _build_conversation_history(state: ConversationState, max_turns: int = 5) -> List:
+def _build_conversation_history(state: ConversationState, max_messages: int = 10) -> List:
     """
     Build conversation history messages from state.
 
     Args:
         state: Current conversation state
-        max_turns: Maximum number of conversation turns to include
+        max_messages: Maximum number of chat messages (user+assistant) to include.
+            默认 10 条≈5 轮，与 session 侧最近上下文窗口对齐，避免多轮节日追问时丢最近用户句。
 
     Returns:
         List of Message objects from conversation history
     """
     messages = []
-    for msg in state.get("context", {}).get("messages", [])[-max_turns:]:
+    for msg in state.get("context", {}).get("messages", [])[-max_messages:]:
         if msg.get("role") == "user":
             messages.append(HumanMessage(content=msg.get("content", "")))
         elif msg.get("role") == "assistant":
@@ -316,7 +373,7 @@ def build_greeting_messages(
 
     prefer_zh_output = state.get("prefer_zh_output", True)
     messages = [SystemMessage(content=system_prompt)]
-    messages.extend(_build_conversation_history(state, max_turns=3))
+    messages.extend(_build_conversation_history(state, max_messages=6))
     # 按语言追加提问：英文提问强制要求英文回复
     if prefer_zh_output:
         messages.append(HumanMessage(content=state["user_query"]))
@@ -349,6 +406,7 @@ def build_generation_messages(state: ConversationState) -> List:
         List of Message objects for LLM
     """
     employee_config = state.get("employee_config", {})
+    effective_query = state.get("rewritten_query") or state["user_query"]
 
     intent = state.get("intent")
     if intent == "greeting":
@@ -364,6 +422,9 @@ def build_generation_messages(state: ConversationState) -> List:
     context_text = build_context_text(state)
     source_indicator = get_source_indicator(state)
     prefer_zh_output = state.get("prefer_zh_output", True)
+    system_time_context = _build_system_time_context(prefer_zh_output)
+    now = datetime.now()
+    target_year = resolve_target_year_from_query(effective_query, now)
 
     # 构建基础系统提示（中文/英文）
     if prefer_zh_output:
@@ -394,6 +455,7 @@ Style:
 
     # Add scenario-specific instructions
     if state.get("web_search_used", False) and state.get("is_realtime_query", False):
+        temporal_guardrail = _build_realtime_temporal_guardrail(prefer_zh_output)
         realtime_category = state.get("realtime_category", "")
         if realtime_category == "weather":
             requirements = f"""**重要提示**：用户询问的是天气信息，系统已通过网络搜索获取了最新数据。
@@ -410,7 +472,7 @@ Style:
 {context_text}
 
 用户问题：
-{state["user_query"]}
+{effective_query}
 """
             if not prefer_zh_output:
                 requirements = f"""IMPORTANT: The user asks about weather. The system has retrieved up-to-date web results.
@@ -427,7 +489,7 @@ Context {source_indicator}:
 {context_text}
 
 User question:
-{state["user_query"]}
+{effective_query}
 """
         elif realtime_category == "news":
             requirements = f"""**重要提示**：用户询问的是新闻信息，系统已通过网络搜索获取了最新数据。
@@ -444,7 +506,7 @@ User question:
 {context_text}
 
 用户问题：
-{state["user_query"]}
+{effective_query}
 """
             if not prefer_zh_output:
                 requirements = f"""IMPORTANT: The user asks about news. The system has retrieved up-to-date web results.
@@ -460,7 +522,7 @@ Context {source_indicator}:
 {context_text}
 
 User question:
-{state["user_query"]}
+{effective_query}
 """
         elif realtime_category == "market":
             requirements = f"""**重要提示**：用户询问的是价格/市场信息，系统已通过网络搜索获取了最新数据。
@@ -476,7 +538,7 @@ User question:
 {context_text}
 
 用户问题：
-{state["user_query"]}
+{effective_query}
 
 """
             if not prefer_zh_output:
@@ -493,7 +555,7 @@ Context {source_indicator}:
 {context_text}
 
 User question:
-{state["user_query"]}
+{effective_query}
 """
         elif realtime_category == "traffic":
             requirements = f"""**重要提示**：用户询问的是路况/拥堵信息，系统已通过网络搜索获取了相关资料。
@@ -512,7 +574,7 @@ User question:
 {context_text}
 
 用户问题：
-{state["user_query"]}
+{effective_query}
 """
             if not prefer_zh_output:
                 requirements = f"""IMPORTANT: The user asks about traffic/congestion. The system has retrieved relevant web results.
@@ -529,7 +591,7 @@ Context {source_indicator}:
 {context_text}
 
 User question:
-{state["user_query"]}
+{effective_query}
 """
         else:
             requirements = f"""**重要提示**：用户询问的是实时信息，系统已通过网络搜索获取了最新数据。
@@ -545,7 +607,7 @@ User question:
 {context_text}
 
 用户问题：
-{state["user_query"]}
+{effective_query}
 
 请基于上述网络资料，提供准确的实时信息回答。"""
             if not prefer_zh_output:
@@ -561,8 +623,27 @@ Context {source_indicator}:
 {context_text}
 
 User question:
-{state["user_query"]}
+{effective_query}
 """
+        requirements = requirements + "\n\n" + temporal_guardrail
+        if target_year is not None:
+            if prefer_zh_output:
+                requirements += f"\n时间锚定：本问题目标年份为 {target_year} 年；若回答包含具体日期，年份必须与该目标年份一致。"
+            else:
+                requirements += (
+                    f"\nTime anchor: target year for this query is {target_year}; "
+                    "if you provide a concrete date, its year must match this target year."
+                )
+        if prefer_zh_output:
+            requirements += (
+                "\n输出风格要求：直接给出最终结论（可附一个简短依据），"
+                "不要追加与结论无关的反问或重复说明。"
+            )
+        else:
+            requirements += (
+                "\nStyle requirement: provide the final conclusion directly (optionally one short rationale), "
+                "without adding unrelated follow-up questions or repetitive caveats."
+            )
     else:
         requirements = f"""回答要求：
 1. 严格基于提供的上下文信息回答，不编造内容
@@ -576,7 +657,7 @@ User question:
 {context_text}
 
 用户问题：
-{state["user_query"]}
+{effective_query}
 
 """
         if not prefer_zh_output:
@@ -591,19 +672,29 @@ Context {source_indicator}:
 {context_text}
 
 User question:
-{state["user_query"]}
+{effective_query}
 """
+        # 实时查询但未获得联网结果：仍需保持时间一致性，避免模型自行混入错误年份。
+        if state.get("is_realtime_query", False):
+            requirements = requirements + "\n\n" + _build_realtime_temporal_guardrail(prefer_zh_output)
+            if prefer_zh_output:
+                requirements += "\n若当前上下文无法支撑唯一结论，请明确说明无法确认，不要补充未经证实的年份或日期。"
+            else:
+                requirements += (
+                    "\nIf context is insufficient for a unique temporal answer, clearly state uncertainty "
+                    "and do not introduce unverified years or dates."
+                )
 
-    system_prompt = base_prompt + "\n" + requirements
+    system_prompt = base_prompt + "\n" + system_time_context + "\n\n" + requirements
     if not prefer_zh_output:
         system_prompt = "Answer in English only.\n\n" + system_prompt
 
     messages = [SystemMessage(content=system_prompt)]
-    messages.extend(_build_conversation_history(state, max_turns=5))
+    messages.extend(_build_conversation_history(state, max_messages=10))
     if prefer_zh_output:
-        messages.append(HumanMessage(content=state["user_query"]))
+        messages.append(HumanMessage(content=effective_query))
     else:
-        messages.append(HumanMessage(content=f"Please answer in English only.\n\n{state['user_query']}"))
+        messages.append(HumanMessage(content=f"Please answer in English only.\n\n{effective_query}"))
 
     return messages
 

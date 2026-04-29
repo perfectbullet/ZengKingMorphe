@@ -201,4 +201,5 @@ websockets==16.0
 xlsxwriter==3.2.9
 xxhash==3.6.0
 yarl==1.23.0
+zhdate==0.1
 zstandard==0.25.0

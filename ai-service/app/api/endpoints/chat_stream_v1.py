@@ -416,7 +416,36 @@ def _build_initial_state(request: OpenAIChatRequest, session_id: str, user_query
         "classification_label": None,
         "classification_confidence": None,
         "classification_reason": None,
+        "target_year": None,
     }
+
+
+def _enforce_target_year_consistency(text: str, target_year: int | None) -> str:
+    """统一回答年份：过滤含冲突年份的句子，兜底返回原文"""
+    # 无文本/无目标年份，直接返回
+    if not text or target_year is None:
+        return text
+    # 提取文中所有20xx年份，识别冲突年份
+    years = set(re.findall(r"\b(20\d{2})\b", text))
+    conflict_years = {y for y in years if int(y) != int(target_year)}
+    # 无冲突直接返回
+    if not conflict_years:
+        return text
+    # 按句子拆分，过滤含冲突年份的句子
+    parts = re.split(r"([。！？!?])", text)
+    rebuilt: list[str] = []
+    for i in range(0, len(parts), 2):
+        seg = parts[i]
+        punct = parts[i + 1] if i + 1 < len(parts) else ""
+        if not seg.strip():
+            continue
+        # 丢弃含冲突年份的句子
+        if any(y in seg for y in conflict_years):
+            continue
+        rebuilt.append(seg + punct)
+    # 拼接结果，为空则返回原文
+    cleaned = "".join(rebuilt).strip()
+    return cleaned or text
 
 def _build_finish_chunk_data(
     chat_id: str,
@@ -935,6 +964,32 @@ async def generate_openai_stream_v1(
                     logger.error("streaming_llm or messages not configured for langchain_llm type")
                     continue
                 logger.info(f"Using LangChain LLM stream | model={model_name}")
+
+                # 实时查询+年份锚点：先生成再清洗，避免回答出现冲突年份
+                target_year = current_state.get("target_year")
+                if current_state.get("is_realtime_query") and target_year is not None:
+                    # 非流式生成完整回答
+                    resp = await streaming_llm.ainvoke(messages)
+                    text = resp.content if hasattr(resp, "content") else str(resp)
+                    # 年份一致性清洗
+                    text = _enforce_target_year_consistency(text, target_year)
+                    if text:
+                        full_answer += text
+                        # 分段流式输出
+                        chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
+                            text, revise_llm, chat_id, created, request.model,
+                            db, chunk_sequence, session_id, request.user_id,
+                            request.employee_id, current_state.get("conversation_id"),
+                            prefer_zh_output=prefer_zh_output,
+                            enable_math_sentence_conversion=enable_math_sentence_conversion,
+                            log_prefix="Realtime-YearAnchor"
+                        )
+                        yield json.dumps(chunk_data)
+                    # 更新最终会话状态
+                    final_state = current_state
+                    final_state["final_answer"] = full_answer
+                    continue
+
                 async for chunk in streaming_llm.astream(messages):
                     token = chunk.content
                     if token:

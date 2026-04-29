@@ -166,3 +166,4 @@ class ConversationState(TypedDict):
     classification_label: Optional[str]  # 分类标签 (math_problem, concept_explain, greeting, etc.)
     classification_confidence: Optional[str]  # 置信度 (high/medium/low)
     classification_reason: Optional[str]  # 分类理由
+    target_year: Optional[int]  # 目标年份：今年/明年/去年解析后的年份

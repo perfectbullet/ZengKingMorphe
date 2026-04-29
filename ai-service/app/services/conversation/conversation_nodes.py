@@ -31,13 +31,19 @@ from app.services.conversation.conversation_state import (
     DEFAULT_SENSITIVE_WORDS,
     DEFAULT_SENSITIVE_WORDS_LOWER,
 )
-from app.services.query_classifier import ClassificationResult, get_query_classifier
+from app.services.query_classifier import (
+    ClassificationResult,
+    augment_dialog_with_persisted_turns,
+    format_dialog_for_resolver,
+    get_query_classifier,
+)
 from app.services.realtime_intent_heuristic import heuristic_realtime_category
 from app.services.conversation.conversation_helpers import (
     time_node,
     heuristic_complexity,
     build_generation_messages,
-    build_math_generation_messages
+    build_math_generation_messages,
+    resolve_target_year_from_query,
 )
 from app.services.calendar_time_resolver import calendar_direct_text_answer
 from app.services.web_search_recency import (
@@ -304,18 +310,95 @@ class ConversationNodes:
             Updated state with query_type classification
         """
         async with time_node("classify_query_type", state):
+            # 1.基础变量初始化
             query = state["user_query"].strip()
-            query_lower = query.lower()
-
-            # 使用 LLM 分类
+            context_messages = (state.get("context") or {}).get("messages") or []
+            # 获取上一轮用户问题
+            last_user_query = next(
+                (
+                    (m.get("content") or "").strip()
+                    for m in reversed(context_messages)
+                    if m.get("role") == "user" and (m.get("content") or "").strip()
+                ),
+                "",
+            )
+            # 2.格式化对话上下文
+            dialog_text = format_dialog_for_resolver(context_messages)
+            # 统计上下文用户消息数量
+            session_user_count = sum(
+                1 for m in context_messages if m.get("role") == "user" and (m.get("content") or "").strip()
+            )
+            # 上下文不足2轮时，从DB补全历史对话
+            if state.get("session_id") and session_user_count < 2:
+                try:
+                    db = await get_database()
+                    recent_turns = await db.conversations.find(
+                        {"session_id": state.get("session_id", "")},
+                        {"_id": 0, "user_query": 1, "ai_response": 1},
+                    ).sort("created_at", 1).limit(30).to_list(length=30)
+                    dialog_text = augment_dialog_with_persisted_turns(
+                        dialog_text, list(recent_turns), query
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to merge persisted dialog for resolver: session_id={state.get('session_id')}, error={e}",
+                        exc_info=True,
+                    )
+            # 3.意图分类器初始化与原始意图预判
             classifier = get_query_classifier()
-            result_llm = await classifier.aclassify(query)
+            original_ctx_result = await classifier.aclassify(query, context_query=last_user_query or None)
+            # 高置信度非实时查询，保留原始意图
+            preserve_original_intent = (
+                original_ctx_result.label != "realtime_query"
+                and original_ctx_result.confidence == "high"
+                and len(query) >= 8
+            )
+            # 4.上下文消歧，改写问句
+            resolved = query
+            if dialog_text.strip():
+                resolved = await classifier.aresolve_standalone_query(query, dialog_text)
+                if not (resolved or "").strip():
+                    resolved = query
+            resolved = resolved.strip()
+            state["rewritten_query"] = resolved
+            state["query_rewritten"] = resolved != query
 
-            boost = heuristic_realtime_category(query)
-            if boost is not None and result_llm.label not in _REALTIME_HEURISTIC_SKIP_LABELS:
+            # 5.对改写后的问句分类
+            result_llm = await classifier.aclassify(resolved, context_query=None)
+            # 短问句场景：恢复原始实时查询意图
+            if (
+                result_llm.label != "realtime_query"
+                and original_ctx_result.label == "realtime_query"
+                and original_ctx_result.confidence == "high"
+                and len(query) < 8
+            ):
+                logger.info(
+                    "Restore realtime intent for short contextual follow-up: "
+                    f"query={query[:80]}, resolved={resolved[:80]}"
+                )
+                result_llm = original_ctx_result
+            # 高置信度原始意图：防止改写偏移
+            if (
+                result_llm.label == "realtime_query"
+                and original_ctx_result.label != "realtime_query"
+                and original_ctx_result.confidence == "high"
+            ):
+                logger.info(
+                    "Keep original intent classification to avoid rewrite drift: "
+                    f"original={original_ctx_result.label}, rewritten={result_llm.label}, "
+                    f"query={query[:80]}, resolved={resolved[:80]}"
+                )
+                result_llm = original_ctx_result
+            # 6.启发式规则：升级为实时查询
+            boost = heuristic_realtime_category(resolved)
+            if (
+                boost is not None
+                and result_llm.label not in _REALTIME_HEURISTIC_SKIP_LABELS
+                and not preserve_original_intent
+            ):
                 logger.info(
                     f"Realtime heuristic upgrade: boost={boost}, llm_label={result_llm.label}, "
-                    f"query={query[:80]}"
+                    f"query={resolved[:80]}"
                 )
                 result = ClassificationResult(
                     label="realtime_query",
@@ -327,41 +410,46 @@ class ConversationNodes:
 
             logger.info(
                 f"LLM classification: label={result.label}, confidence={result.confidence}, "
-                f"reason={result.reason}, query={query[:50]}"
+                f"reason={result.reason}, query={resolved[:50]}"
             )
 
-            # 将分类结果保存到 state（用于调试和追溯）
+            # 7.解析目标年份，存入状态：用于后续生成阶段保持“今年/明年/去年”一致。
+            target_year = resolve_target_year_from_query(resolved)
+            if target_year is not None:
+                state["target_year"] = target_year
+
+            # 8.保存分类结果到状态
             state["classification_label"] = result.label
             state["classification_confidence"] = result.confidence
             state["classification_reason"] = result.reason
 
-            # 根据分类结果设置 state
+            # 9.根据分类标签设置状态
             match result.label:
+                # 问候语
                 case "greeting":
                     state["intent"] = "greeting"
                     state["complexity_score"] = 0.0
                     state["complexity_reason"] = "greeting"
                     state["is_realtime_query"] = False
-                    # 添加 greeting source
+                    # 10. 添加问候语来源
                     state["sources"].append({
                         "type": "text",
                         "from": "greeting",
                         "text": query,
                         "citations": []
                     })
-
+                # 实时查询
                 case "realtime_query":
                     state["is_realtime_query"] = True
                     state["realtime_category"] = _normalize_realtime_category(result.reason)
                     state["realtime_detect_reason"] = f"llm:{result.confidence}"
                     state["intent"] = "general_query"
-
+                # 数学题
                 case "math_problem":
                     state["is_math_problem"] = True
                     state["intent"] = "general_query"
-
+                # 无效噪声
                 case "noise":
-                    # 噪声输入，返回友好提示
                     state["intent"] = "noise"
                     state["sources"].append({
                         "type": "text",
@@ -369,18 +457,24 @@ class ConversationNodes:
                         "text": "抱歉，我没有听清您的问题，请再重复一次。",
                         "citations": []
                     })
-
+                # 默认通用查询
                 case _:
-                    # concept_explain, english_query, general_knowledge, chit_chat, other
-                    # 默认为一般查询，继续正常流程
                     state["is_realtime_query"] = False
                     state["intent"] = "general_query"
 
-            # 日期/时间类：本地计算
+            # 10.日历日期直出答案（优先原问句，再用改写后问句）避免把“习俗/由来”等非日期问题误转为日期回答。
             direct = calendar_direct_text_answer(
                 query,
                 bool(state.get("prefer_zh_output", True)),
+                anchor_year=state.get("target_year"),
             )
+            if not direct and result.label == "realtime_query":
+                direct = calendar_direct_text_answer(
+                    resolved,
+                    bool(state.get("prefer_zh_output", True)),
+                    anchor_year=state.get("target_year"),
+                )
+            # 命中日历答案，设置本地计算状态
             if direct:
                 state["direct_text_answer"] = direct
                 state["is_realtime_query"] = True
@@ -622,9 +716,11 @@ class ConversationNodes:
 
                 # 日历问题：优先本地推算，避免分类器把 reason 标成 general 仍去联网抄错误示例
                 if state.get("is_realtime_query"):
+                    q_cal = (state.get("rewritten_query") or state.get("user_query") or "").strip()
                     direct_cal = calendar_direct_text_answer(
-                        state.get("user_query", ""),
+                        q_cal,
                         bool(state.get("prefer_zh_output", True)),
+                        anchor_year=state.get("target_year"),
                     )
                     if direct_cal:
                         state["web_search_results"] = []
@@ -649,8 +745,8 @@ class ConversationNodes:
                 policy = DEFAULT_POLICIES.get(realtime_category, DEFAULT_POLICIES["general"])
                 anchored_query = query
 
-                # 实时类查询追加时间锚点（今日/实时）
-                if state.get("is_realtime_query") and policy.prefer_today:
+                # 实时类查询统一追加时间锚点（通用）：避免“今年/当前/最近”等相对时间漂移。
+                if state.get("is_realtime_query"):
                     anchored_query = build_time_anchored_query(query, now, policy)
 
                 # 执行联网搜索
@@ -660,6 +756,14 @@ class ConversationNodes:
                     tavily_api_key=settings.tavily_api_key,
                 )
                 search_results = await web_search_tool.ainvoke({"query": anchored_query})
+                # 锚定查询可能过窄：实时查询无结果时，用原始查询重试一次（通用回退）。
+                if (
+                    state.get("is_realtime_query")
+                    and anchored_query != query
+                    and (not search_results)
+                ):
+                    logger.info("Web search retry with raw query after anchored miss")
+                    search_results = await web_search_tool.ainvoke({"query": query})
 
                 # Format results
                 formatted_results = []
@@ -792,9 +896,11 @@ class ConversationNodes:
             if state.get("is_realtime_query"):
                 direct = state.get("direct_text_answer")
                 if not direct:
+                    q_cal = (state.get("rewritten_query") or state.get("user_query") or "").strip()
                     direct = calendar_direct_text_answer(
-                        state.get("user_query", ""),
+                        q_cal,
                         bool(state.get("prefer_zh_output", True)),
+                        anchor_year=state.get("target_year"),
                     )
                 if direct:
                     state["direct_text_answer"] = direct
@@ -808,6 +914,26 @@ class ConversationNodes:
                         "Streaming configured: type=direct_text, realtime_category=time (local_calendar_resolver)"
                     )
                     return state
+
+            # 实时查询无联网结果：禁止模型臆测，返回统一提示语
+            if state.get("is_realtime_query") and not state.get("web_search_used", False):
+                # 根据检索错误类型返回对应提示
+                err = state.get("web_search_error")
+                if err:
+                    direct = "当前网络检索不可用，暂时无法确认实时信息，请稍后重试。"
+                else:
+                    direct = "未检索到足够的实时信息，暂时无法确认答案，请稍后重试或补充更具体条件。"
+                # 设置直接返回文本，跳过流式LLM生成
+                state["direct_text_answer"] = direct
+                state["streaming_llm"] = None
+                state["streaming_messages"] = None
+                state["streaming_type"] = "direct_text"
+                state["confidence"] = 0.7
+                state["final_answer"] = ""
+                logger.info(
+                    "Streaming configured: type=direct_text, realtime_without_web_results"
+                )
+                return state
 
             # 计算置信度
             confidence = 0.5  # Base confidence
