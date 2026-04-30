@@ -19,7 +19,7 @@ from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.services.conversation.conversation_state import ConversationState
-from prompts.prompts import PHI4_SYSTEM_PROMPT
+from prompts.prompts import GEOMETRY_FORMULA_BOOK, MATH_SYSTEM_PROMPT, PHI4_SIMPLE_SYSTEM_PROMPT
 logger = get_logger(__name__)
 
 
@@ -709,13 +709,44 @@ def build_math_generation_messages(state: ConversationState) -> List:
     Returns:
         List of Message objects for Phi-4 LLM
     """
-    # 使用 Phi-4 模型进行数学推理
-    messages = [SystemMessage(content=PHI4_SYSTEM_PROMPT)]
+    query = (state.get("user_query") or "").strip()
+    normalized_query = _normalize_math_query(query)
+    if _is_simple_math_query(normalized_query):
+        # 简单计算题：保持极简输出
+        messages = [SystemMessage(content=PHI4_SIMPLE_SYSTEM_PROMPT)]
+        messages.append(HumanMessage(content=normalized_query))
+        return messages
 
-    # 添加用户问题
-    messages.append(HumanMessage(content=state["user_query"]))
+    # 非简单题：统一使用“解题行为流程”+“公式库”，不再针对具体题目写死分支
+    sys_prompt = MATH_SYSTEM_PROMPT + "\n\n" + GEOMETRY_FORMULA_BOOK
+    messages = [SystemMessage(content=sys_prompt)]
+    messages.append(HumanMessage(content=normalized_query))
 
     return messages
+
+
+def _normalize_math_query(query: str) -> str:
+    """轻量归一化：将“派/pi”统一为 π，减少符号漏写/误写。"""
+    q = (query or "").strip()
+    # 常见口语/拼写归一
+    q = q.replace("派", "π")
+    q = q.replace("pi", "π").replace("PI", "π").replace("Pi", "π")
+    return q
+
+
+def _is_simple_math_query(query: str) -> bool:
+    q = (query or "").strip().lower()
+    if not q:
+        return False
+    if len(q) > 28:
+        return False
+    complex_markers = ("证明", "推导", "分析", "为什么", "思路", "过程", "几何", "应用题", "函数", "方程组")
+    if any(m in q for m in complex_markers):
+        return False
+    has_number = bool(re.search(r"[0-9一二三四五六七八九十百千万两零]", q))
+    has_op = any(op in q for op in ("+", "-", "*", "/", "加", "减", "乘", "除", "×", "÷", "等于"))
+    asks_value = any(k in q for k in ("等于几", "多少", "=?", "＝", "="))
+    return has_number and has_op and asks_value
 
 
 def heuristic_complexity(query: str) -> float:
