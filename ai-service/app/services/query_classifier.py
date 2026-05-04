@@ -27,6 +27,7 @@ from pydantic import BaseModel
 
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.utils.common import has_language_drift
 
 logger = get_logger(__name__)
 
@@ -48,13 +49,29 @@ _DATE_ANSWER_PATTERN = re.compile(r"(?:19|20)\d{2}\s*年\s*\d{1,2}\s*月\s*\d{1,
 
 def sanitize_resolved_query(latest_query: str, resolved_line: str) -> str:
     """
-    防止消歧模型把“改写”误做成“直接作答”。
-    若输出是日期结论句，则回退为同主题问句，避免打断后续路由。
+    对消歧器输出做安全清洗，防止两类常见的"语义偏移"污染下游：
+
+    1. **直接作答漂移**：模型把"改写问句"误做成"输出结论"
+       （例如对"今天是几月几号？"直接吐出"2026年5月4日"），会导致后续路由错误。
+    2. **跨语言漂移**：模型把英文问句翻译成中文（或反向），会让下游 LLM 收到
+       与用户语言不符的"用户问题"，进而以错误语言作答（造成"英文问、中文答"）。
+
+    任何一种漂移命中时，统一回退到原问句 ``latest_query``，相当于"未改写"，
+    把决策权交给下游正常路径。
     """
     out = (resolved_line or "").strip()
     if not out:
         return (latest_query or "").strip()
     latest = (latest_query or "").strip()
+
+    # 跨语言漂移：纯字符级判定，不依赖任何关键字 / 词典，对任意语种通用。
+    if has_language_drift(latest, out):
+        logger.info(
+            "Resolver language drift suppressed; falling back to original query. "
+            f"latest={latest[:80]!r}, resolved={out[:80]!r}"
+        )
+        return latest
+
     asks_like_question = ("?" in latest) or ("？" in latest) or latest.endswith("呢")
     if not asks_like_question:
         return out

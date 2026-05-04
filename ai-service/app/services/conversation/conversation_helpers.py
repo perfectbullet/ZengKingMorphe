@@ -19,6 +19,7 @@ from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.services.conversation.conversation_state import ConversationState
+from app.utils.common import detect_dominant_language
 from prompts.prompts import GEOMETRY_FORMULA_BOOK, MATH_SYSTEM_PROMPT, PHI4_SIMPLE_SYSTEM_PROMPT
 logger = get_logger(__name__)
 
@@ -184,39 +185,94 @@ def select_llm(state: ConversationState, local_llm, remote_llm) -> Tuple[Any, st
 # =============================================================================
 # Personality Helpers
 # =============================================================================
-def get_personality_description(personality: dict) -> Tuple[str, str, str]:
+#: 人格描述：以 "key" 为枚举主键，按语言提供本地化文案。
+#: 新增语种只需在每个 map 的 key 下加一个语言代码 → 文案；不需要改任何业务代码。
+_PERSONALITY_TONE_I18N: Dict[str, Dict[str, str]] = {
+    "professional": {"zh": "专业严谨", "en": "professional and rigorous"},
+    "friendly": {"zh": "友好亲切", "en": "friendly and warm"},
+    "formal": {"zh": "正式庄重", "en": "formal and dignified"},
+    "casual": {"zh": "轻松随意", "en": "casual and relaxed"},
+}
+
+_PERSONALITY_STYLE_I18N: Dict[str, Dict[str, str]] = {
+    "concise": {"zh": "简明扼要", "en": "concise and to the point"},
+    "detailed": {"zh": "详细周到", "en": "detailed and thorough"},
+    "conversational": {"zh": "对话式", "en": "conversational"},
+    "instructional": {"zh": "指导式", "en": "instructional"},
+}
+
+_PERSONALITY_FORMALITY_I18N: Dict[str, Dict[str, str]] = {
+    "high": {"zh": "高度正式（使用敬语）", "en": "highly formal (use honorifics)"},
+    "moderate": {"zh": "适度正式", "en": "moderately formal"},
+    "low": {"zh": "轻松口语化", "en": "casual and colloquial"},
+}
+
+_PERSONALITY_DEFAULT_I18N: Dict[str, Dict[str, str]] = {
+    "tone": {"zh": "专业", "en": "professional"},
+    "style": {"zh": "友好", "en": "friendly"},
+    "formality": {"zh": "适度", "en": "moderate"},
+}
+
+
+def _i18n_lookup(
+    table: Dict[str, Dict[str, str]],
+    key: str,
+    lang: str,
+    short_default: str,
+) -> str:
+    """
+    在 i18n 映射表中按 ``key + lang`` 查询文案。
+
+    严格保留旧实现的语义：
+    - ``key`` 命中：返回该项的 ``lang`` 文案；
+    - ``key`` 未命中：返回简短默认词 ``short_default``（不再二次查表，避免把
+      "unknown" 静默升级为 "professional and rigorous" 这类长描述）。
+
+    若映射表里某项缺失目标语言，再退回到中文 / 任意可用文案，保证不抛异常。
+    """
+    entry = table.get(key)
+    if entry is None:
+        return short_default
+    return entry.get(lang) or entry.get("zh") or next(iter(entry.values()), short_default)
+
+
+def get_personality_description(
+    personality: dict, prefer_zh_output: bool = True
+) -> Tuple[str, str, str]:
     """
     Get personality description for system prompt.
 
     Args:
         personality: Personality dict from employee config
+        prefer_zh_output: 输出语言偏好。``True`` 返回中文文案、``False`` 返回英文文案。
+            缺省为 ``True`` 以保持对老调用方的向后兼容（默认中文）。
 
     Returns:
-        Tuple of (tone_desc, style_desc, formality_desc)
+        Tuple of (tone_desc, style_desc, formality_desc)，文案语言与 ``prefer_zh_output`` 一致。
+
+    设计说明：
+        - 为何要本地化？人格描述会被拼进 system prompt。若英文 system prompt 中混入
+          "Tone: 友好亲切" 这类中文片段，部分中文偏好的模型（如 qwen 系列）会被
+          诱导用中文回答英文问题。本地化后整个 system prompt 语言统一，从源头消除
+          这类"语言污染"。
+        - 为何用 i18n 映射表？保持原始 key 仍是英文枚举（"professional" 等），文案
+          按需扩展任意语种，业务代码不需要任何 if/else。
+        - 行为对齐旧版：未知 personality 枚举值时回退到简短默认词，与旧实现等价。
     """
-    tone_map = {
-        "professional": "专业严谨",
-        "friendly": "友好亲切",
-        "formal": "正式庄重",
-        "casual": "轻松随意",
-    }
+    lang = "zh" if prefer_zh_output else "en"
+    tone_key = personality.get("tone", "professional")
+    style_key = personality.get("style", "friendly")
+    formality_key = personality.get("formality", "moderate")
 
-    style_map = {
-        "concise": "简明扼要",
-        "detailed": "详细周到",
-        "conversational": "对话式",
-        "instructional": "指导式",
-    }
-
-    formality_map = {
-        "high": "高度正式（使用敬语）",
-        "moderate": "适度正式",
-        "low": "轻松口语化",
-    }
-
-    tone_desc = tone_map.get(personality.get("tone", "professional"), "专业")
-    style_desc = style_map.get(personality.get("style", "friendly"), "友好")
-    formality_desc = formality_map.get(personality.get("formality", "moderate"), "适度")
+    tone_desc = _i18n_lookup(
+        _PERSONALITY_TONE_I18N, tone_key, lang, _PERSONALITY_DEFAULT_I18N["tone"][lang]
+    )
+    style_desc = _i18n_lookup(
+        _PERSONALITY_STYLE_I18N, style_key, lang, _PERSONALITY_DEFAULT_I18N["style"][lang]
+    )
+    formality_desc = _i18n_lookup(
+        _PERSONALITY_FORMALITY_I18N, formality_key, lang, _PERSONALITY_DEFAULT_I18N["formality"][lang]
+    )
 
     return tone_desc, style_desc, formality_desc
 
@@ -224,11 +280,29 @@ def get_personality_description(personality: dict) -> Tuple[str, str, str]:
 # =============================================================================
 # Context Building Helpers
 # =============================================================================
+#: 上下文段落标签的多语言文案（仅用于 LLM 提示，不外暴露给用户）。
+_CONTEXT_LABELS_I18N: Dict[str, Dict[str, str]] = {
+    "compressed_header": {
+        "zh": "[压缩后的参考信息]",
+        "en": "[Compressed reference]",
+    },
+    "kb_header": {"zh": "[知识库参考{i}]", "en": "[KB reference {i}]"},
+    "web_header": {"zh": "[网络资料{i}]", "en": "[Web result {i}]"},
+    "web_title": {"zh": "标题:", "en": "Title:"},
+    "web_content": {"zh": "内容:", "en": "Content:"},
+    "web_source": {"zh": "来源:", "en": "Source:"},
+    "empty": {"zh": "（暂无相关参考资料）", "en": "(No relevant reference available.)"},
+}
+
+
 def build_context_text(state: ConversationState) -> str:
     """
     Build context text from retrieved docs and web search results.
 
     Uses compressed context if available, otherwise builds from sources.
+
+    Labels (e.g. ``[KB reference 1]`` / ``Title:``) are localized to
+    ``prefer_zh_output``，避免英文 system prompt 中混入中文标签污染输出语言。
 
     Args:
         state: Current conversation state
@@ -236,12 +310,15 @@ def build_context_text(state: ConversationState) -> str:
     Returns:
         Formatted context string for LLM prompt
     """
+    lang = "zh" if state.get("prefer_zh_output", True) else "en"
+    L = {k: v[lang] for k, v in _CONTEXT_LABELS_I18N.items()}
+
     if state.get("compressed_context"):
-        return f"[压缩后的参考信息]\n{state['compressed_context']}"
+        return f"{L['compressed_header']}\n{state['compressed_context']}"
 
     context_parts = []
     for i, doc in enumerate(state.get("retrieved_docs", [])[:3], 1):
-        context_parts.append(f"[知识库参考{i}]\n{doc.get('content', '')[:500]}")
+        context_parts.append(f"{L['kb_header'].format(i=i)}\n{doc.get('content', '')[:500]}")
 
     web_results = state.get("web_search_results", [])
     if web_results and state.get("web_search_used", False):
@@ -255,28 +332,38 @@ def build_context_text(state: ConversationState) -> str:
             else:
                 content_excerpt = content[:1200]
             context_parts.append(
-                f"[网络资料{i}]\n标题: {web_result.get('title', '')}\n"
-                f"内容: {content_excerpt}\n"
-                f"来源: {web_result.get('url', '')}"
+                f"{L['web_header'].format(i=i)}\n{L['web_title']} {web_result.get('title', '')}\n"
+                f"{L['web_content']} {content_excerpt}\n"
+                f"{L['web_source']} {web_result.get('url', '')}"
             )
 
-    return "\n\n".join(context_parts) if context_parts else "（暂无相关参考资料）"
+    return "\n\n".join(context_parts) if context_parts else L["empty"]
+
+
+#: 数据来源指示文案（拼接进 system prompt 的"上下文信息"标题旁）。
+_SOURCE_INDICATOR_I18N: Dict[str, Dict[str, str]] = {
+    "web": {"zh": "（包含最新网络信息）", "en": "(includes the latest web results)"},
+    "kb": {"zh": "（基于知识库）", "en": "(based on the knowledge base)"},
+}
 
 
 def get_source_indicator(state: ConversationState) -> str:
     """
     Get source indicator based on data sources used.
 
+    指示词随 ``prefer_zh_output`` 本地化，避免英文 system prompt 中混入中文。
+
     Args:
         state: Current conversation state
 
     Returns:
-        Source indicator string
+        Source indicator string（带括号）；无来源时返回空串。
     """
+    lang = "zh" if state.get("prefer_zh_output", True) else "en"
     if state.get("web_search_used", False):
-        return "（包含最新网络信息）"
-    elif state.get("retrieved_docs"):
-        return "（基于知识库）"
+        return _SOURCE_INDICATOR_I18N["web"][lang]
+    if state.get("retrieved_docs"):
+        return _SOURCE_INDICATOR_I18N["kb"][lang]
     return ""
 
 
@@ -389,6 +476,34 @@ def build_greeting_messages(
     return messages
 
 
+def _select_llm_facing_query(state: ConversationState) -> str:
+    """
+    选择送给 LLM 的"用户问题"文本。
+
+    设计：优先使用 ``rewritten_query``（消歧后通常更利于检索 / 推理），
+    但当其主导语言与 ``prefer_zh_output`` 期望的输出语言不一致时，
+    回退到原始 ``user_query``，避免"英文问、中文答"或反向的混语回复。
+
+    这是 LLM 路径上的"语言一致性最后防线"。即使上游的 ``sanitize_resolved_query``
+    漏检（或其它路径绕过 sanitize），此处仍能兜住。
+    """
+    user_query = (state.get("user_query") or "").strip()
+    rewritten = (state.get("rewritten_query") or "").strip()
+    if not rewritten or rewritten == user_query:
+        return user_query or rewritten
+
+    expected_lang = "zh" if state.get("prefer_zh_output", True) else "en"
+    rewritten_lang = detect_dominant_language(rewritten)
+    if rewritten_lang and rewritten_lang != expected_lang:
+        logger.info(
+            "Rewritten query language mismatch with prefer_zh_output; "
+            f"falling back to original. expected={expected_lang}, got={rewritten_lang}, "
+            f"user_query={user_query[:80]!r}, rewritten={rewritten[:80]!r}"
+        )
+        return user_query or rewritten
+    return rewritten
+
+
 def build_generation_messages(state: ConversationState) -> List:
     """
     Build LLM messages for answer generation.
@@ -406,7 +521,7 @@ def build_generation_messages(state: ConversationState) -> List:
         List of Message objects for LLM
     """
     employee_config = state.get("employee_config", {})
-    effective_query = state.get("rewritten_query") or state["user_query"]
+    effective_query = _select_llm_facing_query(state)
 
     intent = state.get("intent")
     if intent == "greeting":
@@ -417,11 +532,14 @@ def build_generation_messages(state: ConversationState) -> List:
     greeting = employee_config.get("greeting", "您好")
     name = employee_config.get("name", "AI助手")
     description = employee_config.get("description", "专业的AI助手")
-    tone_desc, style_desc, formality_desc = get_personality_description(personality)
 
     context_text = build_context_text(state)
     source_indicator = get_source_indicator(state)
     prefer_zh_output = state.get("prefer_zh_output", True)
+    # 人格描述按语言本地化，避免英文 system prompt 中混入中文短语诱导模型用中文回答。
+    tone_desc, style_desc, formality_desc = get_personality_description(
+        personality, prefer_zh_output=prefer_zh_output
+    )
     system_time_context = _build_system_time_context(prefer_zh_output)
     now = datetime.now()
     target_year = resolve_target_year_from_query(effective_query, now)

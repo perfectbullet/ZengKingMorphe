@@ -627,16 +627,20 @@ class ConversationNodes:
                     state["intent"] = "general_query"
 
             # 10.日历日期直出答案（优先原问句，再用改写后问句）避免把“习俗/由来”等非日期问题误转为日期回答。
+            # `language_hint_query` 始终传入用户原始问句，避免改写后的查询语言污染输出语言判定
+            # （例如：英文问句被消歧/改写为中文，造成英文问、中文答的混语回复）。
             direct = calendar_direct_text_answer(
                 query,
                 bool(state.get("prefer_zh_output", True)),
                 anchor_year=state.get("target_year"),
+                language_hint_query=state.get("user_query") or query,
             )
             if not direct and result.label == "realtime_query":
                 direct = calendar_direct_text_answer(
                     resolved,
                     bool(state.get("prefer_zh_output", True)),
                     anchor_year=state.get("target_year"),
+                    language_hint_query=state.get("user_query") or query,
                 )
             # 命中日历答案，设置本地计算状态
             if direct:
@@ -885,6 +889,7 @@ class ConversationNodes:
                         q_cal,
                         bool(state.get("prefer_zh_output", True)),
                         anchor_year=state.get("target_year"),
+                        language_hint_query=state.get("user_query") or q_cal,
                     )
                     if direct_cal:
                         state["web_search_results"] = []
@@ -1105,6 +1110,7 @@ class ConversationNodes:
                         q_cal,
                         bool(state.get("prefer_zh_output", True)),
                         anchor_year=state.get("target_year"),
+                        language_hint_query=state.get("user_query") or q_cal,
                     )
                 if direct:
                     state["direct_text_answer"] = direct
