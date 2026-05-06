@@ -60,6 +60,59 @@ logger = get_logger(__name__)
 # 启发式联网补位：不覆盖问候、噪声、数学题；也不重复覆盖已是实时的分支
 _REALTIME_HEURISTIC_SKIP_LABELS = frozenset({"greeting", "noise", "math_problem", "realtime_query"})
 
+# =============================================================================
+# Employee Config Resolvers
+# 员工 kb_ids / rag_disabled 字段历史上散落在多个集合 / 多种 schema 路径里：
+#   - 新版（EmployeeSyncService 写入）: digital_employee_settings.knowledge_kb_ids
+#   - 旧版 A: knowledge.kb_ids
+#   - 旧版 B: 顶层 kb_ids
+#   - 旧版 C: capabilities.kb_ids
+# 用集中维护的“路径表”避免在节点里到处写 if/else，且新增路径只改这两个表即可。
+# 注：RAGAnything 是单一全局知识库，kb_ids 仅作展示/审计用，不再作为路由开关。
+# =============================================================================
+_EMPLOYEE_KB_ID_PATHS: tuple[tuple[str, ...], ...] = (
+    ("setting", "knowledge_kb_ids"),
+    ("knowledge", "kb_ids"),
+    ("kb_ids",),
+    ("capabilities", "kb_ids"),
+)
+_EMPLOYEE_RAG_DISABLED_PATHS: tuple[tuple[str, ...], ...] = (
+    ("setting", "rag_disabled"),
+    ("rag_disabled",),
+    ("capabilities", "rag_disabled"),
+)
+
+
+def _get_nested(cfg, path: tuple[str, ...]):
+    """按路径取值，遇到非 dict 即兜底返回 None，避免脏数据 KeyError。"""
+    cur = cfg
+    for key in path:
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(key)
+    return cur
+
+
+def _resolve_employee_kb_ids(cfg) -> list:
+    """从员工配置多条新/旧路径解析 kb_ids；非 list 或空 list 自动跳到下一条。"""
+    if not isinstance(cfg, dict):
+        return []
+    for path in _EMPLOYEE_KB_ID_PATHS:
+        value = _get_nested(cfg, path)
+        if isinstance(value, list) and value:
+            return value
+    return []
+
+
+def _resolve_employee_rag_disabled(cfg) -> bool:
+    """员工级 RAG 总开关：仅接受严格 ``True``，避免脏数据（"true"/1）误关 RAG。"""
+    if not isinstance(cfg, dict):
+        return False
+    for path in _EMPLOYEE_RAG_DISABLED_PATHS:
+        if _get_nested(cfg, path) is True:
+            return True
+    return False
+
 
 def _extract_weather_location(query: str) -> str | None:
     """尽量从自然语言天气问句中提取地点，失败时返回 None。"""
@@ -311,17 +364,19 @@ class ConversationNodes:
                 raise ValueError(error_msg)
 
             employee.pop("_id", None)
-            state["employee_config"] = employee
 
-            # 兼容两种 kb_ids 存储路径: knowledge.kb_ids 或根级别 kb_ids
-            kb_ids = None
-            knowledge = employee.get("knowledge")
-            if knowledge and isinstance(knowledge, dict):
-                kb_ids = knowledge.get("kb_ids")
-            if not kb_ids:
-                kb_ids = employee.get("kb_ids", [])
-            if kb_ids is None:
-                kb_ids = []
+            # EmployeeSyncService 把 knowledge_kb_ids 等运行时设置写到 digital_employee_settings 集合，
+            # 这里合并进来供下游统一从 employee_config 读取，避免路由因找不到 kb_ids 而误降级。
+            setting_doc = await db.digital_employee_settings.find_one({"employee_id": state["employee_id"]})
+            if setting_doc:
+                setting_doc.pop("_id", None)
+                employee["setting"] = setting_doc
+
+            # 解析 kb_ids 时按 _EMPLOYEE_KB_ID_PATHS 优先级取值，并规范化到 employee_config["kb_ids"]，
+            # 给老调用方留向后兼容；路由本身不再依赖 kb_ids（RAGAnything 是全局单库）。
+            kb_ids = _resolve_employee_kb_ids(employee)
+            employee["kb_ids"] = kb_ids
+            state["employee_config"] = employee
 
             logger.info(
                 f"Employee config loaded: employee_id={state['employee_id']}, "
@@ -1195,11 +1250,14 @@ class ConversationNodes:
                 )
             else:  # normal - 需要召回文档，使用 RAGAnything
                 employee_config = state.get("employee_config", {})
-                kb_ids = employee_config.get("kb_ids", []) or employee_config.get("capabilities", {}).get("kb_ids", [])
+                # RAGAnything 是全局单一知识库（Milvus + Neo4j），kb_ids 已是空也仍能召回到全局图谱/向量；
+                # 因此路由仅看全局开关 raganything_enabled 与员工级 rag_disabled，不再用 kb_ids 作为门。
                 raganything_enabled = getattr(settings, "raganything_enabled", True)
+                rag_disabled = _resolve_employee_rag_disabled(employee_config)
+                kb_ids = _resolve_employee_kb_ids(employee_config)
 
-                # 如果 RAG 未启用 或 无知识库 → 降级为普通 LLM 生成
-                if (not raganything_enabled) or (not kb_ids):
+                # 全局未启用 或 员工显式禁用 RAG → 降级为普通 LLM 生成
+                if (not raganything_enabled) or rag_disabled:
                     messages = build_generation_messages(state)
                     streaming_llm, model_name = self.workflow.get_streaming_llm(state)
                     state["streaming_llm"] = streaming_llm
@@ -1207,7 +1265,7 @@ class ConversationNodes:
                     state["streaming_type"] = "langchain_llm"
                     logger.info(
                         f"Streaming configured: type=langchain_llm (fallback), "
-                        f"reason={'raganything_disabled' if not raganything_enabled else 'no_kb_ids'}, "
+                        f"reason={'raganything_disabled' if not raganything_enabled else 'employee_rag_disabled'}, "
                         f"model={model_name}"
                     )
                 # 启用 RAG → 使用 RAGAnything 混合检索
@@ -1221,7 +1279,7 @@ class ConversationNodes:
 
                     logger.info(
                         f"Streaming configured: type=raganything_stream, intent={intent}, "
-                        f"mode=hybrid, query={state['user_query'][:50]}..."
+                        f"mode=hybrid, kb_ids_meta={kb_ids}, query={state['user_query'][:50]}..."
                     )
 
             state["confidence"] = confidence
