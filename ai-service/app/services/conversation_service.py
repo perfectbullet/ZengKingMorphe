@@ -238,7 +238,7 @@ class ConversationWorkflow:
             api_key="dummy-key",  # vLLM 不需要真实 key
             model=model_id,
             temperature=0.6,
-            max_tokens=16384,
+            max_tokens=4096,
             streaming=True,
             top_p=0.95,
             # extra_body={
