@@ -627,6 +627,32 @@ class ConversationNodes:
             else:
                 result = result_llm
 
+            # 6.5 二元 LLM 兜底：主分类未识别为 realtime 但置信度不 high 时，
+            # 用一次"是否需要联网/最新信息"的 yes/no LLM 校验把漏检拉回 realtime_query。
+            # 设计要点：
+            # - 通过 settings.realtime_query_llm_fallback_enabled 开关控制（可在 .env 关闭）；
+            # - _REALTIME_HEURISTIC_SKIP_LABELS 已包含 math_problem/greeting/noise/realtime_query，
+            #   数学题/问候/噪声不会被升级（保护现有路由：数学题继续走 RAG / Phi-4）；
+            # - preserve_original_intent 命中时跳过，避免覆盖高置信度的非实时原意图；
+            # - aneed_realtime 内部异常一律返回 False，不让兜底机制反过来引入新故障。
+            if (
+                getattr(settings, "realtime_query_llm_fallback_enabled", False)
+                and result.label not in _REALTIME_HEURISTIC_SKIP_LABELS
+                and result.confidence != "high"
+                and not preserve_original_intent
+                and await classifier.aneed_realtime(resolved)
+            ):
+                logger.info(
+                    "Realtime LLM fallback promoted to realtime_query: "
+                    f"prev_label={result.label}, prev_confidence={result.confidence}, "
+                    f"query={resolved[:80]}"
+                )
+                result = ClassificationResult(
+                    label="realtime_query",
+                    confidence=result.confidence,
+                    reason="general",
+                )
+
             logger.info(
                 f"LLM classification: label={result.label}, confidence={result.confidence}, "
                 f"reason={result.reason}, query={resolved[:50]}"
@@ -970,6 +996,20 @@ class ConversationNodes:
                 anchored_query = query
                 used_duck_fallback = False
 
+                # 检索短语 LLM 改写：把"我想了解一下今天成都堵不堵？"这类口语化原句
+                # 改写为搜索引擎友好的精炼短语（不依赖任何关键字 / 模板）。
+                # 失败/为空时保守回退到原 query，不会让现有行为变差。
+                # 通过 settings.realtime_query_search_rewrite_enabled 控制（可在 .env 关闭）。
+                if (
+                    state.get("is_realtime_query")
+                    and getattr(settings, "realtime_query_search_rewrite_enabled", False)
+                ):
+                    rewritten = await get_query_classifier().agen_search_query(
+                        query, hint=realtime_category
+                    )
+                    if rewritten:
+                        query = rewritten
+
                 # 实时类查询统一追加时间锚点（通用）：避免“今年/当前/最近”等相对时间漂移。
                 if state.get("is_realtime_query"):
                     anchored_query = build_time_anchored_query(query, now, policy)
@@ -1138,6 +1178,22 @@ class ConversationNodes:
             intent = state.get("intent")
             web_search_used = state.get("web_search_used", False)
 
+            # 通用"先验信息"注入：对于 web 资料天然不可靠的实时类（traffic 等），
+            # 即便 web_search 命中无关结果，也给 LLM 留一份"基于时段/星期"的合理估算，
+            # 避免 LLM 因资料无关而输出"无法回答"。当前仅 traffic 提供先验；
+            # 下游 prompt 由 build_generation_messages 读取 state["traffic_estimate"] 拼接，
+            # 不构成强约束（LLM 仍优先采用真实命中的 web 数据）。
+            if state.get("realtime_category") == "traffic" and not state.get("traffic_estimate"):
+                _now = datetime.now()
+                _lvl, _reason = _traffic_congestion_estimate(_now)
+                state["traffic_estimate"] = {
+                    "level": _lvl,
+                    "reason": _reason,
+                    "now_iso": _now.strftime("%Y-%m-%d %H:%M"),
+                    "weekday_zh": ["周一", "周二", "周三", "周四", "周五", "周六", "周日"][_now.weekday()],
+                    "weekday_en": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][_now.weekday()],
+                }
+
             # 噪声输入：使用预设的友好响应，不需要调用 LLM
             if intent == "noise":
                 # 从 sources 中获取预设的响应
@@ -1180,37 +1236,96 @@ class ConversationNodes:
                     )
                     return state
 
-            # 实时查询在“联网不可用/失败”时：返回统一提示语，避免模型臆测。
-            # 若仅是无足够结果（但无错误），继续走 LLM 流程，让模型基于已有上下文尽力作答。
-            if state.get("is_realtime_query") and not state.get("web_search_used", False):
+            # 实时查询：判定 web 召回是否"可信"，不可信时走 direct_text 兜底，
+            # 避免无关命中（如 Tavily 对 traffic 召回到汽车广告页）把小模型带偏成"无法判断"。
+            #
+            # 判定规则（通用框架）：
+            #   - web_search_used=False                                   → 不可信（联网未开/未走）
+            #   - web_search_error 非空                                   → 不可信（联网失败）
+            #   - 已知"web 数据源天然不准"的 category（当前：traffic）：  →
+            #     再看 web_search_results 的最高 score 是否低于
+            #     settings.realtime_traffic_min_web_score（默认 0.5）
+            if state.get("is_realtime_query"):
+                web_used = state.get("web_search_used", False)
                 err = state.get("web_search_error")
-                # 网络检索失败：返回固定提示
-                if err:
-                    direct = "当前网络检索不可用，暂时无法确认实时信息，请稍后重试。"
-                    state["direct_text_answer"] = direct
-                    state["streaming_llm"] = None
-                    state["streaming_messages"] = None
-                    state["streaming_type"] = "direct_text"
-                    state["confidence"] = 0.7
-                    state["final_answer"] = ""
-                    logger.info(
-                        "Streaming configured: type=direct_text, realtime_web_error"
+                category = state.get("realtime_category")
+
+                web_unreliable = (not web_used) or bool(err)
+                if not web_unreliable and category == "traffic":
+                    web_results = state.get("web_search_results") or []
+                    max_score = max(
+                        (float(r.get("score", 0.0) or 0.0) for r in web_results),
+                        default=0.0,
                     )
-                    return state
-                # 交通类：按时段给出拥堵预估
-                if state.get("realtime_category") == "traffic":
-                    lvl, reason = _traffic_congestion_estimate(datetime.now())
-                    direct = f"当前路况判断：{lvl}。依据：{reason}。"
-                    state["direct_text_answer"] = direct
-                    state["streaming_llm"] = None
-                    state["streaming_messages"] = None
-                    state["streaming_type"] = "direct_text"
-                    state["confidence"] = 0.68
-                    state["final_answer"] = ""
-                    logger.info(
-                        "Streaming configured: type=direct_text, realtime_traffic_estimate"
-                    )
-                    return state
+                    threshold = float(getattr(settings, "realtime_traffic_min_web_score", 0.5))
+                    if max_score < threshold:
+                        web_unreliable = True
+                        logger.info(
+                            f"Traffic web results below relevance threshold: "
+                            f"max_score={max_score:.3f} < {threshold}, fallback to local prior"
+                        )
+
+                if web_unreliable:
+                    # (A) 网络完全失败：固定提示
+                    if err and not web_used:
+                        direct = (
+                            "当前网络检索不可用，暂时无法确认实时信息，请稍后重试。"
+                            if state.get("prefer_zh_output", True)
+                            else "Real-time web retrieval is unavailable; please try again later."
+                        )
+                        state["direct_text_answer"] = direct
+                        state["streaming_llm"] = None
+                        state["streaming_messages"] = None
+                        state["streaming_type"] = "direct_text"
+                        state["confidence"] = 0.7
+                        state["final_answer"] = ""
+                        logger.info(
+                            "Streaming configured: type=direct_text, realtime_web_error"
+                        )
+                        return state
+
+                    # (B) 交通类：拼接完整的"时段先验"模板（等级 + 时间锚点 + 出行建议 + 推荐地图）
+                    #     模板对城市保持中性（不复述用户问题里的具体城市），保证不同城市通用。
+                    if category == "traffic":
+                        est = state.get("traffic_estimate") or {}
+                        if not est:
+                            _now = datetime.now()
+                            _lvl, _reason = _traffic_congestion_estimate(_now)
+                            est = {
+                                "level": _lvl,
+                                "reason": _reason,
+                                "now_iso": _now.strftime("%Y-%m-%d %H:%M"),
+                                "weekday_zh": ["周一", "周二", "周三", "周四", "周五", "周六", "周日"][_now.weekday()],
+                                "weekday_en": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][_now.weekday()],
+                            }
+                            state["traffic_estimate"] = est
+                        prefer_zh = bool(state.get("prefer_zh_output", True))
+                        if prefer_zh:
+                            direct = (
+                                f"今日整体路况判断：{est['level']}（依据：{est['reason']}）。\n"
+                                f"参考时间：{est['now_iso']}（{est['weekday_zh']}）。\n"
+                                "出行建议：建议错峰出行，避开早晚高峰主干道；可优先选择环线辅道或公共交通。\n"
+                                "精确实时数据请使用高德地图 / 百度地图查询。"
+                            )
+                        else:
+                            direct = (
+                                f"Today's overall traffic: {est['level']} (reason: {est['reason']}).\n"
+                                f"Reference time: {est['now_iso']} ({est['weekday_en']}).\n"
+                                "Tips: travel off-peak, avoid major arteries during rush hour; "
+                                "consider ring-road service lanes or public transit.\n"
+                                "For precise real-time data, please use Amap or Baidu Maps."
+                            )
+                        state["direct_text_answer"] = direct
+                        state["streaming_llm"] = None
+                        state["streaming_messages"] = None
+                        state["streaming_type"] = "direct_text"
+                        state["confidence"] = 0.7
+                        state["final_answer"] = ""
+                        logger.info(
+                            f"Streaming configured: type=direct_text, "
+                            f"realtime_traffic_estimate, prefer_zh={prefer_zh}"
+                        )
+                        return state
 
             # 计算置信度
             confidence = 0.5  # Base confidence

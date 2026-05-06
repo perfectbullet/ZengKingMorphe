@@ -432,6 +432,141 @@ class QueryClassifier:
                 reason=f"JSON解析失败: {str(e)[:20]}",
             )
 
+    # 二元校验提示词：只判“是否需要联网/最新信息”，不依赖任何关键字/词表。
+    # 用法说明：作为主分类器（aclassify）的兜底——主分类置信度不高时再问一次，
+    # 把 9 类细粒度分类退化成更稳定的 yes/no，本地小模型也能做对。
+    _REALTIME_VALIDATOR_PROMPT = """你是一个二元分类器。
+判断给定的用户问题是否**必须依赖最新/实时/会随时间变化的信息**才能给出正确答案。
+
+回答 yes 的判断要点（满足任意一条即可）：
+- 询问当下、今天、最近、目前、现在、本届、现任 等时间敏感状态；
+- 询问会随时间快速变化的领域：天气、新闻、市价、行情、汇率、路况、拥堵、赛况、政策动态、在任职务、最新事件等；
+- 用静态知识（数学/概念/历史/百科）无法回答的"当下情况"问句。
+
+回答 no 的判断要点（满足任意一条即可）：
+- 数学题、公式推导、定义解释；
+- 历史事实、稳定不变的百科常识；
+- 闲聊、问候、噪声；
+- 与时间状态无关的概念性问题。
+
+**只输出一个英文单词：yes 或 no。不要解释，不要标点，不要其它内容。**"""
+
+    async def aneed_realtime(self, query: str) -> bool:
+        """
+        二元校验：query 是否需要最新/实时信息？
+
+        设计要点：
+        - 仅做 yes/no 判定，比主分类器（9 类）更稳定，本地小模型也能给出可靠答案。
+        - 失败时返回 False（保守优先），确保异常不会让现有行为变差。
+        - 不写任何关键字/词典，纯 LLM 语义判断；扩展只需调整 prompt。
+
+        Returns:
+            True  → 需要联网/最新信息
+            False → 不需要 / 无法判定 / LLM 调用失败
+        """
+        truncated = (query or "").strip()
+        if not truncated:
+            return False
+        truncated = truncated[:300]
+        try:
+            llm = self.llm
+            if hasattr(self.llm, "with_config"):
+                llm = self.llm.with_config(temperature=0, max_tokens=4)
+            start_time = time.time()
+            response = await llm.ainvoke(
+                [
+                    {"role": "system", "content": self._REALTIME_VALIDATOR_PROMPT},
+                    {"role": "user", "content": truncated},
+                ]
+            )
+            duration = time.time() - start_time
+            text = (getattr(response, "content", None) or "").strip().lower()
+            # 容错：兼容 "yes." / "Yes\n" / "yes，需要" 等返回，仅看是否以 yes 开头。
+            decision = text.startswith("yes")
+            logger.info(
+                f"Realtime binary validator: decision={decision}, raw={text[:30]!r}, "
+                f"query={truncated[:50]}, duration={duration:.3f}s"
+            )
+            return decision
+        except Exception as e:
+            logger.warning(f"aneed_realtime failed: {e}", exc_info=True)
+            return False
+
+    # 检索短语改写提示词：把口语化原句改成"搜索引擎友好的精炼检索短语"。
+    # 设计原则：
+    # - 不维护任何业务关键词 / 城市 / 路名词典；让 LLM 从原文中自行提取实体。
+    # - 只输出短语本身，便于直接送给搜索引擎。
+    # - 与原句语言一致，避免污染输出语言判定。
+    _SEARCH_QUERY_REWRITER_PROMPT = """你是一个搜索引擎查询改写器。
+将用户的自然语言提问改写为**精炼、面向搜索引擎的检索短语**，方便检索到最新、最相关的网页。
+
+规则：
+1. 保留必要实体：地点、机构、人物、时间范围、领域、主题等；
+2. 删除"我想了解一下"、"请问"、"麻烦"、"帮我看看"等口语化前缀、礼貌语、语气词；
+3. 删除问号、句号、感叹号；
+4. 仅当用户问句本身就需要时序/即时性时，加入"实时""最新""今日""官方"等通用词；
+5. 输出长度控制在 3-15 个汉字 / 单词；
+6. 与用户问题使用同一种语言；
+7. 不要给出回答、不要解释、不要前缀。
+
+只输出改写后的查询短语本身。"""
+
+    async def agen_search_query(self, query: str, hint: str = "") -> str | None:
+        """
+        把用户问句改写为搜索引擎友好的检索短语。
+
+        设计要点：
+        - 通用：不针对单一场景写模板，LLM 自行从原文提取实体；
+        - 失败保守：空输入 / LLM 异常 / 输出与原句相同 → 返回 None，调用方回退原 query；
+        - 与 aneed_realtime / aresolve_standalone_query 同级，复用 self.llm，不引入新连接。
+
+        Args:
+            query: 用户原始问句
+            hint:  可选的场景提示（例如 "traffic" / "weather"）；仅作弱提示，
+                   不会替代 LLM 自身的语义判断，避免把模板硬编码进 prompt。
+
+        Returns:
+            改写后的检索短语；无法改写时返回 None。
+        """
+        truncated = (query or "").strip()
+        if not truncated:
+            return None
+        truncated = truncated[:300]
+        user_prompt = (
+            f"用户问题：{truncated}"
+            + (f"\n场景类型（仅作参考，不必出现在结果中）：{hint}" if hint else "")
+            + "\n\n改写后的搜索短语："
+        )
+        try:
+            llm = self.llm
+            if hasattr(self.llm, "with_config"):
+                llm = self.llm.with_config(temperature=0, max_tokens=64)
+            start_time = time.time()
+            response = await llm.ainvoke(
+                [
+                    {"role": "system", "content": self._SEARCH_QUERY_REWRITER_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ]
+            )
+            duration = time.time() - start_time
+            text = (getattr(response, "content", None) or "").strip()
+            # 容错清洗：取首行 + 去引号 + 去末尾标点
+            text = text.split("\n", 1)[0].strip().strip("「」『』\"'`").strip("。.!?！？")
+            # 同句保护：与原句对清洗规则一致后再比较；
+            # 仅去末尾标点和首尾空白，避免"？"等问句末尾标点导致的伪差异。
+            normalized_input = truncated.strip().strip("。.!?！？")
+            if not text or text == normalized_input:
+                return None
+            text = text[:200]
+            logger.info(
+                f"Search query rewritten: original={truncated[:60]!r}, "
+                f"rewritten={text[:80]!r}, hint={hint!r}, duration={duration:.3f}s"
+            )
+            return text
+        except Exception as e:
+            logger.warning(f"agen_search_query failed: {e}", exc_info=True)
+            return None
+
     async def aclassify(self, query: str, context_query: str | None = None) -> ClassificationResult:
         """
         异步分类单个查询。

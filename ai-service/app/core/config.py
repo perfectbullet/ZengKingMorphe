@@ -113,7 +113,9 @@ class Settings(BaseSettings):
     web_search_max_results: int = Field(default=5, ge=1, le=10)
     web_search_only_for_realtime: bool = Field(default=False)
     realtime_query_enabled: bool = Field(default=True)
-    realtime_query_llm_fallback_enabled: bool = Field(default=False)
+    realtime_query_llm_fallback_enabled: bool = Field(default=True)
+    realtime_query_search_rewrite_enabled: bool = Field(default=True)
+    realtime_traffic_min_web_score: float = Field(default=0.5, ge=0.0, le=1.0)
 
     # MongoDB Configuration
     mongodb_uri: str = Field(default="mongodb://localhost:27017/digital_employee")

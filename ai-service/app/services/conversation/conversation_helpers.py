@@ -367,14 +367,15 @@ def get_source_indicator(state: ConversationState) -> str:
     return ""
 
 
-def _build_conversation_history(state: ConversationState, max_messages: int = 10) -> List:
+def _build_conversation_history(state: ConversationState, max_messages: int = 12) -> List:
     """
     Build conversation history messages from state.
 
     Args:
         state: Current conversation state
         max_messages: Maximum number of chat messages (user+assistant) to include.
-            默认 10 条≈5 轮，与 session 侧最近上下文窗口对齐，避免多轮节日追问时丢最近用户句。
+            默认 12 条 = 最近 6 轮（user+assistant 对），与产品要求"固定保留最近 6 轮上下文"对齐，
+            既保障多轮追问的连贯性（不丢最近用户句），又限制窗口大小避免无关旧主题干扰。
 
     Returns:
         List of Message objects from conversation history
@@ -676,17 +677,39 @@ User question:
 {effective_query}
 """
         elif realtime_category == "traffic":
+            # 先验信息（由 generate_answer 节点注入）：基于当前时段/星期的拥堵估算 + 时间锚点。
+            # web 资料命中"今日具体路况"时优先用真实数据；否则使用先验给出合理估算，避免"无法回答"。
+            _est = state.get("traffic_estimate") or {}
+            _est_level = _est.get("level", "")
+            _est_reason = _est.get("reason", "")
+            _est_now = _est.get("now_iso", "")
+            _est_weekday_zh = _est.get("weekday_zh", "")
+            _est_weekday_en = _est.get("weekday_en", "")
+            _prior_zh = (
+                f"\n时段先验（系统本地推算，供资料缺失时兜底使用）：\n"
+                f"- 当前时间：{_est_now}（{_est_weekday_zh}）\n"
+                f"- 时段拥堵估算：{_est_level}（{_est_reason}）\n"
+                if _est_level else ""
+            )
+            _prior_en = (
+                f"\nTime-of-day prior (locally derived; use when web context is insufficient):\n"
+                f"- Current time: {_est_now} ({_est_weekday_en})\n"
+                f"- Estimated congestion level: {_est_level} ({_est_reason})\n"
+                if _est_level else ""
+            )
             requirements = f"""**重要提示**：用户询问的是路况/拥堵信息，系统已通过网络搜索获取了相关资料。
-
+{_prior_zh}
 回答要求：
-1. **必须基于下方提供的网络资料回答**
-2. **优先判断资料是否包含“今天/当前/更新时间/日期”线索**：若包含，则你必须给出结论性判断（例如“整体偏堵/较通畅/高峰更明显”）并简要说明依据（如车流量增加、交警提示、高峰提前等）
-3. **禁止把与今天无关的历史文章当成“今天路况”**：只能把它作为“通常/容易拥堵时段或路段”的补充背景
-4. **关于“假期/节日/放假”之类的判断**：除非网络资料中明确给出了具体日期且能对应到今天，并明确说明“假期/放假/节日”，否则禁止把“假期第一天/节假日”等当作今天事实写进结论
-5. **禁止在回答中出现“假期/节假日/放假/长假/假期第一天”等字样**，除非满足第4条的“同一天日期+明确假期”条件
-6. 若资料完全缺少任何时间线索或与用户问题不相关，才可以说明无法确定；否则不要用“无法确认”来回避结论
-7. 保持{tone_desc}的语气风格
-8. **禁止：信息来源、网站链接、"信息来源"字样**
+1. **优先采用网络资料中明确指向"今日 + 用户询问城市"的具体路况数据**（如出现具体路段、时间戳、官方平台数据等）；
+2. **若网络资料没有覆盖到用户询问城市的今日具体路况**：禁止说"网络资料中没有相关信息"或"无法判断"等回避语，改为：
+   (a) 基于"时段先验"给出整体拥堵等级判断（轻度/中等/较拥堵）及简要依据（早晚高峰/平峰/节假日/周末等）；
+   (b) 给出 1-2 条可执行的通用出行建议（如错峰、避开高峰路段、选择公共交通）；
+   (c) 末尾推荐用户使用高德地图 / 百度地图等专业实时路况服务获取精确数据；
+3. **禁止把与"今日 + 询问城市"无关的网页内容（如汽车广告快讯、历史文章）当作今日路况依据**；只能作为"通常拥堵规律"的弱背景；
+4. **关于"假期/节日/放假"之类的判断**：除非网络资料中明确给出了具体日期且能对应到今天，并明确说明"假期/放假/节日"，否则禁止把"假期第一天/节假日"等当作今天事实写进结论；
+5. **禁止在回答中出现"假期/节假日/放假/长假/假期第一天"等字样**，除非满足第 4 条的"同一天日期+明确假期"条件；
+6. 保持{tone_desc}的语气风格；
+7. **禁止：信息来源、网站链接、"信息来源"字样**。
 
 上下文信息{source_indicator}：
 {context_text}
@@ -695,15 +718,18 @@ User question:
 {effective_query}
 """
             if not prefer_zh_output:
-                requirements = f"""IMPORTANT: The user asks about traffic/congestion. The system has retrieved relevant web results.
-
+                requirements = f"""IMPORTANT: The user asks about traffic/congestion. The system has retrieved web results.
+{_prior_en}
 Requirements:
-1. Answer strictly based on the web context below
-2. First check whether the context contains clear \"today/now/update time/date\" signals; if yes, you MUST provide a conclusion (e.g., \"likely congested\" / \"smooth\" / \"peak hours worse\") and briefly justify it (traffic volume increase, police advisory, peak starts earlier, etc.)
-3. Do NOT treat unrelated historical articles as today's traffic; they can only be used as general background
-4. You may say \"cannot determine\" ONLY if the context has no time signals or is irrelevant; otherwise do not evade giving a conclusion
-5. Keep a {tone_desc} tone
-6. Do NOT include sources, links, or the words \"source\" / \"references\"
+1. Prefer concrete \"today + the user's city\" traffic data from the web context (specific roads, timestamps, official platforms);
+2. If the web context does NOT cover today's concrete traffic for the asked city, DO NOT say \"the context has no info\" or \"cannot determine\"; instead:
+   (a) Give an overall congestion level using the time-of-day prior above (light / moderate / heavy) with a brief reason (rush hour / off-peak / weekend / holiday etc.);
+   (b) Provide 1-2 practical, generic travel tips (avoid peak windows, alternative roads, public transit, etc.);
+   (c) End by recommending the user check professional real-time map services (Amap / Baidu Maps) for precise data;
+3. Do NOT treat unrelated content (auto-industry news, historical articles) as today's traffic; only use as weak background;
+4. Do NOT mention \"holiday / day-off / public holiday\" unless the web context explicitly states the date matches today AND the holiday;
+5. Keep a {tone_desc} tone;
+6. Do NOT include sources, links, or the words \"source\" / \"references\".
 
 Context {source_indicator}:
 {context_text}
@@ -808,7 +834,7 @@ User question:
         system_prompt = "Answer in English only.\n\n" + system_prompt
 
     messages = [SystemMessage(content=system_prompt)]
-    messages.extend(_build_conversation_history(state, max_messages=10))
+    messages.extend(_build_conversation_history(state, max_messages=12))
     if prefer_zh_output:
         messages.append(HumanMessage(content=effective_query))
     else:
