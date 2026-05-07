@@ -31,7 +31,7 @@ from app.utils.sentence_buffer import SentenceBuffer, has_latex_formula
 from app.utils.think_tag_buffer import ThinkTagBuffer
 from app.utils.tts_formatter import strip_markdown_for_tts
 from app.utils.text_mapping import map_english_to_chinese
-from app.utils.common import sanitize_filename
+from app.utils.common import sanitize_filename, detect_dominant_language
 from app.services.raganything_wrapper import get_raganything_stream
 logger = get_logger(__name__)
 
@@ -85,16 +85,59 @@ def _build_history_prefix_for_query(
     prefer_zh_output: bool,
     max_turns: int = 6,
     max_chars: int = 1200,
+    context_dependence: Optional[str] = None,
 ) -> str:
     """
     为 RAG 查询构建精简对话历史前缀，支持多轮上下文承接
     用于处理指代、追问、纠错类需求
+
+    语言一致性过滤（双向对称）：
+       “本轮输出语言只跟当前问句的语言相关”——若历史里夹杂了与本轮不同语言的
+       消息（典型场景：上一轮中文路况问答 → 本轮英文提问），把这段异种语言原文
+       塞给小模型（qwen2.5:7b 等）会显著拉偏“该用什么语言回答”的判断，导致出现
+       “英文问、混合中英文答”这类污染。这里在构造历史前缀时，统一丢弃主导语言
+       与 ``prefer_zh_output`` 不一致的消息；纯数字/标点等无法判定语言的消息保留。
+ 
+    动态上下文记忆：
+       当上游 classify_query_type 把本轮判定为 ``unrelated``（与历史无关）时，
+       统一返回空字符串——RAG 检索与最终生成都不再看到任何历史前缀，等价于
+       "全新问题"。这是"动态上下文记忆"规则的 RAG 路径落地点。
     """
-    if not context_messages:
+    if context_dependence == "unrelated":
+        logger.info(
+            "[history_prefix] dropped due to dynamic context memory: "
+            "context_dependence=unrelated"
+        )
         return ""
 
-    # 取最近 N 轮对话
-    recent = context_messages[-max_turns:]
+    if not context_messages:
+        return ""
+    
+    target_lang = "zh" if prefer_zh_output else "en"
+    filtered: list = []
+    skipped = 0
+    for m in context_messages:
+        content = (m.get("content") or "").strip()
+        if not content:
+            continue
+        msg_lang = detect_dominant_language(content)
+        # 主导语言可识别且与本轮目标语言不一致 → 丢弃，防止语言污染。
+        # 不可识别（纯数字/符号/空）→ 保留。
+        if msg_lang and msg_lang != target_lang:
+            skipped += 1
+            continue
+        filtered.append(m)
+ 
+    if skipped > 0:
+        logger.info(
+            f"[history_prefix] language filter: target={target_lang}, "
+            f"skipped {skipped} cross-lang msg(s), kept {len(filtered)}"
+        )
+
+    if not filtered:
+        return ""
+ 
+    recent = filtered[-max_turns:]
     lines: list[str] = []
     for m in recent:
         role = (m.get("role") or "").strip()
@@ -417,6 +460,10 @@ def _build_initial_state(request: OpenAIChatRequest, session_id: str, user_query
         "classification_confidence": None,
         "classification_reason": None,
         "target_year": None,
+        # 动态上下文记忆：classify_query_type 节点会改写为 "related"/"unrelated"
+        "context_dependence": None,
+        "context_dependence_reason": None,
+
     }
 
 
@@ -779,21 +826,38 @@ async def generate_openai_stream_v1(
             # 根据 streaming_type 选择不同的流式输出方式
             if streaming_type == "raganything_stream":
                 # RAGAnything 流式输出
-                query = current_state.get("raganything_query", current_state.get("user_query", ""))
-                # 按输入语言追加回答指令，避免中英文不匹配
-                if prefer_zh_output:
-                    query = f"请用中文回答。\n\n{query}"
-                else:
-                    query = f"Please answer in English.\n\n{query}"
+                raw_query = current_state.get("raganything_query", current_state.get("user_query", "")) 
 
-                # 拼接最近对话历史，解决“多轮失忆/无法承接/指代词无法回指”
+                # 拼接最近对话历史（已按本轮语言过滤掉异种语言历史，避免语言污染）
+                # 动态上下文记忆：把上游 classify_query_type 的判定结果一起传进来，
+                # 当本轮与历史无关时直接拿到空前缀，等价于"全新对话"走 RAG。
                 context_messages = (current_state.get("context") or {}).get("messages") or []
                 history_prefix = _build_history_prefix_for_query(
                     context_messages=context_messages,
                     prefer_zh_output=prefer_zh_output,
+                    context_dependence=current_state.get("context_dependence"),
                 )
-                if history_prefix:
-                    query = history_prefix + query
+                # 语言锁定（三道防线，针对 qwen2.5:7b 这类对中文有偏向的模型）：
+                # 1) history_prefix 之后立刻给出本轮语言指令；
+                # 2) 在 raw_query 前再次重申；
+                # 3) 在 raw_query 之后追加最终强约束（利用 LLM 的 recency bias）。
+                # 这是针对“同一会话里中英文交错切换时，前一轮语言污染本轮输出”的兜底。
+                if prefer_zh_output:
+                    lang_lead = "本轮请使用简体中文回答以下问题。\n\n"
+                    lang_tail = (
+                        "\n\n[语言约束] 上文“对话历史”仅作上下文参考；"
+                        "本次回复必须完整使用简体中文，不要输出英文段落或中英混合句子。"
+                    )
+                else:
+                    lang_lead = "Please answer the following question in English only.\n\n"
+                    lang_tail = (
+                        "\n\n[LANGUAGE CONSTRAINT] The conversation history above is only "
+                        "for context reference. Your reply MUST be written entirely in English. "
+                        "Do not output any Chinese characters or mixed Chinese-English sentences."
+                    )
+
+                query = (history_prefix or "") + lang_lead + raw_query + lang_tail
+
                 mode = current_state.get("raganything_mode", "hybrid")
                 logger.info(f"Using RAGAnything stream | query={query[:50]} | mode={mode}")
                 async for chunk in get_raganything_stream(query, mode=mode, prefer_zh_output=prefer_zh_output):

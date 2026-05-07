@@ -167,6 +167,14 @@ class Settings(BaseSettings):
     relevance_threshold: float = Field(default=0.6, ge=0.0, le=1.0)
     confidence_threshold: float = Field(default=0.7, ge=0.0, le=1.0)
 
+    # 动态上下文记忆：判定本轮问题是否依赖历史对话
+    # - True  → 走 LLM 判定，无关历史问题不注入上下文，相关问题保留完整上下文
+    # - False → 关闭判定，保持旧行为（始终注入上下文）
+    dynamic_context_memory_enabled: bool = Field(
+        default=True,
+        description="Enable dynamic context memory: drop history when current query is unrelated"
+    )
+
     # Document Processing Configuration
     chunk_size: int = Field(
         default=256,

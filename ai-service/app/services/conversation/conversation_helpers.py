@@ -24,6 +24,35 @@ from prompts.prompts import GEOMETRY_FORMULA_BOOK, MATH_SYSTEM_PROMPT, PHI4_SIMP
 logger = get_logger(__name__)
 
 
+def resolve_prefer_zh_output(state: ConversationState) -> bool:
+    """
+    解析本轮输出语言偏好（True=中文，False=英文）。
+
+    设计要点：
+    - **优先**取 ``state["prefer_zh_output"]``：调用方（chat_stream_v1）已根据
+      用户问句语言显式设置，是最权威的来源；
+    - **兜底**当 state 中缺失或为 None 时（典型场景：LangGraph 1.x 按 TypedDict
+      schema 严格过滤掉未声明字段时；或老调用方未塞入此字段时），按
+      ``user_query`` 的主导语言现场推断，**不再无脑默认中文**——这是过去
+      “英文问、中英文混合答”的根因之一；
+    - **最后**仍兜底为 True（中文）以兼容空 query / 纯数字符号问句的旧行为。
+
+    任何工作流节点在拼 system prompt / 选模板前都应通过本函数取值，
+    而不是直接 ``state.get("prefer_zh_output", True)`` 静默吞掉异常状态。
+    """
+    explicit = state.get("prefer_zh_output")
+    if explicit is not None:
+        return bool(explicit)
+    user_query = (state.get("user_query") or "").strip()
+    if user_query:
+        lang = detect_dominant_language(user_query)
+        if lang == "en":
+            return False
+        if lang == "zh":
+            return True
+    return True
+
+
 def _build_realtime_temporal_guardrail(prefer_zh_output: bool) -> str:
     """通用时间一致性约束：统一时间锚点，避免混入冲突年份/时间线。"""
     now = datetime.now()
@@ -310,7 +339,8 @@ def build_context_text(state: ConversationState) -> str:
     Returns:
         Formatted context string for LLM prompt
     """
-    lang = "zh" if state.get("prefer_zh_output", True) else "en"
+    prefer_zh_output = resolve_prefer_zh_output(state)
+    lang = "zh" if prefer_zh_output else "en"
     L = {k: v[lang] for k, v in _CONTEXT_LABELS_I18N.items()}
 
     if state.get("compressed_context"):
@@ -322,17 +352,32 @@ def build_context_text(state: ConversationState) -> str:
 
     web_results = state.get("web_search_results", [])
     if web_results and state.get("web_search_used", False):
-        for i, web_result in enumerate(web_results[:3], 1):
+        # 语言一致性过滤（仅对英文输出生效）：开了海外代理后 Tavily 易返回大段
+        # 日文/中文资料（按出口 IP 推断地理偏好），这些 CJK 段会污染英文输出。
+        # 中文方向暂不过滤——避免误伤英文权威源（论文/Reddit 等）。
+        # 不依赖关键字 / 词典，复用基于 Unicode 块的 detect_dominant_language。
+        kept = 0
+        for web_result in web_results:
+            if kept >= 3:
+                break
+            title = str(web_result.get("title", "") or "")
             content = str(web_result.get("content", "") or "")
+            if not prefer_zh_output:
+                combined_lang = detect_dominant_language((title + " " + content)[:1500])
+                if combined_lang == "zh":
+                    logger.info(
+                        f"Web result filtered out for English output (CJK dominant): "
+                        f"title={title[:60]!r}, url={web_result.get('url', '')!r}"
+                    )
+                    continue
             # 网络文本截断：超过阈值取头+尾，否则取头部
             if len(content) > 2400:
-                content_excerpt = (
-                    content[:1200] + "\n...\n" + content[-800:]
-                )
+                content_excerpt = content[:1200] + "\n...\n" + content[-800:]
             else:
                 content_excerpt = content[:1200]
+            kept += 1
             context_parts.append(
-                f"{L['web_header'].format(i=i)}\n{L['web_title']} {web_result.get('title', '')}\n"
+                f"{L['web_header'].format(i=kept)}\n{L['web_title']} {title}\n"
                 f"{L['web_content']} {content_excerpt}\n"
                 f"{L['web_source']} {web_result.get('url', '')}"
             )
@@ -359,7 +404,7 @@ def get_source_indicator(state: ConversationState) -> str:
     Returns:
         Source indicator string（带括号）；无来源时返回空串。
     """
-    lang = "zh" if state.get("prefer_zh_output", True) else "en"
+    lang = "zh" if resolve_prefer_zh_output(state) else "en"
     if state.get("web_search_used", False):
         return _SOURCE_INDICATOR_I18N["web"][lang]
     if state.get("retrieved_docs"):
@@ -377,15 +422,52 @@ def _build_conversation_history(state: ConversationState, max_messages: int = 12
             默认 12 条 = 最近 6 轮（user+assistant 对），与产品要求"固定保留最近 6 轮上下文"对齐，
             既保障多轮追问的连贯性（不丢最近用户句），又限制窗口大小避免无关旧主题干扰。
 
+    语言一致性过滤（双向对称）：
+        “本轮输出语言只跟当前问句的语言相关”。反复使用同一 session 来回切换中英文
+        测试时，历史会积累异种语言消息；把这些消息原样注入给 LLM，会和 web context、
+        员工角色描述等其他语料叠加，让小模型（如 qwen2.5:7b）在本轮问句下飘移到错
+        误语言（典型表现：“英文问、中英文混合答”）。
+        这里对两个方向都启用过滤——主导语言与本轮目标语言不一致的历史消息一律
+        丢弃；纯数字/标点等无法判定语言的消息保留。
+
+    动态上下文记忆（与上面 classify_query_type 节点联动）：
+        当 ``state["context_dependence"] == "unrelated"`` 时，本轮问句被判定与历史
+        无关（指代/承接/话题延续都不成立），此时返回空列表——LLM 接收到的就只是
+        本轮问句 + system prompt，等价于"全新对话"。这是"动态上下文记忆"规则的
+        核心落地点：与历史相关 → 注入完整历史；无关 → 完全不注入。
+
     Returns:
         List of Message objects from conversation history
     """
     messages = []
+    # 动态上下文记忆短路：本轮与历史无关 → 一律不注入历史。
+    # 用 explicit "unrelated" 比较而非 truthy 判断，向后兼容老调用方（state 中无该字段时退化为旧行为）。
+    if state.get("context_dependence") == "unrelated":
+        logger.info(
+            "Conversation history skipped due to dynamic context memory: "
+            f"reason={state.get('context_dependence_reason')!r}, "
+            f"query={(state.get('user_query') or '')[:60]!r}"
+        )
+        return messages
+    prefer_zh = resolve_prefer_zh_output(state)
+    target_lang = "zh" if prefer_zh else "en"
+    skipped = 0
     for msg in state.get("context", {}).get("messages", [])[-max_messages:]:
+        content = msg.get("content", "") or ""
+        msg_lang = detect_dominant_language(content)
+        # 主导语言可识别且与本轮目标语言不一致 → 丢弃；不可识别（空/纯数字/符号）→ 保留。
+        if msg_lang and msg_lang != target_lang:
+            skipped += 1
+            continue
         if msg.get("role") == "user":
-            messages.append(HumanMessage(content=msg.get("content", "")))
+            messages.append(HumanMessage(content=content))
         elif msg.get("role") == "assistant":
-            messages.append(AIMessage(content=msg.get("content", "")))
+            messages.append(AIMessage(content=content))
+    if skipped > 0:
+        logger.info(
+            f"Conversation history filtered for {target_lang.upper()} output: "
+            f"skipped {skipped} cross-lang msg(s), kept {len(messages)}"
+        )
     return messages
 
 
@@ -459,7 +541,7 @@ def build_greeting_messages(
 {state["user_query"]}
 """
 
-    prefer_zh_output = state.get("prefer_zh_output", True)
+    prefer_zh_output = resolve_prefer_zh_output(state)
     messages = [SystemMessage(content=system_prompt)]
     messages.extend(_build_conversation_history(state, max_messages=6))
     # 按语言追加提问：英文提问强制要求英文回复
@@ -493,7 +575,7 @@ def _select_llm_facing_query(state: ConversationState) -> str:
     if not rewritten or rewritten == user_query:
         return user_query or rewritten
 
-    expected_lang = "zh" if state.get("prefer_zh_output", True) else "en"
+    expected_lang = "zh" if resolve_prefer_zh_output(state) else "en"
     rewritten_lang = detect_dominant_language(rewritten)
     if rewritten_lang and rewritten_lang != expected_lang:
         logger.info(
@@ -533,10 +615,20 @@ def build_generation_messages(state: ConversationState) -> List:
     greeting = employee_config.get("greeting", "您好")
     name = employee_config.get("name", "AI助手")
     description = employee_config.get("description", "专业的AI助手")
+    # 提前一次性解析输出语言偏好，避免下游各处 state.get(..., True) 静默走中文兜底。
+    prefer_zh_output = resolve_prefer_zh_output(state)
+    # base_prompt 字段语言守门：当目标输出是英文，但员工配置 (name/description)
+    # 是中文（典型客服场景），直接填入英文模板会让 system prompt 混入大段 CJK，
+    # 进而拉低 LLM 对"输出英文"的服从度。这里用通用英文占位符替代，保留"员工
+    # 角色"概念但去除语言污染。中文输出方向不动（中文配置→中文模板天然一致）。
+    if not prefer_zh_output:
+        if detect_dominant_language(name) == "zh":
+            name = "the assistant"
+        if detect_dominant_language(description) == "zh":
+            description = "A helpful AI assistant."
 
     context_text = build_context_text(state)
     source_indicator = get_source_indicator(state)
-    prefer_zh_output = state.get("prefer_zh_output", True)
     # 人格描述按语言本地化，避免英文 system prompt 中混入中文短语诱导模型用中文回答。
     tone_desc, style_desc, formality_desc = get_personality_description(
         personality, prefer_zh_output=prefer_zh_output
@@ -830,15 +922,65 @@ User question:
                 )
 
     system_prompt = base_prompt + "\n" + system_time_context + "\n\n" + requirements
+    # 语言隔离声明（紧贴 user 消息的最后一段 system 文本）：
+    # 当 web context / 历史对话 / 角色描述 中出现非目标语言（如开了海外代理后
+    # Tavily 返回大段日文资料），仅靠 user message 末尾的语言锁权重不足以
+    # 抵消 system 里的语料密度，需要在 system 末尾再补一道明确指令。
+    # 改动 prompt-only，不动数据流。
     if not prefer_zh_output:
-        system_prompt = "Answer in English only.\n\n" + system_prompt
+        system_prompt = (
+            "Answer in English only.\n\n"
+            + system_prompt
+            + "\n\n[FINAL LANGUAGE CONSTRAINT] Regardless of the language used in the "
+            "web context, chat history, or role description above, your final answer "
+            "MUST be written entirely in English. Do not output any Chinese / Japanese / "
+            "other CJK characters. Treat non-English text in the context as reference "
+            "information only — translate any key facts you cite into English."
+        )
+    else:
+        system_prompt = (
+            system_prompt
+            + "\n\n[最终语言约束] 无论上文资料、历史对话或角色描述中出现何种语言，"
+            "你的最终回答必须完整使用简体中文。如需引用上文资料中的非中文要点，"
+            "请将其翻译为简体中文后再使用，不要直接照搬原文语言。"
+        )
 
     messages = [SystemMessage(content=system_prompt)]
     messages.extend(_build_conversation_history(state, max_messages=12))
+    # 语言锁定（最后一道墙）：放在 user 问句之后，利用 LLM 的 recency bias，
+    # 抵消"base_prompt 中的员工配置中文字段 + 历史对话语言 + web context 异种语言"
+    # 等多重稀释源。问句前置的"Please answer in English only."权重不够，
+    # 需要在最贴近模型生成位置再加一遍。
     if prefer_zh_output:
-        messages.append(HumanMessage(content=effective_query))
+        zh_lock = (
+            "\n\n请使用简体中文回答。"
+            "若上文资料/历史对话中含有其它语言，仅作为信息参考，"
+            "你的最终回答必须是简体中文。"
+        )
+        messages.append(HumanMessage(content=effective_query + zh_lock))
     else:
-        messages.append(HumanMessage(content=f"Please answer in English only.\n\n{effective_query}"))
+        en_lock = (
+            "\n\nIMPORTANT: Reply strictly in English. "
+            "Do not output any Chinese characters at all. "
+            "If the context or chat history contains non-English content, "
+            "treat it only as reference; your final answer must be in English."
+        )
+        messages.append(HumanMessage(content=effective_query + en_lock))
+
+    # 汇总日志：方便诊断"语言锁是否真的把 CJK 清出 LLM 输入"。
+    # 当 prefer_zh_output=False（英文输出）但 system 仍含较多 CJK 字符，
+    # 说明还有未识别的污染源。生产环境可通过日志级别关闭。
+    try:
+        sys_text = messages[0].content
+        cjk_in_sys = sum(1 for ch in sys_text if "\u4e00" <= ch <= "\u9fff")
+        logger.info(
+            f"build_generation_messages: prefer_zh={prefer_zh_output}, "
+            f"history_msgs={len(messages) - 2}, system_chars={len(sys_text)}, "
+            f"system_cjk_chars={cjk_in_sys}, "
+            f"effective_query={effective_query[:60]!r}"
+        )
+    except Exception:
+        pass
 
     return messages
 

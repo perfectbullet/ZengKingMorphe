@@ -25,7 +25,7 @@ from raganything.utils import (
     RetryConfig,
     ProgressMessage,
 )
-from raganything.query_prompts import get_chinese_query_prompt
+from raganything.query_prompts import get_chinese_query_prompt, get_english_query_prompt
 
 logger = get_logger(__name__)
 _raganything_instance = None
@@ -468,18 +468,25 @@ async def get_raganything_stream(
             - {"type": "error", "content": str}: 错误信息
     """
     rag = await get_raganything_instance()
-    
-    # 中英文提示词适配：中文提问用中文prompt，英文提问用英文prompt
-    system_prompt = (
-        get_chinese_query_prompt()
-        if prefer_zh_output
-        else (
-            "You are a helpful assistant.\n"
-            "Answer the user's question in English.\n"
-            "Use the retrieved information when relevant, and do not invent citations or links.\n"
-            "Do not include a 'References' section.\n"
+
+    # 中英文提示词适配：使用 raganything 自带的中英 RAG 模板，保证 system prompt 与
+    # 本轮目标语言完全一致（包括 ---Role--- / ---Context--- 段落标题），避免英文
+    # 方向用一段过短的英文 system prompt 时 RAG 召回的中文 context_data 反过来主导
+    # 模型的输出语言。
+    if prefer_zh_output:
+        system_prompt = get_chinese_query_prompt()
+    else:
+        # 在英文 RAG 模板上补一行强约束：召回内容里若出现中文，仅作信息参考，
+        # 最终回答必须 100% 英文。这条约束直接拼到 {user_prompt} 占位符位置。
+        base_en_prompt = get_english_query_prompt()
+        en_lang_constraint = (
+            "Answer strictly in English. If the retrieved context contains "
+            "Chinese or other CJK text, treat it only as reference — translate "
+            "any key facts you cite into English. Do not output any Chinese "
+            "characters or mixed Chinese-English sentences. Do not include a "
+            "'References' section."
         )
-    )
+        system_prompt = base_en_prompt.replace("{user_prompt}", en_lang_constraint)
 
     async for chunk in rag.aquery_stream_with_sources(
         query,

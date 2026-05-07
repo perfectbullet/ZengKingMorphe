@@ -167,3 +167,14 @@ class ConversationState(TypedDict):
     classification_confidence: Optional[str]  # 置信度 (high/medium/low)
     classification_reason: Optional[str]  # 分类理由
     target_year: Optional[int]  # 目标年份：今年/明年/去年解析后的年份
+    # 动态上下文记忆：本轮问题与历史对话是否相关
+    # - "related"   → 与历史相关（指代承接/话题延续/前文关联），下游需注入完整上下文
+    # - "unrelated" → 与历史无关（全新话题），下游一律不注入历史，按全新问题处理
+    # - None        → 尚未判定（默认）；首轮无历史时也可保持 None 表示无上下文可用
+    context_dependence: Optional[str]
+    context_dependence_reason: Optional[str]  # 判定来源：no_history / llm_yes / llm_no / fallback / disabled
+    # 输出语言偏好（True=中文，False=英文）。
+    # 注意：必须在 TypedDict 中声明，否则 LangGraph 1.x 在执行节点前会按 schema
+    # 过滤掉未声明字段，导致下游读到空值后 fallback 到默认中文，出现
+    # “英文问、中英文混合答”这类语言飘移 Bug。设为 Optional 兼容初始未设置场景。
+    prefer_zh_output: Optional[bool]

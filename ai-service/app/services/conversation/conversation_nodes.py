@@ -46,6 +46,7 @@ from app.services.conversation.conversation_helpers import (
     heuristic_complexity,
     build_generation_messages,
     build_math_generation_messages,
+    resolve_prefer_zh_output,
     resolve_target_year_from_query,
 )
 from app.services.calendar_time_resolver import calendar_direct_text_answer
@@ -54,6 +55,7 @@ from app.services.web_search_recency import (
     build_time_anchored_query,
     filter_and_sort_by_recency,
 )
+from app.utils.common import has_language_drift
 
 logger = get_logger(__name__)
 
@@ -572,9 +574,41 @@ class ConversationNodes:
                 and original_ctx_result.confidence == "high"
                 and len(query) >= 8
             )
+
+            # 3.5 动态上下文相关性判定（无关 → 不消歧、不改写、下游不注入历史）
+            # 设计要点：
+            # - 仅当历史非空、且全局开关启用时调用 LLM；
+            # - 无关时直接令 resolved=query，跳过消歧；同时设置 state["context_dependence"]="unrelated"
+            #   供下游 history-builder 判断是否注入；
+            # - 相关时延续旧逻辑（消歧/改写）；
+            # - 失败/不启用时退化为"相关"（保持原有行为，向后兼容）。
+            dynamic_ctx_enabled = bool(getattr(settings, "dynamic_context_memory_enabled", True))
+            context_dependence = "related"
+            ctx_reason = "default"
+            if not dynamic_ctx_enabled:
+                ctx_reason = "disabled"
+            elif not dialog_text.strip():
+                # 无历史就没有"相关"可言；标记为 unrelated，下游一律不去拼历史。
+                context_dependence = "unrelated"
+                ctx_reason = "no_history"
+            else:
+                is_related, judge_reason = await classifier.aclassify_context_dependence(
+                    query, dialog_text
+                )
+                context_dependence = "related" if is_related else "unrelated"
+                ctx_reason = judge_reason
+            state["context_dependence"] = context_dependence
+            state["context_dependence_reason"] = ctx_reason
+            logger.info(
+                f"Dynamic context memory: dependence={context_dependence}, reason={ctx_reason}, "
+                f"dialog_empty={not dialog_text.strip()}, query={query[:60]!r}"
+            )
+
             # 4.上下文消歧，改写问句
+            #   只有当 dependence == "related" 时才进行消歧；否则保持原句，避免把
+            #   历史话题硬塞进改写，污染下游分类与 RAG 检索。
             resolved = query
-            if dialog_text.strip():
+            if context_dependence == "related" and dialog_text.strip():
                 resolved = await classifier.aresolve_standalone_query(query, dialog_text)
                 if not (resolved or "").strip():
                     resolved = query
@@ -710,16 +744,17 @@ class ConversationNodes:
             # 10.日历日期直出答案（优先原问句，再用改写后问句）避免把“习俗/由来”等非日期问题误转为日期回答。
             # `language_hint_query` 始终传入用户原始问句，避免改写后的查询语言污染输出语言判定
             # （例如：英文问句被消歧/改写为中文，造成英文问、中文答的混语回复）。
+            prefer_zh_output = resolve_prefer_zh_output(state)
             direct = calendar_direct_text_answer(
                 query,
-                bool(state.get("prefer_zh_output", True)),
+                prefer_zh_output,
                 anchor_year=state.get("target_year"),
                 language_hint_query=state.get("user_query") or query,
             )
             if not direct and result.label == "realtime_query":
                 direct = calendar_direct_text_answer(
                     resolved,
-                    bool(state.get("prefer_zh_output", True)),
+                    prefer_zh_output,
                     anchor_year=state.get("target_year"),
                     language_hint_query=state.get("user_query") or query,
                 )
@@ -968,7 +1003,7 @@ class ConversationNodes:
                     q_cal = (state.get("rewritten_query") or state.get("user_query") or "").strip()
                     direct_cal = calendar_direct_text_answer(
                         q_cal,
-                        bool(state.get("prefer_zh_output", True)),
+                        resolve_prefer_zh_output(state),
                         anchor_year=state.get("target_year"),
                         language_hint_query=state.get("user_query") or q_cal,
                     )
@@ -1000,6 +1035,10 @@ class ConversationNodes:
                 # 改写为搜索引擎友好的精炼短语（不依赖任何关键字 / 模板）。
                 # 失败/为空时保守回退到原 query，不会让现有行为变差。
                 # 通过 settings.realtime_query_search_rewrite_enabled 控制（可在 .env 关闭）。
+                #
+                # 语言一致性守门（避免英文问句被改写成中文短语后污染 Tavily 召回，
+                # 进而让下游 LLM 看到外文 context 跟着语言飘移）：改写产物的主导
+                # 语言必须与原 query 一致，否则回退原 query。复用 has_language_drift。
                 if (
                     state.get("is_realtime_query")
                     and getattr(settings, "realtime_query_search_rewrite_enabled", False)
@@ -1007,6 +1046,12 @@ class ConversationNodes:
                     rewritten = await get_query_classifier().agen_search_query(
                         query, hint=realtime_category
                     )
+                    if rewritten and has_language_drift(query, rewritten):
+                        logger.info(
+                            "Search rewrite language drift, falling back to original query: "
+                            f"original={query[:80]!r}, rewritten={rewritten[:80]!r}"
+                        )
+                        rewritten = None
                     if rewritten:
                         query = rewritten
 
@@ -1219,7 +1264,7 @@ class ConversationNodes:
                     q_cal = (state.get("rewritten_query") or state.get("user_query") or "").strip()
                     direct = calendar_direct_text_answer(
                         q_cal,
-                        bool(state.get("prefer_zh_output", True)),
+                        resolve_prefer_zh_output(state),
                         anchor_year=state.get("target_year"),
                         language_hint_query=state.get("user_query") or q_cal,
                     )
@@ -1266,11 +1311,12 @@ class ConversationNodes:
                         )
 
                 if web_unreliable:
+                    prefer_zh_unreliable = resolve_prefer_zh_output(state)
                     # (A) 网络完全失败：固定提示
                     if err and not web_used:
                         direct = (
                             "当前网络检索不可用，暂时无法确认实时信息，请稍后重试。"
-                            if state.get("prefer_zh_output", True)
+                            if prefer_zh_unreliable
                             else "Real-time web retrieval is unavailable; please try again later."
                         )
                         state["direct_text_answer"] = direct
@@ -1299,7 +1345,7 @@ class ConversationNodes:
                                 "weekday_en": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][_now.weekday()],
                             }
                             state["traffic_estimate"] = est
-                        prefer_zh = bool(state.get("prefer_zh_output", True))
+                        prefer_zh = prefer_zh_unreliable
                         if prefer_zh:
                             direct = (
                                 f"今日整体路况判断：{est['level']}（依据：{est['reason']}）。\n"

@@ -492,6 +492,97 @@ class QueryClassifier:
             logger.warning(f"aneed_realtime failed: {e}", exc_info=True)
             return False
 
+    # 动态上下文相关性判定提示词：仅做 yes/no 二元判定，不做改写也不作答。
+    # 设计要点：
+    # - 只判"本轮问句是否依赖前面对话才能正确理解或回答"——指代承接 / 话题延续 / 上下文补全 算 yes；
+    #   独立问句 / 新话题 / 新问候 / 新闲聊 算 no。
+    # - 二元判定比 9 类细粒度分类稳定得多，本地 7B 模型也能给出可靠答案。
+    # - 仅输出 yes 或 no，模型不解释、不复述。
+    _CONTEXT_DEPENDENCE_PROMPT = """你是「对话上下文相关性判断」模块。
+
+请判断「本轮用户最新一句话」是否**必须依赖前面的多轮对话**才能正确理解或回答。
+
+回答 yes（相关）的判断要点（满足任意一条即可）：
+- 含指代/省略：它/这个/那个/上面的/前面提到的/再说一遍/再算一次/换一种思路/为什么是这样；
+- 是对前一轮话题/题目/结论的延续追问、纠错、扩展、对比或细化；
+- 缺少必要的主语/对象/条件，需要从历史对话中补全才能理解；
+- 直接评价或回应了前一轮回答的内容（如"不对"、"不是这样的"、"再详细一点"）。
+
+回答 no（无关）的判断要点（满足任意一条即可）：
+- 是独立完整的问句或陈述，自带主语和必要上下文；
+- 与历史对话主题完全不同（明显切换到一个新领域/新话题）；
+- 是新的问候 / 打招呼 / 闲聊 / 噪声；
+- 是新的、独立的知识查询、计算题、事实查询或实时查询。
+
+**只输出一个英文单词：yes 或 no。不要解释，不要标点，不要其它任何内容。**"""
+
+    async def aclassify_context_dependence(
+        self,
+        query: str,
+        dialog_text: str,
+    ) -> tuple[bool, str]:
+        """
+        判定「本轮问句是否依赖历史对话」（yes/no 二元判定）。
+
+        设计要点：
+        - 历史为空 → 直接返回 (False, "no_history")，不调用 LLM；
+        - LLM 回答以 "yes" 开头 → (True, "llm_yes")；
+        - 其它（"no" / 异常 / 空响应 / 解析失败）→ (False, "llm_no" / "fallback")；
+          为何失败时不保守判 True？因为本功能的"成本"在于：
+          (a) 误判为相关 → 把无关历史塞给 LLM，更可能引入语言污染、话题漂移；
+          (b) 误判为无关 → 丢失上下文，但用户重新触发时还能恢复。
+          相比之下 (a) 的副作用更难感知；故 LLM 失败时回退到"无关"更接近用户预期
+          （"全新对话"），并且与"无历史时即无关"的语义一致。
+        - 不维护任何关键字 / 词典；纯 LLM 语义判断；扩展只需调整 prompt。
+
+        Args:
+            query: 本轮用户最新输入
+            dialog_text: 已格式化的多轮对话文本（format_dialog_for_resolver 的输出）
+
+        Returns:
+            (is_related, reason)
+            is_related=True 表示需要保留历史上下文，False 表示按全新问题处理。
+            reason 是判定来源标签，便于日志与下游审计。
+        """
+        truncated_query = (query or "").strip()
+        if not truncated_query:
+            # 空 query 没有判断意义，按"无关"处理；上游通常已经短路，这里只是保险。
+            return False, "empty_query"
+        if not (dialog_text or "").strip():
+            return False, "no_history"
+
+        truncated_query = truncated_query[:300]
+        # 历史段落如果过长会让小模型注意力被稀释，截掉头部即可（保留近端 6 轮的尾部）。
+        truncated_dialog = (dialog_text or "")[-2000:]
+        user_content = (
+            f"对话历史：\n{truncated_dialog}\n\n"
+            f"本轮用户最新输入：\n{truncated_query}\n\n"
+            "请只输出 yes 或 no："
+        )
+        try:
+            llm = self.llm
+            if hasattr(self.llm, "with_config"):
+                llm = self.llm.with_config(temperature=0, max_tokens=4)
+            start_time = time.time()
+            response = await llm.ainvoke(
+                [
+                    {"role": "system", "content": self._CONTEXT_DEPENDENCE_PROMPT},
+                    {"role": "user", "content": user_content},
+                ]
+            )
+            duration = time.time() - start_time
+            text = (getattr(response, "content", None) or "").strip().lower()
+            decision = text.startswith("yes")
+            logger.info(
+                f"Context dependence decision: related={decision}, raw={text[:30]!r}, "
+                f"query={truncated_query[:50]!r}, duration={duration:.3f}s"
+            )
+            return decision, ("llm_yes" if decision else "llm_no")
+        except Exception as e:
+            logger.warning(f"aclassify_context_dependence failed: {e}", exc_info=True)
+            # LLM 异常：回退到"无关"，等价于"无历史"行为，保持稳定且不会引入污染。
+            return False, "fallback"
+
     # 检索短语改写提示词：把口语化原句改成"搜索引擎友好的精炼检索短语"。
     # 设计原则：
     # - 不维护任何业务关键词 / 城市 / 路名词典；让 LLM 从原文中自行提取实体。
