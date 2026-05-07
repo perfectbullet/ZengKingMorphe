@@ -912,6 +912,7 @@ async def generate_openai_stream_v1(
                 first_token_received = False
                 full_answer = ""
 
+                start_time = time.perf_counter()
                 async for chunk in streaming_llm.astream(messages):
                     token = chunk.content if hasattr(chunk, 'content') else str(chunk)
                     if token:
@@ -939,6 +940,9 @@ async def generate_openai_stream_v1(
                                     ttfb_ms = int((time.time() - initial_state["workflow_start_time"]) * 1000)
                                     current_state["ttfb_ms"] = ttfb_ms
                                     logger.info(f"First token received | ttfb_ms={ttfb_ms}")
+
+                duration = int((time.perf_counter() - start_time) * 1000)
+                logger.info(f"Phi-4-Math done | duration={duration}ms | output_chars={len(full_answer)}")
 
                 # 刷新 buffer 中剩余内容
                 final_segment = await sentence_buffer.flush(is_final=True)
