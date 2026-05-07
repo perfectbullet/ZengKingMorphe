@@ -61,7 +61,8 @@ OpenAI-style streaming client for /api/chat/v1/chat/completions and /api/chat/v2
 - 对 streaming chunk (object == "chat.completion.chunk") 输出 partial content
 - 遇到 finish_reason == "stop" 或 payload == "[DONE]" 时结束
 - 支持从环境变量 API_KEY 注入 X-API-Key 头
-- 显示 TTFB (首字节响应时间) 和 First Token Latency (首token延迟)
+- 显示 TTFB (首字节响应时间)、First Token Latency (首 token 延迟)、
+  Total request time (从发起 POST 到流结束/收到完整响应的端到端耗时)
 """
 from __future__ import annotations
 import argparse
@@ -217,6 +218,12 @@ def handle_stream_payloads(payload_iter: Iterator[str], start_time: float) -> in
     except KeyboardInterrupt:
         print("\nInterrupted by user", file=sys.stderr)
         return 130
+    finally:
+        total_s = time.perf_counter() - start_time
+        print(
+            f"⏱️ Total request time: {total_s * 1000:.2f}ms",
+            file=sys.stderr,
+        )
     return 0
 
 def run_stream(host: str, body: dict, api_key: Optional[str], timeout: int = 60, api_version: str = "v1") -> int:
@@ -235,6 +242,11 @@ def run_stream(host: str, body: dict, api_key: Optional[str], timeout: int = 60,
             try:
                 resp.raise_for_status()
             except requests.HTTPError:
+                total_s = time.perf_counter() - start_time
+                print(
+                    f"⏱️ Total request time (end-to-end): {total_s * 1000:.2f}ms",
+                    file=sys.stderr,
+                )
                 print(f"HTTP error {resp.status_code}:", resp.text, file=sys.stderr)
                 return 2
             ttfb = time.perf_counter() - start_time
@@ -242,6 +254,11 @@ def run_stream(host: str, body: dict, api_key: Optional[str], timeout: int = 60,
             payload_iter = iter_sse_payloads(resp)
             return handle_stream_payloads(payload_iter, start_time)
     except requests.RequestException as e:
+        total_s = time.perf_counter() - start_time
+        print(
+            f"⏱️ Total request time (end-to-end): {total_s * 1000:.2f}ms",
+            file=sys.stderr,
+        )
         print(f"Request error: url is {url}", str(e), file=sys.stderr)
         return 2
 

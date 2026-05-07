@@ -14,6 +14,7 @@ Note: Simplified workflow using RAGAnything for RAG retrieval.
 Removed nodes: intent_recognition, knowledge_retrieval, grade_documents,
                compress_context, match_faq, rewrite_query
 """
+import asyncio
 import hashlib
 import time
 from datetime import datetime
@@ -565,38 +566,49 @@ class ConversationNodes:
                         f"Failed to merge persisted dialog for resolver: session_id={state.get('session_id')}, error={e}",
                         exc_info=True,
                     )
-            # 3.意图分类器初始化与原始意图预判
+            # 3.意图分类器初始化 + 原始意图预判 + 上下文相关性判定（并行）
+            #
+            # 性能优化（与原 3 节合并）：
+            #   - 原实现把 ``aclassify`` 与 ``aclassify_context_dependence`` 串行调用，
+            #     两次小模型推理叠加约 2s。两者输入彼此独立（前者用 query+last_user_query，
+            #     后者用 query+dialog_text），完全可以 ``asyncio.gather`` 并行；
+            #   - 仅当 ``dynamic_context_memory_enabled`` 启用且 ``dialog_text`` 非空时
+            #     才需要真正发起依赖判定 LLM 调用，其余分支直接拿到 ``unrelated``，
+            #     避免无意义的 LLM 等待；
+            #   - 异常处理在原 helper 内部已退化为 ``False / "fallback"``，并行化不会
+            #     放大故障范围。
             classifier = get_query_classifier()
-            original_ctx_result = await classifier.aclassify(query, context_query=last_user_query or None)
+            dynamic_ctx_enabled = bool(getattr(settings, "dynamic_context_memory_enabled", True))
+            classify_task = asyncio.create_task(
+                classifier.aclassify(query, context_query=last_user_query or None)
+            )
+
+            need_llm_dependence = dynamic_ctx_enabled and bool(dialog_text.strip())
+            if need_llm_dependence:
+                dependence_task = asyncio.create_task(
+                    classifier.aclassify_context_dependence(query, dialog_text)
+                )
+                original_ctx_result, (is_related, judge_reason) = await asyncio.gather(
+                    classify_task, dependence_task
+                )
+                context_dependence = "related" if is_related else "unrelated"
+                ctx_reason = judge_reason
+            else:
+                original_ctx_result = await classify_task
+                if not dynamic_ctx_enabled:
+                    context_dependence = "related"
+                    ctx_reason = "disabled"
+                else:
+                    # 无历史就没有"相关"可言；标记为 unrelated，下游一律不去拼历史。
+                    context_dependence = "unrelated"
+                    ctx_reason = "no_history"
+
             # 高置信度非实时查询，保留原始意图
             preserve_original_intent = (
                 original_ctx_result.label != "realtime_query"
                 and original_ctx_result.confidence == "high"
                 and len(query) >= 8
             )
-
-            # 3.5 动态上下文相关性判定（无关 → 不消歧、不改写、下游不注入历史）
-            # 设计要点：
-            # - 仅当历史非空、且全局开关启用时调用 LLM；
-            # - 无关时直接令 resolved=query，跳过消歧；同时设置 state["context_dependence"]="unrelated"
-            #   供下游 history-builder 判断是否注入；
-            # - 相关时延续旧逻辑（消歧/改写）；
-            # - 失败/不启用时退化为"相关"（保持原有行为，向后兼容）。
-            dynamic_ctx_enabled = bool(getattr(settings, "dynamic_context_memory_enabled", True))
-            context_dependence = "related"
-            ctx_reason = "default"
-            if not dynamic_ctx_enabled:
-                ctx_reason = "disabled"
-            elif not dialog_text.strip():
-                # 无历史就没有"相关"可言；标记为 unrelated，下游一律不去拼历史。
-                context_dependence = "unrelated"
-                ctx_reason = "no_history"
-            else:
-                is_related, judge_reason = await classifier.aclassify_context_dependence(
-                    query, dialog_text
-                )
-                context_dependence = "related" if is_related else "unrelated"
-                ctx_reason = judge_reason
             state["context_dependence"] = context_dependence
             state["context_dependence_reason"] = ctx_reason
             logger.info(
@@ -617,7 +629,21 @@ class ConversationNodes:
             state["query_rewritten"] = resolved != query
 
             # 5.对改写后的问句分类
-            result_llm = await classifier.aclassify(resolved, context_query=None)
+            #
+            # 性能优化：当 ``resolved == query``（无消歧改写发生）时，第二次
+            # ``aclassify`` 与第一次 ``aclassify(query, last_user_query)`` 的输入
+            # 实际等价（同一句话；上下文判定为 unrelated 时 LLM 已确认上一轮语境
+            # 不会改变本句的语义类别）——直接复用 ``original_ctx_result`` 即可，
+            # 节省一次 ~1.6s 的 14B 模型 RTT。仅在真的发生改写时才需要再次分类，
+            # 用来检测"改写偏移"（rewrite drift），保留下游既有的偏移修正逻辑。
+            if resolved == query:
+                result_llm = original_ctx_result
+                logger.info(
+                    f"Skipping redundant classification (resolved == query): "
+                    f"label={result_llm.label}, confidence={result_llm.confidence}"
+                )
+            else:
+                result_llm = await classifier.aclassify(resolved, context_query=None)
             # 短问句场景：恢复原始实时查询意图
             if (
                 result_llm.label != "realtime_query"
