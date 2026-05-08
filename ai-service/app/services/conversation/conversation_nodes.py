@@ -34,7 +34,6 @@ from app.services.conversation.conversation_state import (
     GREETING_KEYWORDS,
     DEFAULT_SENSITIVE_WORDS,
     DEFAULT_SENSITIVE_WORDS_LOWER,
-    NOISE_PRESET_RESPONSE_TEXT,
 )
 from app.services.query_classifier import (
     ClassificationResult,
@@ -63,7 +62,6 @@ from app.services.conversation.intent_routing import (
     ROUTE_BRANCH_MATH,
     ROUTE_BRANCH_RAG,
     ROUTE_BRANCH_REALTIME,
-    apply_noise_preset_gate,
     resolve_answer_mode,
     resolve_route_branch,
 )
@@ -991,39 +989,6 @@ class ConversationNodes:
                 f"reason={result.reason}, query={resolved[:50]}"
             )
 
-            # 6.7 噪声预设话术安全护栏（"抱歉，我没有听清您的问题"路径）
-            #
-            # 背景：小分类器对短/口语化输入误判率高，命中 noise 后**完全跳过 LLM**
-            # 直接返回预设话术，会让用户在数字人侧误以为"麦克风/ASR 故障"。
-            # 这里在分类结果之上加三道独立闸门（置信度 / 长度 / 启发式），任一不过
-            # 即把标签降级为 "other"（→ GENERAL_LLM 由 LLM 自己兜住）。
-            #
-            # 维护原则：闸门规则集中在 ``intent_routing.apply_noise_preset_gate``，
-            # 这里只负责"传配置 + 写日志 + 改 result"，不在节点里重写规则；
-            # 通过 ``settings.noise_preset_response_enabled=False`` 可一键回滚整条路径。
-            gated_label, downgrade_reason = apply_noise_preset_gate(
-                result.label,
-                result.confidence,
-                resolved,
-                noise_preset_enabled=getattr(settings, "noise_preset_response_enabled", True),
-                min_confidence=getattr(settings, "noise_preset_min_confidence", "high"),
-                max_query_length=getattr(settings, "noise_preset_max_query_length", 12),
-            )
-            if gated_label != result.label:
-                logger.info(
-                    "Noise preset gate downgraded label: "
-                    f"prev_label={result.label}, prev_confidence={result.confidence}, "
-                    f"new_label={gated_label}, reason={downgrade_reason}, "
-                    f"query={resolved[:80]!r}"
-                )
-                # 替换 label 但保留原始置信度与 reason，便于审计；
-                # 下游的 ``case "noise":`` 不会被触发，自动落到默认 case → GENERAL_LLM。
-                result = ClassificationResult(
-                    label=gated_label or "other",
-                    confidence=result.confidence,
-                    reason=f"noise_gate:{downgrade_reason}",
-                )
-
             # 7.解析目标年份，存入状态：用于后续生成阶段保持“今年/明年/去年”一致。
             target_year = resolve_target_year_from_query(resolved)
             if target_year is not None:
@@ -1075,7 +1040,7 @@ class ConversationNodes:
                     state["sources"].append({
                         "type": "text",
                         "from": "noise_response",
-                        "text": NOISE_PRESET_RESPONSE_TEXT,
+                        "text": "抱歉，我没有听清您的问题，请再重复一次。",
                         "citations": []
                     })
                 # 默认通用查询（含 concept_explain / english_query / general_knowledge / chit_chat / other）
@@ -1628,23 +1593,21 @@ class ConversationNodes:
                 }
 
             # 噪声输入：使用预设的友好响应，不需要调用 LLM
-            # 注意：到达这里时已经通过了 ``apply_noise_preset_gate`` 三道闸门
-            # （置信度 / 长度 / 启发式），可以放心直出预设话术。
-            # 文案统一从 ``NOISE_PRESET_RESPONSE_TEXT`` 读取，避免散落硬编码且
-            # 不再使用"听清/听见"等会让用户误认作 ASR 故障的字眼。
             if intent == "noise":
-                noise_source = next(
-                    (s for s in state.get("sources", []) if s.get("from") == "noise_response"),
-                    None,
-                )
-                preset_text = (
-                    noise_source.get("text") if noise_source else None
-                ) or NOISE_PRESET_RESPONSE_TEXT
-                state["final_answer"] = preset_text
-                state["confidence"] = 0.99
-                state["streaming_llm"] = None
-                state["streaming_type"] = "text"  # 标记为纯文本输出
-                logger.info("Noise input detected, using preset response")
+                # 从 sources 中获取预设的响应
+                noise_source = next((s for s in state.get("sources", []) if s.get("from") == "noise_response"), None)
+                if noise_source:
+                    state["final_answer"] = noise_source.get("text", "抱歉，我没有听清您的问题，请再重复一次。")
+                    state["confidence"] = 0.99
+                    state["streaming_llm"] = None
+                    state["streaming_type"] = "text"  # 标记为纯文本输出
+                    logger.info("Noise input detected, using preset response")
+                else:
+                    # 回退到 greeting 逻辑
+                    state["final_answer"] = "抱歉，我没有听清您的问题，请再重复一次。"
+                    state["confidence"] = 0.99
+                    state["streaming_llm"] = None
+                    state["streaming_type"] = "text"
                 return state
 
             # 纯日期/星期类：本地确定性推算，直接输出（不依赖分类 reason=time，也不依赖联网）

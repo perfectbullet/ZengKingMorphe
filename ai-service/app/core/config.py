@@ -175,38 +175,6 @@ class Settings(BaseSettings):
         description="Enable dynamic context memory: drop history when current query is unrelated"
     )
 
-    # ---- 噪声预设话术拦截（"抱歉，我没有听清您的问题"路径）----
-    # 背景：分类器把用户输入归为 noise 时，原实现会**完全跳过 LLM**直接返回预设话术，
-    # 用户在数字人侧听到这句话极易误判为"麦克风/ASR 故障"。
-    # 这一组开关让该拦截可以快速回滚或收紧到只在"高度确信噪声"时才触发。
-    #
-    # noise_preset_response_enabled
-    # - True  → 启用预设话术拦截（命中 noise 且通过下方闸门时直出文案）；
-    # - False → **整条路径回滚**，noise 一律走通用 LLM 兜底（紧急回滚开关）。
-    noise_preset_response_enabled: bool = Field(
-        default=True,
-        description="Enable preset response for queries classified as noise. "
-                    "Set False to fully roll back the noise→preset pathway and let GENERAL_LLM handle it."
-    )
-    # noise_preset_min_confidence
-    # 仅当 LLM 分类置信度 >= 此等级时才允许判 noise；其余降级为 GENERAL_LLM。
-    # qwen2.5:7b 这类小分类器对短/口语化输入误判率较高，默认要求 ``high``
-    # 才能触发预设话术，把 medium/low 的噪声判定一律放行给 LLM。
-    noise_preset_min_confidence: str = Field(
-        default="high",
-        description="Minimum classifier confidence to trigger noise preset response: high|medium|low"
-    )
-    # noise_preset_max_query_length
-    # 仅当 query 长度（按 strip 后字符数）<= 此值时，才允许触发噪声预设。
-    # 含义：超过这个长度的输入即便分类器判 noise 也按"内容足够丰富"放行，
-    # 避免吞掉"那个数列怎么算？""嗯，刚刚那道函数题再讲一遍"这类合法长问。
-    noise_preset_max_query_length: int = Field(
-        default=12,
-        ge=1,
-        description="Max query length (chars) eligible for noise preset response; "
-                    "longer queries bypass preset and go to GENERAL_LLM."
-    )
-
     # Document Processing Configuration
     chunk_size: int = Field(
         default=256,

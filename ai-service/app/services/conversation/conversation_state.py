@@ -78,20 +78,6 @@ DEFAULT_SENSITIVE_WORDS_LOWER = frozenset(w.lower() for w in DEFAULT_SENSITIVE_W
 
 
 # =============================================================================
-# Noise Preset Response Text
-# =============================================================================
-# 噪声分类命中且通过 ``apply_noise_preset_gate`` 三道闸门后展示的兜底话术。
-#
-# 设计要点（务必保持的措辞约束）：
-# - **不要**出现"听清 / 没听见 / 听不到"等措辞——这些字眼在数字人侧会让用户
-#   误以为麦克风/ASR 故障，把服务端的有意拦截当成硬件问题，造成线下排错噪声。
-# - 措辞偏向"理解层面"：表达"我没理解到您的提问要点"，引导用户换种说法或补充信息。
-# - 一处文案、多处复用：``conversation_nodes`` 的 ``classify_query_type`` 与
-#   ``generate_answer`` 都从这里读取，避免散落多份硬编码。
-NOISE_PRESET_RESPONSE_TEXT: str = "您的问题我没太理解，能否换种说法或补充更多信息？"
-
-
-# =============================================================================
 # Interruption Detection Keywords (REMOVED)
 # Previously used for detecting user interruption intent during conversation.
 # This functionality has been removed to allow interruption keywords
