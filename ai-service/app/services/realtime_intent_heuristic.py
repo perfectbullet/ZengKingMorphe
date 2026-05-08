@@ -1,37 +1,74 @@
 """
-补位 LLM 分类：识别会随时间变化的实时类事实查询。
+补位 LLM 分类：识别「会随时间变化的在任人事 / 职务归属」类事实查询。
 
-历史背景
-========
-本模块最初专门把「现任 / 在任 + 公共职务」类查询升级为 ``realtime_query``，
-强制走 web search。但实践证明，这类「某职务现任是谁」的查询：
-
-- 主流搜索引擎对此类政治/人事话题的原始权威页（维基百科、新华网、政府官网等）
-  做了大量限制 / 拦截，Tavily 召回的多是 2-4 年前的旧新闻文章；
-- 旧文章中经常出现「前任 X 即将卸任」「Y 接班可能性高」这类语句，
-  LLM 摘要时容易把这些「上一任」的名字当作「现任」答出来；
-- 通用大模型（如 DeepSeek-V3.1）的训练语料对国家级公共职务的覆盖远比一两条
-  Tavily 网页摘要新鲜、完整，让其用静态知识作答反而稳得多。
-
-因此现在不再强行把「现任公共职务」升级为 realtime，而是把这类查询让回主分类器
-（通常会判 ``general_knowledge``，进入通用 LLM 路径）。如果用户真的需要「最新
-人事变动」，他们更可能用「最近哪位领导被任命」「新一届政府名单」等动态/事件
-化措辞，仍会被主分类器或其它启发式正确判到 realtime。
-
-未来若需要扩展其它实时类启发式（例如赛事比分、活动倒计时等），可在本文件中
-追加独立函数与规则；继续只通过本入口暴露给 conversation_nodes，
-保证调用方代码不需要改动。
+LLM 常把此类问题判成 general_knowledge，导致仅用静态知识作答（过时或回避）。
+本模块规则全部数据化（正则与词表），便于扩展；仅在命中明确模式时返回推荐的
+realtime reason，与 QueryClassifier 的分支协作，不替代主分类器。
 """
 from __future__ import annotations
+
+import re
+
+# ---------------------------------------------------------------------------
+# 排除：明确在问史实 / 已故人物，不应强制走「时事」联网
+# ---------------------------------------------------------------------------
+_HISTORICAL_HINT = re.compile(
+    r"(历史上|历代|历任|第一任|第二任|第三任|曾任|已故|去世|逝世|生前|"
+    r"古代|清朝|明朝|民国|公元前)",
+    re.I,
+)
+
+# 「当前在任」语义锚点（可按业务扩展，勿绑定具体人名）
+_TIME_SENSITIVE = re.compile(
+    r"(目前|当前|现任|现阶段|本届|现今|现在在任)",
+)
+
+# 指向「何人担任」的问法（刻意不收单独的「哪个」，以免命中「哪个省最大」类百科题）
+_WHO_FOCUS = re.compile(r"(谁|哪位|哪一个|是谁|何人)")
+
+# 公共事务 / 组织人事场景常见职务词（扩展时只加词，不写死国别或姓名）
+_PUBLIC_OFFICE = re.compile(
+    r"(?:"
+    r"总理|主席|总统|首相|省长|市长|县长|区长|州长|"
+    r"部长|司长|厅长|局长|处长|科长|主任|书记|阁员|内阁|"
+    r"领导人|领导|元首|大使|代表|议员|議員"
+    r")",
+    re.I,
+)
+
+# English: minimal set; extend via same-style tuples if product needs more locales
+_EN_TIME = re.compile(r"\b(current|present|incumbent|now)\b", re.I)
+_EN_WHO = re.compile(r"\bwho(?:'s|\s+is|\s+are|\s+was|\s+were)\b", re.I)
+_EN_OFFICE = re.compile(
+    r"\b("
+    r"president|premier|prime\s+minister|mayor|governor|secretary|chancellor|minister"
+    r")\b",
+    re.I,
+)
 
 
 def heuristic_realtime_category(query: str) -> str | None:
     """
-    返回建议的 realtime reason（英文枚举）；当前实现统一返回 ``None``。
+    若 query 命中「时间敏感 + 人事/职务」模式，返回建议的 realtime reason（英文枚举）；
+    否则返回 None。
 
-    - 不再把「现任 + 公共职务」强制升级为 realtime（理由见模块 docstring）；
-    - 主分类器若仍判定为 ``realtime_query``，下游照常走 web search，不受影响；
-    - 之后如需补位其它实时场景（赛事 / 活动等），在本函数里加规则即可，
-      调用方接口保持不变。
+    当前返回 "news"：与下游 _normalize_realtime_category 及联网摘要场景一致。
     """
+    if not query or not query.strip():
+        return None
+    text = query.strip()
+
+    if _HISTORICAL_HINT.search(text):
+        return None
+
+    if (
+        _TIME_SENSITIVE.search(text)
+        and _WHO_FOCUS.search(text)
+        and _PUBLIC_OFFICE.search(text)
+    ):
+        return "news"
+
+    if _EN_TIME.search(text) and _EN_WHO.search(text) and _EN_OFFICE.search(text):
+        return "news"
+
     return None

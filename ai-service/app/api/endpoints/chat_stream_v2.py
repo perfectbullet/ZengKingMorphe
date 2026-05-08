@@ -313,8 +313,6 @@ async def generate_openai_stream_v2(
             "classification_label": None,
             "classification_confidence": None,
             "classification_reason": None,
-            # Answer mode（由 classify_query_type 写入；下游统一按此分发生成路径）
-            "answer_mode": None,
         }
 
         # Save user query chunk to DB

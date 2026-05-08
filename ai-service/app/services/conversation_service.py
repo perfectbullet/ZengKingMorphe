@@ -10,16 +10,11 @@ This module implements a state-based conversation workflow using LangGraph, supp
 Workflow Graph (8 nodes):
     load_employee_config → load_session_context → input_validation
         → classify_query_type
-        → [conditional: greeting/noise?]   → generate_answer
-        → [conditional: realtime?]          → web_search → generate_answer
-        → [conditional: math?]              → generate_answer (Phi-4)
-        → [conditional: rag (concept)?]     → evaluate_complexity → generate_answer (RAGAnything)
-        → [conditional: general?]           → generate_answer (通用 LLM，不走 RAG)
-        → save_conversation → END
-
-意图 → 回答路径的映射统一维护在
-``app/services/conversation/intent_routing.py``（INTENT_TO_ANSWER_MODE）。
-新增分类标签或调整路由策略只改那张表，不需要改工作流。
+        → [conditional: greeting/noise?] → generate_answer
+        → [conditional: realtime?] → web_search → generate_answer
+        → [conditional: math?] → generate_answer
+        → [conditional: normal?] → evaluate_complexity → generate_answer
+        → generate_answer → save_conversation → END
 
 Note: Simplified workflow using RAGAnything for RAG retrieval.
 Removed nodes: intent_recognition, knowledge_retrieval, grade_documents,
@@ -135,14 +130,6 @@ class ConversationWorkflow:
         - llm_presence_penalty: Presence penalty
         - llm_frequency_penalty: Frequency penalty
 
-        Determinism override（事实性人事查询）:
-            「现任 X 职务是谁」等需要广博/最新世界知识的查询若沿用调用方传入的
-            ``temperature=0.7`` 默认值，会让 DeepSeek-V3 在「李强」与「李克强」
-            之间随机偏移（实测 10 次约 20% 错答）。这里检测到此类 query 时强制
-            把采样参数压回 ``temperature=0 / top_p=1``，让答案完全由模型权重决定，
-            消除随机性带来的"一会对一会错"。注：复杂度评估、人格、其它生成路径
-            不受影响——仅当 ``_needs_big_world_knowledge`` 命中时才覆盖。
-
         Args:
             state: Current conversation state
 
@@ -155,19 +142,6 @@ class ConversationWorkflow:
         temperature = state.get("llm_temperature")
         top_p = state.get("llm_top_p")
         max_tokens = state.get("llm_max_tokens")
-
-        # 「现任 X 职务是谁」类事实查询的"确定性兜底"。
-        # 复用 select_llm 已有的 _needs_big_world_knowledge 启发式，避免在两处分别
-        # 维护词表；命中后强制压低采样随机性，确保 DeepSeek 等大模型给出稳定答案。
-        from app.services.conversation.conversation_helpers import _needs_big_world_knowledge
-        big_world_query = (state.get("rewritten_query") or state.get("user_query") or "").strip()
-        if _needs_big_world_knowledge(big_world_query):
-            temperature = 0.0
-            top_p = 1.0
-            logger.info(
-                f"Force deterministic LLM (temperature=0, top_p=1) for big-world-knowledge query: "
-                f"query={big_world_query[:80]!r}"
-            )
 
         # If custom parameters are provided, create a new LLM instance with them
         if temperature is not None or top_p is not None or max_tokens is not None:
@@ -330,29 +304,19 @@ class ConversationWorkflow:
         graph.add_edge("load_session_context", "input_validation")
         graph.add_edge("input_validation", "classify_query_type")
 
-        # Conditional routing after query classification.
-        # path_map 的 key 必须与 ``intent_routing.ROUTE_BRANCH_*`` 一一对应，
-        # 任何新增的分支都需要在这里登记，否则 LangGraph 会抛 KeyError。
-        from app.services.conversation.intent_routing import (
-            ROUTE_BRANCH_GENERAL,
-            ROUTE_BRANCH_GREETING,
-            ROUTE_BRANCH_MATH,
-            ROUTE_BRANCH_RAG,
-            ROUTE_BRANCH_REALTIME,
-        )
+        # Conditional routing after query classification
         graph.add_conditional_edges(
             "classify_query_type",
             self.nodes.route_after_classification,
             {
-                ROUTE_BRANCH_GREETING: "generate_answer",   # Greeting / noise → 直接回答
-                ROUTE_BRANCH_REALTIME: "web_search",        # 实时类 → 联网检索
-                ROUTE_BRANCH_MATH: "generate_answer",       # 数学题 → Phi-4 直接回答
-                ROUTE_BRANCH_RAG: "evaluate_complexity",    # 概念/教材类 → 复杂度评估 → RAG
-                ROUTE_BRANCH_GENERAL: "generate_answer",    # 通用 LLM（英语/常识/闲聊）→ 直接回答
+                "greeting": "generate_answer",      # Greeting/Noise → direct to answer
+                "realtime": "web_search",           # Realtime query → web search
+                "math": "generate_answer",          # Math problem → direct to answer (Phi-4)
+                "normal": "evaluate_complexity"     # Normal query → complexity eval
             }
         )
 
-        # Concept / textbook flow: complexity → generate_answer (RAGAnything)
+        # Normal flow: complexity → generate_answer (RAGAnything handles RAG)
         graph.add_edge("evaluate_complexity", "generate_answer")
 
         # Final sequence
