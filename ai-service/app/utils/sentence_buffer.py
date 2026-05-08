@@ -73,6 +73,9 @@ class SentenceBuffer:
     SHORT_PREFIX_PATTERN = re.compile(r'^[0-9a-zA-Z]+[.：:：]$')
     SHORT_PREFIX_WITH_NEWLINE_PATTERN = re.compile(r'^[0-9a-zA-Z]+[.：:：]\s*$')
 
+    # Bare \boxed{...} pattern (math model outputs without $ delimiters)
+    _BARE_BOXED_PATTERN = re.compile(r'\\boxed\s*\{')
+
     # LaTeX delimiter pairs for formula detection
     DELIMITER_PAIRS = [
         ('$$', '$$', 2),
@@ -501,6 +504,10 @@ class SentenceBuffer:
         for opening, closing in [(r'\(', r'\)'), (r'\[', r'\]')]:
             if text.count(opening) != text.count(closing):
                 return True
+
+        # Detect bare \boxed{...} without delimiters
+        if SentenceBuffer._BARE_BOXED_PATTERN.search(text):
+            return True
 
         return False
 

@@ -185,6 +185,88 @@ def escape_latex_backslashes(text: str) -> str:
 
     return ''.join(result)
 
+def wrap_bare_boxed(text: str) -> str:
+    r"""
+    Wrap bare \boxed{...} in $...$ delimiters.
+
+    Math models (e.g., Phi-4) may output \boxed{(2, 3)} without $ delimiters.
+    This function wraps only \boxed{...} that is not already inside $...$ or $$...$$.
+
+    Examples:
+        >>> wrap_bare_boxed("答案为 \\boxed{(2, 3)}")
+        '答案为 $\\boxed{(2, 3)}$'
+        >>> wrap_bare_boxed("$$\\boxed{(2, 3)}$$")
+        '$$\\boxed{(2, 3)}$$'
+
+    Args:
+        text: Text potentially containing bare \boxed{...}
+
+    Returns:
+        Text with bare \boxed{...} wrapped in $...$
+    """
+    BOXED_PATTERN = re.compile(r'\\boxed\s*\{')
+    result: list[str] = []
+    i = 0
+    in_formula = False
+    formula_delim: Optional[str] = None
+
+    while i < len(text):
+        # Handle existing $$ delimiters
+        if text[i:i+2] == '$$':
+            if not in_formula:
+                in_formula = True
+                formula_delim = '$$'
+            elif formula_delim == '$$':
+                in_formula = False
+                formula_delim = None
+            result.append('$$')
+            i += 2
+            continue
+
+        # Handle existing $ delimiters
+        if text[i] == '$':
+            if not in_formula:
+                in_formula = True
+                formula_delim = '$'
+            elif formula_delim == '$':
+                in_formula = False
+                formula_delim = None
+            result.append('$')
+            i += 1
+            continue
+
+        # Already inside formula — copy verbatim
+        if in_formula:
+            result.append(text[i])
+            i += 1
+            continue
+
+        # Check for bare \boxed{...}
+        m = BOXED_PATTERN.match(text, i)
+        if m:
+            start = i
+            i = m.end()
+            # Consume the brace group {...} (matching nested braces)
+            depth = 1
+            while i < len(text) and depth > 0:
+                if text[i] == '\\' and i + 1 < len(text):
+                    i += 2
+                    continue
+                if text[i] == '{':
+                    depth += 1
+                elif text[i] == '}':
+                    depth -= 1
+                i += 1
+            # Wrap in $...$
+            result.append('$')
+            result.append(text[start:i])
+            result.append('$')
+        else:
+            result.append(text[i])
+            i += 1
+
+    return ''.join(result)
+
 def normalize_latex_formulas(text: str) -> str:
     r"""
     Perform complete LaTeX formula normalization.
@@ -192,12 +274,15 @@ def normalize_latex_formulas(text: str) -> str:
     Applies operations in order:
     1. Normalize delimiters (\( \) \[ \] → $ $$)
     2. Remove spaces inside delimiters
+    3. Wrap bare \boxed{...} in $...$
 
     Examples:
         >>> normalize_latex_formulas(r"\( S_n = a_1 \cdot q^{n-1} \)")
         '$S_n = a_1 \\cdot q^{n-1}$'
         >>> normalize_latex_formulas("$$ \\frac{a}{b} $$")
         '$$\\frac{a}{b}$$'
+        >>> normalize_latex_formulas("\\boxed{(2, 3)}")
+        '$\\boxed{(2, 3)}$'
 
     Args:
         text: Text containing LaTeX formulas
@@ -207,4 +292,6 @@ def normalize_latex_formulas(text: str) -> str:
     """
     text = normalize_latex_delimiters(text)
     text = clean_latex_formula_spaces(text)
+    text = wrap_bare_boxed(text)
+    text = re.sub(r'\\text\b', r'\\mathrm', text)
     return text
