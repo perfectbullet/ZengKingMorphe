@@ -42,6 +42,11 @@ from app.services.query_classifier import (
     get_query_classifier,
 )
 from app.services.realtime_intent_heuristic import heuristic_realtime_category
+from app.services.math_intent_heuristic import (
+    HEURISTIC_PROMOTABLE_LABELS,
+    heuristic_concept_explain,
+    heuristic_math_problem,
+)
 from app.services.conversation.conversation_helpers import (
     time_node,
     heuristic_complexity,
@@ -49,6 +54,16 @@ from app.services.conversation.conversation_helpers import (
     build_math_generation_messages,
     resolve_prefer_zh_output,
     resolve_target_year_from_query,
+)
+from app.services.conversation.intent_routing import (
+    AnswerMode,
+    ROUTE_BRANCH_GENERAL,
+    ROUTE_BRANCH_GREETING,
+    ROUTE_BRANCH_MATH,
+    ROUTE_BRANCH_RAG,
+    ROUTE_BRANCH_REALTIME,
+    resolve_answer_mode,
+    resolve_route_branch,
 )
 from app.services.calendar_time_resolver import calendar_direct_text_answer
 from app.services.web_search_recency import (
@@ -118,22 +133,92 @@ def _resolve_employee_rag_disabled(cfg) -> bool:
 
 
 def _extract_weather_location(query: str) -> str | None:
-    """尽量从自然语言天气问句中提取地点，失败时返回 None。"""
+    """
+    从自然语言天气问句中提取地点，失败时返回 None。
+
+    分两条路径：
+    1. **中文 / CJK 路径**：匹配「X天气」「X的天气」「X的气温」等常见结构，
+       并清理常见礼貌前缀（请问 / 麻烦问下…）和时间后缀（今天 / 明天 / 当前…）。
+    2. **英文路径**：匹配 ``in / at / for / of <城市>`` 这类介词短语提取专有名词。
+       Open-Meteo 的 geocoding 接受任何城市名，所以提取出连续大写开头的英文词
+       即可（如 "Beijing"、"New York"、"San Francisco"）。
+
+    对 ``"what's the weather like in Beijing today"`` 这类问句，先前的实现因为
+    既匹配不到「X天气」，整段去标点后又超过 20 字而返回 None，导致结构化天气源
+    完全派不上用场。新实现保留旧的中文短路径，再叠加一条英文专有名词提取，
+    兼顾双语查询的稳定性。
+    """
     q = (query or "").strip()
     if not q:
         return None
-    # 先尝试“X天气”结构
-    m = re.search(r"([\u4e00-\u9fffA-Za-z]{2,20})天气", q)
+
+    # 第 1 步：定位「城市 + 时间词 / 天气词」结构。
+    #
+    # 思路：城市名一般是 2-4 个连续汉字，紧跟在时间词或天气词之前。
+    # 但仅靠 ``{2,4}?`` 非贪婪量词 + lookahead 不够——当用户问句开头有
+    # 「请问」「我想了解一下」「麻烦问下」这类礼貌引导词时，礼貌前缀会和真正
+    # 的城市拼成 4 字串（例：「请问北京」紧跟"今天"），lookahead 仍会成功命中。
+    # 解决方案：先把句首已知的礼貌引导词剥离掉，再在剩余文本上做城市定位；
+    # 这样两类输入都能被命中（「北京…」/「请问北京…」），同时不会把「请问」
+    # 误并入城市名。词表集中维护，扩展只需追加新引导词。
+    cn_polite_lead_pat = re.compile(
+        r"^(?:请问|麻烦问下|麻烦下|麻烦您|麻烦|问下|请帮我查一下|帮我查一下|"
+        r"我想了解一下|我想了解|想了解一下|想了解|了解一下|了解|想知道|"
+        r"请告诉我|告诉我|请|查一下)\s*"
+    )
+    q_for_loc = cn_polite_lead_pat.sub("", q).strip()
+    cn_anchor_pat = re.compile(
+        r"([\u4e00-\u9fff]{2,4}?)"
+        r"(?=(?:今天|今日|明天|后天|本周|这周|当前|现在|此时|目前|"
+        r"的天气|的气温|的气候|天气|气温|气候|阴晴|降雨|下雨|下雪|气象))"
+    )
+    am = cn_anchor_pat.search(q_for_loc)
+    if am:
+        loc = am.group(1).strip()
+        if len(loc) >= 2:
+            return loc
+
+    # 第 2 步：兜底——直接匹配「X 天气」结构（覆盖第 1 步未命中的边缘表达）。
+    cn_loc_pat = re.compile(
+        r"([\u4e00-\u9fffA-Za-z]{2,20})\s*(?:的)?\s*(?:天气|气温|气候|阴晴|降雨|下雨|下雪|气象)"
+    )
+    cn_polite_prefix = re.compile(
+        r"^(请问|麻烦问下|问下|请帮我查一下|帮我查一下|今天|今日|明天|后天|当前|现在|的)"
+    )
+    cn_time_suffix = re.compile(r"(今天|今日|明天|后天|本周|这周|当前|现在|的)$")
+
+    m = cn_loc_pat.search(q)
     if m:
         loc = m.group(1).strip()
-        loc = re.sub(r"^(请问|麻烦问下|问下|请帮我查一下|帮我查一下)", "", loc).strip()
-        loc = re.sub(r"(今天|今日|明天|后天|本周|这周|当前|现在)$", "", loc).strip()
-        if loc:
+        # 多次剥离前后缀，处理「请问北京今天天气」「成都的当前天气」这种叠加表达。
+        for _ in range(3):
+            loc_new = cn_polite_prefix.sub("", loc).strip()
+            loc_new = cn_time_suffix.sub("", loc_new).strip()
+            if loc_new == loc:
+                break
+            loc = loc_new
+        if loc and len(loc) >= 2:
             return loc
-    # 回退：保留中文/字母，截取前部作为 geocoding 查询
-    simple = re.sub(r"[^\u4e00-\u9fffA-Za-z]", "", q)
-    if 2 <= len(simple) <= 20:
-        return simple
+
+    en_after_prep = re.compile(
+        r"\b(?:in|at|for|of|near|around)\s+([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,3})",
+    )
+    em = en_after_prep.search(q)
+    if em:
+        loc_en = em.group(1).strip()
+        # 把"the/today/tomorrow"等通用词从尾巴上剥掉，避免 geocoding 拿到无效输入。
+        loc_en = re.sub(
+            r"\s+(today|tomorrow|now|tonight|currently|right\s+now)\s*$",
+            "",
+            loc_en,
+            flags=re.IGNORECASE,
+        ).strip()
+        if loc_en:
+            return loc_en
+
+    cjk_only = re.sub(r"[^\u4e00-\u9fff]", "", q)
+    if 2 <= len(cjk_only) <= 20:
+        return cjk_only
     return None
 
 
@@ -154,17 +239,96 @@ def _extract_traffic_location(query: str) -> str | None:
     return simple if 2 <= len(simple) <= 20 else None
 
 
-async def _open_meteo_weather_fallback(query: str) -> dict | None:
-    """免费天气接口兜底查询，返回结构化天气结果"""
+# 世界气象组织（WMO）weather_code → 自然语言描述映射表。
+# Open-Meteo 沿用 WMO Code 4677，通过把数字解码成「晴 / 多云 / 小雨 / 雷雨」等
+# 文字短语，让下游 LLM 不需要自己做编号→描述的猜测（这是先前出现「23°C
+# 全部解读成 cloudy」这类幻觉的主要原因）。
+# 文案分别提供中英文，由 prefer_zh_output 决定用哪种；扩展只需在 dict 里追加值。
+_WMO_WEATHER_CODE_DESCRIPTIONS: dict[int, dict[str, str]] = {
+    0: {"zh": "晴朗", "en": "clear sky"},
+    1: {"zh": "晴间多云", "en": "mainly clear"},
+    2: {"zh": "局部多云", "en": "partly cloudy"},
+    3: {"zh": "阴天", "en": "overcast"},
+    45: {"zh": "雾", "en": "fog"},
+    48: {"zh": "结冰雾", "en": "depositing rime fog"},
+    51: {"zh": "小毛毛雨", "en": "light drizzle"},
+    53: {"zh": "毛毛雨", "en": "moderate drizzle"},
+    55: {"zh": "强毛毛雨", "en": "dense drizzle"},
+    56: {"zh": "冻毛毛雨", "en": "light freezing drizzle"},
+    57: {"zh": "强冻毛毛雨", "en": "dense freezing drizzle"},
+    61: {"zh": "小雨", "en": "slight rain"},
+    63: {"zh": "中雨", "en": "moderate rain"},
+    65: {"zh": "大雨", "en": "heavy rain"},
+    66: {"zh": "冻雨", "en": "light freezing rain"},
+    67: {"zh": "强冻雨", "en": "heavy freezing rain"},
+    71: {"zh": "小雪", "en": "slight snow"},
+    73: {"zh": "中雪", "en": "moderate snow"},
+    75: {"zh": "大雪", "en": "heavy snow"},
+    77: {"zh": "雪粒", "en": "snow grains"},
+    80: {"zh": "阵雨", "en": "slight rain showers"},
+    81: {"zh": "中等阵雨", "en": "moderate rain showers"},
+    82: {"zh": "强阵雨", "en": "violent rain showers"},
+    85: {"zh": "阵雪", "en": "slight snow showers"},
+    86: {"zh": "强阵雪", "en": "heavy snow showers"},
+    95: {"zh": "雷阵雨", "en": "thunderstorm"},
+    96: {"zh": "雷阵雨伴小冰雹", "en": "thunderstorm with slight hail"},
+    99: {"zh": "雷阵雨伴大冰雹", "en": "thunderstorm with heavy hail"},
+}
+
+
+def _wmo_describe(code: int | float | None, prefer_zh_output: bool) -> str:
+    """把 WMO weather_code 翻译成自然语言；未知 code 返回友好的兜底文案。"""
+    if code is None:
+        return "未知" if prefer_zh_output else "unknown"
+    try:
+        idx = int(code)
+    except (TypeError, ValueError):
+        return "未知" if prefer_zh_output else "unknown"
+    entry = _WMO_WEATHER_CODE_DESCRIPTIONS.get(idx)
+    if not entry:
+        return "未知天气" if prefer_zh_output else "unknown conditions"
+    return entry["zh" if prefer_zh_output else "en"]
+
+
+def _wind_direction_label(deg: float | int | None, prefer_zh_output: bool) -> str:
+    """把风向角度（0=北，顺时针）翻译为 8 方位文字（北 / 东北 / 东 ...）。"""
+    if deg is None:
+        return "未知" if prefer_zh_output else "unknown"
+    try:
+        d = float(deg) % 360.0
+    except (TypeError, ValueError):
+        return "未知" if prefer_zh_output else "unknown"
+    sectors_zh = ["北", "东北", "东", "东南", "南", "西南", "西", "西北"]
+    sectors_en = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+    idx = int((d + 22.5) // 45) % 8
+    return (sectors_zh if prefer_zh_output else sectors_en)[idx]
+
+
+async def _open_meteo_weather_fallback(query: str, prefer_zh_output: bool = True) -> dict | None:
+    """
+    免费结构化天气源（Open-Meteo）查询。
+
+    与早期实现的差异：
+    - 现在作为天气查询的**主源**而非 fallback：Tavily 抓回的 weatherapi.com 页面
+      只是 JSON 字符串前若干字符（typically 300-500 字），LLM 看到的是被截断的
+      ``{'temp_c': 23.1, 'tem...`` 这种残缺数据，会自行编造 condition / wind_dir /
+      mph 等字段。改为使用 Open-Meteo 的 JSON API 直接拿到结构化字段，再把它
+      格式化成「晴间多云、温度 23℃、东南风 4.3km/h」这种**完整自然语言**，
+      让 LLM 没有「猜测/补全」的可乘之机。
+    - 字段扩展：天气状况描述（来自 WMO weather_code 映射）、风向（角度 → 八方位）、
+      湿度、降水量、最高 / 最低气温——全部一次拉齐，避免下游再二次拼接。
+    - 文案中英文双语：依据 ``prefer_zh_output`` 切换；这样英文问句拿到英文 content，
+      不会再次跨语言翻译/掉细节。
+    """
     loc = _extract_weather_location(query)
     if not loc:
         return None
+    geocode_lang = "zh" if prefer_zh_output else "en"
     timeout = httpx.Timeout(8.0, connect=4.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
-        # 地理编码获取经纬度
         geo_resp = await client.get(
             "https://geocoding-api.open-meteo.com/v1/search",
-            params={"name": loc, "count": 1, "language": "zh", "format": "json"},
+            params={"name": loc, "count": 1, "language": geocode_lang, "format": "json"},
         )
         if geo_resp.status_code != 200:
             return None
@@ -180,38 +344,101 @@ async def _open_meteo_weather_fallback(query: str) -> dict | None:
         city_name = top.get("name") or loc
         country = top.get("country") or ""
 
-        # 查询天气
         weather_resp = await client.get(
             "https://api.open-meteo.com/v1/forecast",
             params={
                 "latitude": lat,
                 "longitude": lon,
-                "current": "temperature_2m,apparent_temperature,weather_code,wind_speed_10m",
+                # 拉齐主要 current 字段，确保 LLM 不需要自己「猜测」缺失项：
+                # - temperature_2m / apparent_temperature  → 实测气温 / 体感温度
+                # - relative_humidity_2m                   → 相对湿度
+                # - precipitation                          → 当前小时降水量
+                # - weather_code                           → WMO 编号（再翻译成自然语言）
+                # - wind_speed_10m / wind_direction_10m    → 风速 / 风向角度
+                "current": (
+                    "temperature_2m,apparent_temperature,relative_humidity_2m,"
+                    "precipitation,weather_code,wind_speed_10m,wind_direction_10m"
+                ),
+                # 同时取当天最高 / 最低，便于回答「今天最高/最低气温」类问题。
+                "daily": "temperature_2m_max,temperature_2m_min,precipitation_sum",
                 "timezone": "Asia/Shanghai",
+                "forecast_days": 1,
             },
         )
         if weather_resp.status_code != 200:
             return None
         weather_data = weather_resp.json() or {}
         current = weather_data.get("current") or {}
+        daily = weather_data.get("daily") or {}
         temp = current.get("temperature_2m")
         feels = current.get("apparent_temperature")
+        humidity = current.get("relative_humidity_2m")
+        precip = current.get("precipitation")
         wind = current.get("wind_speed_10m")
+        wind_dir = current.get("wind_direction_10m")
         code = current.get("weather_code")
         obs_time = current.get("time")
         if temp is None and feels is None and wind is None and code is None:
             return None
 
-        content = (
-            f"{city_name}{('·' + country) if country else ''} 当前天气："
-            f"气温 {temp}°C，体感 {feels}°C，风速 {wind}km/h，天气代码 {code}，观测时间 {obs_time}。"
+        # 当日极值（数组取首值）；若服务端没返回这些字段，用 None 占位，避免拼接报错。
+        def _first(v):
+            if isinstance(v, list) and v:
+                return v[0]
+            return v
+
+        t_max = _first(daily.get("temperature_2m_max"))
+        t_min = _first(daily.get("temperature_2m_min"))
+        precip_sum = _first(daily.get("precipitation_sum"))
+
+        weather_desc = _wmo_describe(code, prefer_zh_output)
+        wind_dir_label = _wind_direction_label(wind_dir, prefer_zh_output)
+
+        if prefer_zh_output:
+            extras = []
+            if humidity is not None:
+                extras.append(f"湿度 {humidity}%")
+            if precip is not None:
+                extras.append(f"当前降水 {precip}mm")
+            if t_max is not None and t_min is not None:
+                extras.append(f"今日最高 {t_max}°C / 最低 {t_min}°C")
+            if precip_sum is not None:
+                extras.append(f"今日总降水 {precip_sum}mm")
+            extras_text = ("，" + "，".join(extras)) if extras else ""
+            content = (
+                f"{city_name}{('·' + country) if country else ''} 当前天气：{weather_desc}，"
+                f"气温 {temp}°C（体感 {feels}°C），{wind_dir_label}风 {wind}km/h"
+                f"{extras_text}。观测时间：{obs_time}。"
+            )
+        else:
+            extras = []
+            if humidity is not None:
+                extras.append(f"humidity {humidity}%")
+            if precip is not None:
+                extras.append(f"current precipitation {precip}mm")
+            if t_max is not None and t_min is not None:
+                extras.append(f"today high {t_max}°C / low {t_min}°C")
+            if precip_sum is not None:
+                extras.append(f"today total precipitation {precip_sum}mm")
+            extras_text = (", " + ", ".join(extras)) if extras else ""
+            content = (
+                f"{city_name}{(', ' + country) if country else ''} current weather: "
+                f"{weather_desc}, temperature {temp}°C (feels like {feels}°C), "
+                f"wind from {wind_dir_label} at {wind}km/h{extras_text}. "
+                f"Observation time: {obs_time}."
+            )
+        title = (
+            f"{city_name} 实时天气（Open-Meteo）"
+            if prefer_zh_output
+            else f"{city_name} current weather (Open-Meteo)"
         )
         return {
             "rank": 1,
-            "title": f"{city_name} 实时天气（Open-Meteo）",
+            "title": title,
             "url": f"https://open-meteo.com/en/docs?latitude={lat}&longitude={lon}",
             "content": content,
-            "score": 0.75,
+            # 给一个偏高的分数，以便天气类查询在排序中稳定排在前面。
+            "score": 0.95,
         }
 
 
@@ -627,6 +854,12 @@ class ConversationNodes:
             resolved = resolved.strip()
             state["rewritten_query"] = resolved
             state["query_rewritten"] = resolved != query
+            # 显式记录改写结果，便于排查"代词追问被错判为 unrelated"或"改写器未触发"。
+            logger.info(
+                f"Standalone query resolution: original={query[:80]!r}, "
+                f"resolved={resolved[:80]!r}, query_rewritten={resolved != query}, "
+                f"context_dependence={context_dependence}"
+            )
 
             # 5.对改写后的问句分类
             #
@@ -713,6 +946,44 @@ class ConversationNodes:
                     reason="general",
                 )
 
+            # 6.6 数学题 / 教材概念题 启发式补位
+            #
+            # 背景：qwen2.5:7b 这类小分类器对没有"求/解/计算"动词的几何应用题
+            # （"已知圆锥的底面半径为 1，高为 2，则圆锥的侧面积为多少?"），
+            # 以及长篇教材式提问（"在数列的学习中…请分别说明…推导方法…比较异同"）
+            # 存在系统性漏判，会落到 ``general_knowledge / chit_chat / other`` 这类兜底
+            # 标签上，导致原本应走 Phi-4 的题目被通用 LLM 接住、原本应走 RAG 的教材
+            # 题被通用 LLM 直答。
+            #
+            # 设计要点（与 realtime 启发式同思路）：
+            # - 只对 LLM 弱标签（``HEURISTIC_PROMOTABLE_LABELS``）补位，保护 LLM 已识别准确的强分类；
+            # - 数学题启发式优先（"已知…为多少" 这种模式比"教学语境"更具体）；
+            # - 启发式自身彼此互斥（math 启发式内部已经把 ``请讲解 / 推导方法 / 异同``
+            #   这类元语言信号当作排除项），不会把 Q4 类教材题误升为数学题。
+            if result.label in HEURISTIC_PROMOTABLE_LABELS:
+                if heuristic_math_problem(resolved):
+                    logger.info(
+                        "Math heuristic promoted to math_problem: "
+                        f"prev_label={result.label}, prev_confidence={result.confidence}, "
+                        f"query={resolved[:80]}"
+                    )
+                    result = ClassificationResult(
+                        label="math_problem",
+                        confidence=result.confidence,
+                        reason="heuristic_math",
+                    )
+                elif heuristic_concept_explain(resolved):
+                    logger.info(
+                        "Concept heuristic promoted to concept_explain: "
+                        f"prev_label={result.label}, prev_confidence={result.confidence}, "
+                        f"query={resolved[:80]}"
+                    )
+                    result = ClassificationResult(
+                        label="concept_explain",
+                        confidence=result.confidence,
+                        reason="heuristic_concept",
+                    )
+
             logger.info(
                 f"LLM classification: label={result.label}, confidence={result.confidence}, "
                 f"reason={result.reason}, query={resolved[:50]}"
@@ -727,6 +998,16 @@ class ConversationNodes:
             state["classification_label"] = result.label
             state["classification_confidence"] = result.confidence
             state["classification_reason"] = result.reason
+
+            # 8.5 由分类标签解析出 answer_mode（数据驱动，禁止在此处写硬编码 if）
+            #     - 路由表集中维护在 intent_routing.INTENT_TO_ANSWER_MODE；
+            #     - 下游 route_after_classification 与 generate_answer 仅依赖
+            #       state["answer_mode"]，不再叠加 is_realtime / is_math_problem
+            #       等一堆复合条件来决策；
+            #     - 未识别标签自动落到 GENERAL_LLM，避免进入 RAG / Phi-4 等带外
+            #       依赖的路径。
+            answer_mode = resolve_answer_mode(result.label)
+            state["answer_mode"] = answer_mode.value
 
             # 9.根据分类标签设置状态
             match result.label:
@@ -762,7 +1043,7 @@ class ConversationNodes:
                         "text": "抱歉，我没有听清您的问题，请再重复一次。",
                         "citations": []
                     })
-                # 默认通用查询
+                # 默认通用查询（含 concept_explain / english_query / general_knowledge / chit_chat / other）
                 case _:
                     state["is_realtime_query"] = False
                     state["intent"] = "general_query"
@@ -892,24 +1173,33 @@ class ConversationNodes:
         """
         路由决策: 查询分类后的下一步。
 
+        路由优先级（高到低）：
+            1. ``intent in {greeting, noise}`` 直接走 greeting 分支：
+               - 这两类已在 classify_query_type 中预先生成 sources/preset 答案，
+                 跳过 web/RAG 节省时延。
+            2. ``is_realtime_query`` 为真 → realtime（含日历直出兜底，下游再判断）：
+               - 日历问题、启发式升级、LLM 兜底都会把这个标志置真，
+                 此处无需关心具体子类型。
+            3. 其余情况按 ``state["answer_mode"]`` 数据驱动：
+               - PHI4_MATH        → math
+               - RAG_WITH_FALLBACK → rag
+               - GENERAL_LLM / 默认 → general
+
         Args:
             state: Current conversation state
 
         Returns:
-            目标节点名称 (greeting/realtime/math/normal)
+            目标分支名（``ROUTE_BRANCH_*`` 之一）
         """
         intent = state.get("intent")
-        # 问候语和噪声输入直接跳到生成答案
         if intent in ("greeting", "noise"):
-            return "greeting"
-        # 实时查询 → web search
+            return ROUTE_BRANCH_GREETING
+        # 实时类必须先经过 web_search（日历直出在 generate_answer 内部短路），
+        # 不能让 answer_mode 把这条路径降级成普通 LLM。
         if state.get("is_realtime_query"):
-            return "realtime"
-        # 数学问题 → 直接生成答案（使用 Phi-4）
-        if state.get("is_math_problem"):
-            return "math"
-        # 其他 → 复杂度评估
-        return "normal"
+            return ROUTE_BRANCH_REALTIME
+        # 表驱动：把分类标签 → 路由分支的所有判断集中到 intent_routing。
+        return resolve_route_branch(state.get("answer_mode"))
 
     # -------------------------------------------------------------------------
     # Workflow Nodes - Complexity Evaluation
@@ -1050,6 +1340,43 @@ class ConversationNodes:
                     f"Web search started: query={query[:100]}, "
                     f"is_realtime={state.get('is_realtime_query')}"
                 )
+
+                # 天气类查询：优先用结构化天气源（Open-Meteo），跳过 Tavily。
+                # 之前的实现把 Tavily 当主源，weatherapi.com 等页面被 Tavily 截成几百字
+                # 的 JSON 残片（如 ``{'temp_c': 23.1, 'tem...``），LLM 看不到完整字段时
+                # 会自行编造 "cloudy / 4.3 mph / from south" 这类幻觉。换成直接 API
+                # 拿全字段（气象代码、风向角度、湿度、降水），让 LLM 只做"组织语句"
+                # 而非"补全数据"，从源头消除幻觉。
+                # Open-Meteo 失败时（地理编码无果 / 接口超时）才回退到 Tavily 通用搜索，
+                # 保留旧路径作为兜底，避免天气查询彻底无结果。
+                if state.get("realtime_category") == "weather":
+                    structured = await _open_meteo_weather_fallback(
+                        query, prefer_zh_output=resolve_prefer_zh_output(state)
+                    )
+                    if structured:
+                        state["web_search_results"] = [structured]
+                        state["web_search_used"] = True
+                        state["web_search_error"] = None
+                        state["sources"].append({
+                            "type": "text",
+                            "from": "web_search",
+                            "text": state.get("rewritten_query", state["user_query"]),
+                            "citations": [{
+                                "title": structured.get("title", ""),
+                                "url": structured.get("url", ""),
+                                "score": structured.get("score", 0.0),
+                                "snippet": structured.get("content", "")[:300],
+                            }],
+                        })
+                        logger.info(
+                            "Weather query handled by Open-Meteo (primary structured source); "
+                            f"skipping Tavily. query={query[:80]}"
+                        )
+                        return state
+                    logger.info(
+                        "Open-Meteo unavailable for weather query; falling back to Tavily. "
+                        f"query={query[:80]}"
+                    )
 
                 now = datetime.now()
                 realtime_category = state.get("realtime_category", "") or "general"
@@ -1411,10 +1738,25 @@ class ConversationNodes:
             else:  # normal query with RAGAnything
                 confidence = 0.8
 
-            # 根据意图和数据源配置流式输出
-            # 数学问题特殊处理
-            if state.get("is_math_problem", False):
-                # 使用 Phi-4 LLM 进行数学推理
+            # 根据 answer_mode（由 classify_query_type 写入）配置流式输出。
+            #
+            # 表驱动分发原则：
+            # - 任何"该走哪条生成路径"的判断只看 state["answer_mode"]；
+            # - intent / is_realtime_query / is_math_problem / web_search_used
+            #   仅作为细分场景修饰（如 RAG 在已联网情况下退回 langchain_llm）；
+            # - 新分支只在本 if/elif 链中追加一条，对应 INTENT_TO_ANSWER_MODE 表。
+            answer_mode = state.get("answer_mode") or AnswerMode.GENERAL_LLM.value
+
+            # web_search 已经命中网络资料：不论 answer_mode 原本是什么，统一交给
+            # langchain_llm 用网络上下文生成（避免再去走 RAG，让"实时问题"行为
+            # 与原实现一致）。这是 web_search 节点之后必经的修正点。
+            if web_search_used:
+                effective_mode = AnswerMode.GENERAL_LLM.value
+            else:
+                effective_mode = answer_mode
+
+            if state.get("is_math_problem", False) or effective_mode == AnswerMode.PHI4_MATH.value:
+                # 数学题：Phi-4 推理，明确不走 RAG
                 messages = build_math_generation_messages(state)
                 streaming_llm, model_name = self.workflow.get_phi4_streaming_llm(state)
                 state["streaming_llm"] = streaming_llm
@@ -1422,20 +1764,9 @@ class ConversationNodes:
                 state["streaming_type"] = "phi4_math"
                 logger.info(
                     f"Streaming configured: type=phi4_math, model={model_name}, "
-                    f"query={state['user_query'][:50]}..."
+                    f"answer_mode={answer_mode}, query={state['user_query'][:50]}..."
                 )
-            elif intent == "greeting" or web_search_used:
-                # 使用 LangChain LLM（原有逻辑）
-                messages = build_generation_messages(state)
-                streaming_llm, model_name = self.workflow.get_streaming_llm(state)
-                state["streaming_llm"] = streaming_llm
-                state["streaming_messages"] = messages
-                state["streaming_type"] = "langchain_llm"
-                logger.info(
-                    f"Streaming configured: type=langchain_llm, intent={intent}, "
-                    f"web_search_used={web_search_used}, model={model_name}"
-                )
-            else:  # normal - 需要召回文档，使用 RAGAnything
+            elif effective_mode == AnswerMode.RAG_WITH_FALLBACK.value:
                 employee_config = state.get("employee_config", {})
                 # RAGAnything 是全局单一知识库（Milvus + Neo4j），kb_ids 已是空也仍能召回到全局图谱/向量；
                 # 因此路由仅看全局开关 raganything_enabled 与员工级 rag_disabled，不再用 kb_ids 作为门。
@@ -1443,7 +1774,9 @@ class ConversationNodes:
                 rag_disabled = _resolve_employee_rag_disabled(employee_config)
                 kb_ids = _resolve_employee_kb_ids(employee_config)
 
-                # 全局未启用 或 员工显式禁用 RAG → 降级为普通 LLM 生成
+                # 全局未启用 或 员工显式禁用 RAG → 降级为普通 LLM 生成。
+                # 这是 "RAG 没有 → 通用 LLM" 兜底逻辑的"前置门"分支：
+                # 当 RAG 完全不可用时直接走通用 LLM，避免 RAGAnything 抛错或返回空。
                 if (not raganything_enabled) or rag_disabled:
                     messages = build_generation_messages(state)
                     streaming_llm, model_name = self.workflow.get_streaming_llm(state)
@@ -1451,23 +1784,46 @@ class ConversationNodes:
                     state["streaming_messages"] = messages
                     state["streaming_type"] = "langchain_llm"
                     logger.info(
-                        f"Streaming configured: type=langchain_llm (fallback), "
+                        f"Streaming configured: type=langchain_llm (rag_fallback), "
                         f"reason={'raganything_disabled' if not raganything_enabled else 'employee_rag_disabled'}, "
-                        f"model={model_name}"
+                        f"answer_mode={answer_mode}, model={model_name}"
                     )
-                # 启用 RAG → 使用 RAGAnything 混合检索
                 else:
-                    # 需要召回文档，使用 RAGAnything
+                    # 启用 RAG → 使用 RAGAnything 混合检索；
+                    # 召回为空时由 chat_stream_v1.py 中的运行期兜底（rag_empty）转通用 LLM。
                     state["streaming_llm"] = None
                     state["streaming_messages"] = None
                     state["streaming_type"] = "raganything_stream"
-                    state["raganything_query"] = state["user_query"]
+                    # 优先使用上下文消歧后的改写问句作为 RAG 的检索锚点：
+                    # 当用户用「他/这个/它」等指代承接上一轮（如先问「勾股定理」、再问
+                    # 「举例说明他在生活中的应用?」）时，原始 user_query 中的代词无法
+                    # 命中 KG/向量库里的具体实体，而 classify_query_type 节点已经把它
+                    # 改写为「举例说明勾股定理在生活中的应用?」并存入 rewritten_query。
+                    # 这里直接用改写后的版本，让 RAG 拿到含明确主语的 query，避免出现
+                    # 「请问您指的是哪方面的应用？」这类失忆式回答。
+                    # rewritten_query 缺失或为空时回退到原始 user_query，向后兼容老路径。
+                    rewritten_for_rag = (state.get("rewritten_query") or "").strip()
+                    state["raganything_query"] = rewritten_for_rag or state["user_query"]
                     state["raganything_mode"] = "hybrid"
 
                     logger.info(
-                        f"Streaming configured: type=raganything_stream, intent={intent}, "
-                        f"mode=hybrid, kb_ids_meta={kb_ids}, query={state['user_query'][:50]}..."
+                        f"Streaming configured: type=raganything_stream, "
+                        f"answer_mode={answer_mode}, mode=hybrid, kb_ids_meta={kb_ids}, "
+                        f"query={state['user_query'][:50]}..."
                     )
+            else:
+                # GENERAL_LLM（含 greeting / english_query / general_knowledge / chit_chat /
+                # web_search 命中后的兜底）：使用通用 LLM，不走 RAG，不走 web。
+                messages = build_generation_messages(state)
+                streaming_llm, model_name = self.workflow.get_streaming_llm(state)
+                state["streaming_llm"] = streaming_llm
+                state["streaming_messages"] = messages
+                state["streaming_type"] = "langchain_llm"
+                logger.info(
+                    f"Streaming configured: type=langchain_llm, "
+                    f"answer_mode={answer_mode}, intent={intent}, "
+                    f"web_search_used={web_search_used}, model={model_name}"
+                )
 
             state["confidence"] = confidence
             state["final_answer"] = ""  # Placeholder for streaming

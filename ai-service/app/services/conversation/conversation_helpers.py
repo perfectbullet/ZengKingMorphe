@@ -153,6 +153,8 @@ def select_llm(state: ConversationState, local_llm, remote_llm) -> Tuple[Any, st
        - 7-10分: 使用外部 API (高复杂度)
     2. Special cases:
        - greeting, FAQ matched: 强制使用本地模型
+       - 「现任 X 是谁」类需要广博世界知识的问题: 强制使用远端 LLM
+         （本地小模型常常回避或答错）
 
     Args:
         state: Current conversation state
@@ -195,15 +197,24 @@ def select_llm(state: ConversationState, local_llm, remote_llm) -> Tuple[Any, st
     else:
         reason = [f"complexity_{complexity_score:.1f}", complexity_reason]
 
+    # 「需要广博/最新世界知识」的事实性人事查询：复杂度评估节点对它们看起来"短而
+    # 简单"会给出 3.0 分这种低分，但本地小模型（qwen2.5:7b 等）面对这类问题常
+    # 表现为"我无法提供具体姓名"或答出过时人名（如"李克强"→"李强"）。
+    # 直接基于查询本身重新判定：命中「现任/当前 + 公共职务 + 谁」三元模式时强制
+    # 走远端大模型——它们的预训练语料对国际、国家级公共职务覆盖远比本地 7B 完整。
+    # 不依赖 evaluate_complexity 节点：GENERAL_LLM 分支并不经过它。
+    user_query = (state.get("rewritten_query") or state.get("user_query") or "").strip()
+    if not is_greeting and not faq_matched and _needs_big_world_knowledge(user_query):
+        use_remote = True
+        reason = ["needs_big_world_knowledge", *reason]
+
     model_name = settings.openai_model if use_remote else settings.ollama_model
+    # 使用 f-string 输出选择详情，避免 Loguru 静默吞掉 keyword arg。
     logger.info(
-        "LLM selection",
-        routing_mode="hybrid",
-        selected=model_name,
-        complexity_score=complexity_score,
-        complexity_reason=complexity_reason,
-        reason=reason,
-        threshold=complexity_threshold,
+        f"LLM selection: routing_mode=hybrid, selected={model_name}, "
+        f"complexity_score={complexity_score}, complexity_reason={complexity_reason}, "
+        f"reason={reason}, threshold={complexity_threshold}, "
+        f"query={(state.get('user_query') or '')[:60]!r}"
     )
 
     if use_remote:
@@ -881,7 +892,21 @@ User question:
                 "without adding unrelated follow-up questions or repetitive caveats."
             )
     else:
-        requirements = f"""回答要求：
+        # 当 RAG / web 完全没有提供上下文时，强制 LLM「严格基于上下文回答」会让
+        # 它对所有事实题（如「现任 X 是谁」）一律回避或猜测，反而拉低准确率。
+        # 这里检测「无上下文」状态，切到「允许 LLM 用自身知识作答」的提示文案：
+        #   - 有上下文（RAG 召回 / web 搜到 / FAQ 命中）→ 沿用旧的「严格按上下文」；
+        #   - 无上下文 → 允许使用 LLM 训练知识，但仍要求"不知道就说不知道"，
+        #     避免出现"硬要求严格按上下文 → LLM 拒答 / 编造"的冲突。
+        # 通用判定：retrieved_docs 非空 / web_search_used 为真 / 显式压缩上下文，
+        # 任一为真即认为有上下文；否则按"无上下文"分支构建提示。
+        has_context = bool(
+            state.get("retrieved_docs")
+            or state.get("web_search_used")
+            or state.get("compressed_context")
+        )
+        if has_context:
+            requirements = f"""回答要求：
 1. 严格基于提供的上下文信息回答，不编造内容
 2. 如果上下文不足，诚实告知并建议联系人工客服
 3. 保持{tone_desc}的语气风格
@@ -896,8 +921,8 @@ User question:
 {effective_query}
 
 """
-        if not prefer_zh_output:
-            requirements = f"""Requirements:
+            if not prefer_zh_output:
+                requirements = f"""Requirements:
 1. Answer strictly based on the provided context; do not fabricate
 2. If context is insufficient, say so and suggest contacting human support
 3. Keep a {tone_desc} tone
@@ -910,6 +935,91 @@ Context {source_indicator}:
 User question:
 {effective_query}
 """
+        else:
+            requirements = f"""回答要求：
+1. 没有外部上下文资料，可基于你自身的训练知识直接作答
+2. 保持{tone_desc}的语气风格，回答简洁明了、重点突出
+3. 如果你**确实不掌握**某项信息，请直接说明无法确认，而不是编造或提供过时信息
+4. **禁止：信息来源、网站链接、"信息来源"字样**
+
+用户问题：
+{effective_query}
+
+"""
+            if not prefer_zh_output:
+                requirements = f"""Requirements:
+1. There is no external retrieval context for this question; you may rely on your own pretraining knowledge to answer directly.
+2. Keep a {tone_desc} tone; be concise and clear.
+3. If you genuinely do not know a specific fact, say so explicitly rather than fabricate or guess.
+4. Do NOT include sources, links, or the words "source" / "references".
+
+User question:
+{effective_query}
+
+"""
+            # 「现任 X 职务」类事实查询的"知识时效"加固：
+            # DeepSeek-V3 等大模型自身权重里其实记得「李强 2023-03 起任国务院总理」，
+            # 但默认 prompt 中保留了「如果不掌握就说不知道」的弱化指令，叠加
+            # temperature=0.7（请求默认值，已在 get_streaming_llm 中改为 0），
+            # 模型偶尔会主动套用「截至我的知识更新（2021/2023）……」这类训练截止
+            # 套话，把上一任「李克强」当作"已知最准答案"复述出来。
+            # 这里对命中三元启发式（时间敏感词 + 谁 + 公共职务）的查询追加一段
+            # 强约束，明确：(a) 必须给出最新已知任命人物（不是上一任）；
+            # (b) 禁止以"训练截止/2023年/2021年"为由复述旧人物；(c) 没有把握时
+            # 应当回答"无法确认"而非沿用上一任名单。
+            # 这条修饰**仅在没有 web/RAG 上下文**时生效，与原"严格按上下文"分支隔离。
+            if _needs_big_world_knowledge(effective_query):
+                # 「现任 X 职务是谁」类事实查询的"知识时效"加固。
+                #
+                # 经验教训（重要）：
+                #   早期版本里同时写了「无法确认就说不知道」与「禁止使用旧人物」两条
+                #   约束，模型（DeepSeek-V3, temp=0）会优先取「无法确认」这条最安全的
+                #   出口，导致所有此类查询都返回「无法确认当前在任者……」，把本来能
+                #   正确回忆的事实也压抑掉了——这是把「安全兜底」写得太突出的副作用。
+                #
+                # 现在采用「明确鼓励 + 弱化兜底」的写法：
+                #   - 强调「你的训练语料覆盖到 2024 年之后的主要人事任命，请直接给出
+                #     最新一任的姓名」；
+                #   - 不再在 prompt 里把「我不知道」列为一个并列选项；
+                #   - 仍然禁止以「训练截止 2021/2023」为由复述上一任，避免之前出现的
+                #     「现任国务院总理是李克强」这类前任倒灌。
+                #
+                # 与 get_streaming_llm 中的 temperature=0 配合，使 DeepSeek-V3 在
+                # 「现任国务院总理是谁」这类问题上稳定输出「李强」，消除随机性。
+                if prefer_zh_output:
+                    requirements += (
+                        "\n[人事归属事实加固]\n"
+                        "本问询询问的是「某公共职务现任由谁担任」（典型如"
+                        "现任国务院总理、现任国家主席、现任联合国秘书长 等）。"
+                        "请按以下方式作答：\n"
+                        "- 你的预训练语料已覆盖到 2024 年及之后的主要公共职务任命事实，"
+                        "请**直接给出当前在任者的姓名**（最新一任），并简要补一句任命/就任时间；\n"
+                        "- **严禁**以「截至我的训练数据/知识更新（如 2021、2023 等）」为由，"
+                        "把已卸任的前任姓名当作「现任」复述出来——即便你对最新人事不完全确定，"
+                        "也不要回退到一个你明确知道已经卸任的人；\n"
+                        "- 仅在你完全没有任何相关候选人的训练记忆时，才回答"
+                        "「无法确认当前在任者，建议查阅官方权威发布」；\n"
+                        "- 答案只给出**一个明确人物姓名**，不要并列多个候选。"
+                    )
+                else:
+                    requirements += (
+                        "\n[Officeholder fact reinforcement]\n"
+                        "This query asks who currently holds a specific public office "
+                        "(e.g. current Premier, current President, current UN Secretary-General). "
+                        "Please answer as follows:\n"
+                        "- Your pretraining corpus already covers major public-office "
+                        "appointments through 2024 and beyond. **Output the name of the "
+                        "current incumbent directly**, optionally with a short note on when "
+                        "they were appointed.\n"
+                        "- It is **strictly forbidden** to fall back to a former officeholder "
+                        "by citing your \"training-data cutoff\" (e.g. 2021/2023). Even if "
+                        "you are not fully certain about the very latest changes, do NOT "
+                        "name someone you know has already left office.\n"
+                        "- Only if you have no relevant candidate at all in your training "
+                        "memory, reply: \"I cannot confirm the current officeholder; please "
+                        "check official sources.\"\n"
+                        "- Output exactly one definitive name; do not list multiple candidates."
+                    )
         # 实时查询但未获得联网结果：仍需保持时间一致性，避免模型自行混入错误年份。
         if state.get("is_realtime_query", False):
             requirements = requirements + "\n\n" + _build_realtime_temporal_guardrail(prefer_zh_output)
@@ -989,24 +1099,61 @@ def build_math_generation_messages(state: ConversationState) -> List:
     """
     构建数学问题的 Phi-4 模型消息。
 
+    多轮上下文支持
+    ==============
+    历史上 Phi-4 路径只塞了 ``SystemPrompt + 当前 query``，没有任何历史，
+    导致"对于 f(x)=2^x 和 g(x)=log₂x …" → 追问"判断它们是否互为反函数"时
+    模型看到的是孤立一句话，"它们"无所指，回答"题目中没有给出具体的两个函数"。
+
+    现在与 ``build_generation_messages`` 对齐：
+
+    1. **优先使用 ``rewritten_query``**（``_select_llm_facing_query`` 已做过
+       消歧改写 + 语言一致性兜底），这样即便上游历史被动态上下文记忆判定为
+       "unrelated"，单句问句本身也是可独立理解的；
+    2. **注入最近对话历史**（``_build_conversation_history``）：当
+       ``context_dependence == "unrelated"`` 时返回空列表，与普通 LLM 路径
+       完全一致，不破坏"动态上下文记忆"的语义；
+    3. **简单计算题路径不动**：``_is_simple_math_query`` 命中的"3+5=?"这种
+       单步运算与历史无关，保持原"零历史 + 极简 prompt"以维持低延迟和
+       PHI4_SIMPLE_SYSTEM_PROMPT 的简洁输出格式。
+
     Args:
         state: Current conversation state
 
     Returns:
         List of Message objects for Phi-4 LLM
     """
-    query = (state.get("user_query") or "").strip()
-    normalized_query = _normalize_math_query(query)
+    raw_query = (state.get("user_query") or "").strip()
+    normalized_query = _normalize_math_query(raw_query)
     if _is_simple_math_query(normalized_query):
-        # 简单计算题：保持极简输出
+        # 简单计算题：保持极简输出（不注入历史，避免噪声拉高首字延迟）
         messages = [SystemMessage(content=PHI4_SIMPLE_SYSTEM_PROMPT)]
         messages.append(HumanMessage(content=normalized_query))
         return messages
 
     # 非简单题：统一使用“解题行为流程”+“公式库”，不再针对具体题目写死分支
     sys_prompt = MATH_SYSTEM_PROMPT + "\n\n" + GEOMETRY_FORMULA_BOOK
-    messages = [SystemMessage(content=sys_prompt)]
-    messages.append(HumanMessage(content=normalized_query))
+    messages: List = [SystemMessage(content=sys_prompt)]
+
+    # 注入最近对话历史，与 build_generation_messages 行为对齐：
+    # - 动态上下文记忆判定为 "unrelated" 时 _build_conversation_history 自动返回 []
+    # - 跨语言历史会被语言一致性过滤掉，避免污染 Phi-4 输出语言
+    history_msgs = _build_conversation_history(state, max_messages=12)
+    messages.extend(history_msgs)
+
+    # 优先用消歧改写后的问句（_select_llm_facing_query 内部已做语言一致性兜底）；
+    # 再做一次 π / pi / 派 归一化，避免历史 / 改写过程引入的符号写法差异。
+    effective_query = _select_llm_facing_query(state)
+    effective_normalized = _normalize_math_query(effective_query)
+    messages.append(HumanMessage(content=effective_normalized))
+
+    logger.info(
+        "build_math_generation_messages: "
+        f"history_msgs={len(history_msgs)}, "
+        f"context_dependence={state.get('context_dependence')!r}, "
+        f"query_rewritten={state.get('query_rewritten', False)}, "
+        f"effective_query={effective_normalized[:80]!r}"
+    )
 
     return messages
 
@@ -1033,6 +1180,56 @@ def _is_simple_math_query(query: str) -> bool:
     has_op = any(op in q for op in ("+", "-", "*", "/", "加", "减", "乘", "除", "×", "÷", "等于"))
     asks_value = any(k in q for k in ("等于几", "多少", "=?", "＝", "="))
     return has_number and has_op and asks_value
+
+
+# 「需要广博/最新世界知识」的关键词组合：典型代表是「现任 / 当前 + 公共职务 + 谁」。
+# 本地小模型（如 qwen2.5:7b）这类问题的命中率很低——要么没训练、要么回避不答；
+# 远端 DeepSeek 等大模型对这类知识覆盖完整得多。在「混合路由」模式里，把命中
+# 此模式的问题手动抬高复杂度分数，让它们越过 ``complexity_threshold`` 走远端 LLM。
+# 词表与正则集中在这里维护，避免把"该走哪个模型"的判断散落到各处。
+import re as _re_complexity  # 避免与外部 re 命名冲突，仅在本函数局部使用。
+
+_BIG_KNOWLEDGE_TIME_RE = _re_complexity.compile(
+    r"(目前|当前|现任|现阶段|本届|现今|现在在任)"
+)
+_BIG_KNOWLEDGE_WHO_RE = _re_complexity.compile(
+    r"(谁|哪位|哪一位|哪个|哪一个|是谁|何人|哪几位)"
+)
+_BIG_KNOWLEDGE_OFFICE_RE = _re_complexity.compile(
+    r"(总理|主席|总统|首相|省长|市长|县长|区长|州长|"
+    r"部长|司长|厅长|局长|处长|科长|主任|书记|总书记|阁员|内阁|"
+    r"领导人|领导|元首|大使|代表|议员|議員|"
+    r"秘书长|秘书|理事长|会长|主任|议长|主席团)"
+)
+_BIG_KNOWLEDGE_TIME_RE_EN = _re_complexity.compile(
+    r"\b(current|present|incumbent|now)\b", _re_complexity.IGNORECASE
+)
+_BIG_KNOWLEDGE_WHO_RE_EN = _re_complexity.compile(
+    r"\bwho(?:'s|\s+is|\s+are|\s+was|\s+were)\b", _re_complexity.IGNORECASE
+)
+_BIG_KNOWLEDGE_OFFICE_RE_EN = _re_complexity.compile(
+    r"\b(president|premier|prime\s+minister|mayor|governor|secretary|chancellor|minister)\b",
+    _re_complexity.IGNORECASE,
+)
+
+
+def _needs_big_world_knowledge(query: str) -> bool:
+    """是否「需要广博世界知识」类查询（现任/当前 + 职务 + 谁）。"""
+    if not query:
+        return False
+    if (
+        _BIG_KNOWLEDGE_TIME_RE.search(query)
+        and _BIG_KNOWLEDGE_WHO_RE.search(query)
+        and _BIG_KNOWLEDGE_OFFICE_RE.search(query)
+    ):
+        return True
+    if (
+        _BIG_KNOWLEDGE_TIME_RE_EN.search(query)
+        and _BIG_KNOWLEDGE_WHO_RE_EN.search(query)
+        and _BIG_KNOWLEDGE_OFFICE_RE_EN.search(query)
+    ):
+        return True
+    return False
 
 
 def heuristic_complexity(query: str) -> float:
@@ -1097,5 +1294,12 @@ def heuristic_complexity(query: str) -> float:
     ]
     if any(p in query for p in simple_patterns) and length < 30:
         score -= 1
+
+    # 「现任 X 是谁」类需要最新/广博世界知识：本地小模型回答常常回避或错答，
+    # 强制把复杂度抬到阈值以上让 hybrid 路由切到远端大模型（DeepSeek 等）。
+    # 这里只对命中三元模式（时间敏感词 + 谁 + 公共职务）的问题加分，避免把
+    # 「他是哪位科学家」这类历史题也牵连过去——它们的「时间敏感词」一般缺失。
+    if _needs_big_world_knowledge(query):
+        score = max(score, 8.0)
 
     return max(0.0, min(10.0, score))

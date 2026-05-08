@@ -160,6 +160,35 @@ _NON_CALENDAR_REALTIME_HINT_ZH = (
     "新闻",
 )
 
+# 英文版「明显不是问日历的实时场景」匹配。
+#
+# 设计要点：
+#   - 中文 hint 用 ``in`` 子串匹配即可（汉字天然有词界）；英文必须加 ``\b``，
+#     否则 ``"news"`` 会误中 ``"newspaper"``、``"market"`` 会误中
+#     ``"supermarket"`` 等无关名词，在该函数里产生连锁误判。
+#   - 这里只匹配「领域关键词」，**不**判定时间相对词（如 "today"）——后者本就
+#     是日历推算的合法触发条件，是否真要走日历由领域关键词反向兜底。
+#   - 词表与中文版语义对齐（天气 / 路况 / 行情 / 新闻 等）；按需扩展时
+#     **只追加新分组**，避免把过于宽泛的词（如 "price"、"rate"）放进来——
+#     它们可能出现在日历无关的非实时问题里（如 "exchange rate of yuan in 2010"）。
+_NON_CALENDAR_REALTIME_HINT_EN = re.compile(
+    r"\b("
+    # 天气 / 气象
+    r"weather|temperature|forecast|"
+    r"rain(?:ing|y|fall)?|snow(?:ing|y|fall)?|"
+    r"typhoon|hurricane|thunderstorm|storm|blizzard|"
+    r"humid(?:ity)?|sunny|cloudy|windy|foggy|"
+    r"air\s+quality|aqi|pollution|smog|haze|"
+    # 路况 / 交通
+    r"traffic|congestion|gridlock|road\s+condition|"
+    # 行情 / 金融实时
+    r"stock(?:s)?|share\s+price|exchange\s+rate|currency|gold\s+price|"
+    # 新闻 / 时事
+    r"news|headline(?:s)?|breaking"
+    r")\b",
+    re.IGNORECASE,
+)
+
 
 # -----------------------------------------------------------------------------
 # 农历「固定月日」传统节日 → 公历日期（表驱动扩展；日期由 zhdate 在公历年内搜索确定）
@@ -562,6 +591,11 @@ def should_attempt_calendar_resolution(user_query: str) -> bool:
         return False
     if any(h in q for h in _NON_CALENDAR_REALTIME_HINT_ZH):
         return False
+    # 英文领域关键词反向兜底：例如 "what's the weather like today"
+    # 含 "today" 会触发相对日匹配，但本质是天气问题——必须先短路掉，
+    # 否则下游会被错误地归为 ``realtime_category="time"`` 并跳过 web search。
+    if _NON_CALENDAR_REALTIME_HINT_EN.search(q):
+        return False
     if match_lunar_fixed_festival(q):
         return True
     if match_solar_weekday_festival(q):
@@ -584,11 +618,30 @@ def should_attempt_calendar_resolution(user_query: str) -> bool:
     return False
 
 
+_RELATIVE_DAY_OFFSET_ZH_BY_LEN: tuple[tuple[str, int], ...] = tuple(
+    sorted(_RELATIVE_DAY_OFFSET_ZH, key=lambda kv: len(kv[0]), reverse=True)
+)
+_RELATIVE_DAY_OFFSET_EN_BY_LEN: tuple[tuple[str, int], ...] = tuple(
+    sorted(_RELATIVE_DAY_OFFSET_EN, key=lambda kv: len(kv[0]), reverse=True)
+)
+
+
 def _relative_calendar_day_offset(q_lower: str) -> int | None:
-    for phrase, off in _RELATIVE_DAY_OFFSET_ZH:
+    """
+    匹配相对日词条，**按词长降序匹配**——避免长词被同前缀短词截胡。
+
+    典型反例（按声明顺序匹配会出错）：
+      - ``大后天是几月几号？``：声明顺序中 "后天" 在 "大后天" 之前，
+        ``in`` 子串扫描会先命中 "后天"（+2），导致结果比正确日期早 1 天。
+      - ``three days ago`` vs ``yesterday``、``day after tomorrow`` vs
+        ``tomorrow`` 等英文词条同样存在前缀重叠。
+    用按长度倒序的副本匹配后，"大后天" / "day before yesterday" 这类长词必然先命中，
+    数据声明顺序仍可按语义阅读习惯保留。
+    """
+    for phrase, off in _RELATIVE_DAY_OFFSET_ZH_BY_LEN:
         if phrase in q_lower:
             return off
-    for phrase, off in _RELATIVE_DAY_OFFSET_EN:
+    for phrase, off in _RELATIVE_DAY_OFFSET_EN_BY_LEN:
         if phrase in q_lower:
             return off
     return None
