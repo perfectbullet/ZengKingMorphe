@@ -74,6 +74,12 @@ from app.services.web_search_recency import (
     build_time_anchored_query,
     filter_and_sort_by_recency,
 )
+from app.services.wall_clock_authority import (
+    authoritative_wall_clock_search_record,
+    citation_dict_from_wall_clock_record,
+    sanitize_wall_clock_record_for_state,
+    skip_web_use_authoritative_beijing_wall_clock,
+)
 from app.utils.common import has_language_drift
 
 logger = get_logger(__name__)
@@ -1413,10 +1419,37 @@ class ConversationNodes:
                             f"skipping Tavily. query={query[:80]}"
                         )
                         return state
-                    logger.info(
-                        "Open-Meteo unavailable for weather query; falling back to Tavily. "
-                        f"query={query[:80]}"
-                    )
+                        logger.info(
+                            "Open-Meteo unavailable for weather query; falling back to Tavily. "
+                            f"query={query[:80]}"
+                        )
+
+                # 「当前北京时间/几点几分」：爬虫摘要常混入错误时区≈±8 小时，
+                # 用 Asia/Shanghai 服务端时刻作为权威源，跳过 Tavily（与结构化天气同源思路）。
+                if state.get("realtime_category") == "time":
+                    q_time = (state.get("rewritten_query") or state.get("user_query") or "").strip()
+                    _pref_zh = resolve_prefer_zh_output(state)
+                    if skip_web_use_authoritative_beijing_wall_clock(
+                        q_time, prefer_zh_output=_pref_zh
+                    ):
+                        _rec = authoritative_wall_clock_search_record(
+                            q_time, prefer_zh_output=_pref_zh
+                        )
+                        _clean = sanitize_wall_clock_record_for_state(_rec)
+                        state["web_search_results"] = [_clean]
+                        state["web_search_used"] = True
+                        state["web_search_error"] = None
+                        state["sources"].append({
+                            "type": "text",
+                            "from": "web_search",
+                            "text": state.get("rewritten_query", state["user_query"]),
+                            "citations": [citation_dict_from_wall_clock_record(_rec)],
+                        })
+                        logger.info(
+                            "Web search skipped: authoritative Beijing wall clock, "
+                            f"query={q_time[:80]}"
+                        )
+                        return state
 
                 now = datetime.now()
                 realtime_category = state.get("realtime_category", "") or "general"

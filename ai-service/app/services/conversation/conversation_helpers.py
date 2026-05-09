@@ -840,6 +840,38 @@ Context {source_indicator}:
 User question:
 {effective_query}
 """
+        elif realtime_category == "time":
+            requirements = f"""**重要提示**：用户询问日期/时刻类实时信息。
+
+回答要求：
+1. **必须以资料中标题含「权威时钟」的一条为准**：其中时刻由服务器按时区 Asia/Shanghai（北京时间/东八区）计算；
+2. **禁止**采用其它资料片段里与用户问题矛盾的「时分秒」（常见于网页缓存或未标注时区的 UTC）；
+3. **直接回答**用户问的几点、星期几、日期等，一两句话即可；
+4. 保持{tone_desc}的语气风格；
+5. **禁止**：信息来源说明、网站链接、「信息来源」字样。
+
+上下文信息{source_indicator}：
+{context_text}
+
+用户问题：
+{effective_query}
+"""
+            if not prefer_zh_output:
+                requirements = f"""IMPORTANT: The user asks for date/time information.
+
+Requirements:
+1. If the context includes an authoritative wall-clock entry for Beijing/Asia/Shanghai, treat it as **the only source** for civil time-of-day (HH:MM:SS).
+2. **Do NOT** pick conflicting timestamps from other snippets (common cache/timezone mistakes).
+3. Answer the asked date/weekday/time directly in plain language.
+4. Keep a {tone_desc} tone.
+5. Do NOT include sources, links, or the words "source" / "references".
+
+Context {source_indicator}:
+{context_text}
+
+User question:
+{effective_query}
+"""
         else:
             requirements = f"""**重要提示**：用户询问的是实时信息，系统已通过网络搜索获取了最新数据。
 
