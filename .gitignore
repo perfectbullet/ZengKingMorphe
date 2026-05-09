@@ -92,3 +92,13 @@ ai-service/phi4_test_result/求曲线y等于x的三次方减去3x，在点一负
 ai-service/phi4_test_result/求椭圆X平方除以25，加上Y的平方除以9等于1的焦距和离心率。.json
 ai-service/scripts/*.json
 ai-service/scripts/*.txt
+logs/ai_service.log
+logs/delta_content.txt
+ai-service/scripts/exports/raw_tokens_20260509_103758.json
+ai-service/scripts/exports/raw_tokens_20260509_103921.json
+ai-service/scripts/exports/raw_tokens_20260509_104021.json
+ai-service/scripts/exports/raw_tokens_20260509_104026.json
+ai-service/scripts/exports/stream_chunks_20260508_184531.json
+ai-service/scripts/exports/stream_chunks_20260508_184531.txt
+ai-service/scripts/exports/stream_chunks_20260509_101856.json
+ai-service/scripts/exports/stream_chunks_20260509_101856.txt

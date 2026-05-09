@@ -148,9 +148,7 @@ class OpenAIChatRequest(BaseModel):
                 "user_id": "user_123456",
                 "session_id": "sess_20251218_abc123",
                 "channel_name": "web",
-                "team_id": "team_001",
-                "user_name": "苏文心",
-                "head_url": "/edu-api/fileserver/default/image/2025/5/14/e6d399d9-3785-4d08-bbab-213a6df390c4.jpeg"
+                "team_id": "team_001"
             }
         }
     )
@@ -171,8 +169,6 @@ class OpenAIChatRequest(BaseModel):
     # Custom fields for our system
     employee_id: str = Field(default="29", description="Digital employee ID")
     user_id: str = Field(default="user_20260122", description="User ID")
-    user_name: str = Field(default="用户名称", description="用户登录后的名字")
-    head_url: str = Field(default="用户头像", description="用户头像")
     session_id: Optional[str] = Field(default="sess_4_42478261_29", description="Session ID")
     channel_name: Optional[str] = Field(default=None, description="Channel name (web, mobile, etc.)")
     team_id: Optional[str] = Field(default=None, description="Team ID")
@@ -191,6 +187,8 @@ class CreateSessionRequest(BaseModel):
         json_schema_extra={
             "example": {
                 "user_id": "user_123456",
+                "user_name": "苏文心",
+                "head_url": "/edu-api/fileserver/default/image/2025/5/14/e6d399d9-3785-4d08-bbab-213a6df390c4.jpeg",
                 "employee_id": "hutao",
                 "session_id": "sess_hutao_abc123",
                 "metadata": {
@@ -205,6 +203,8 @@ class CreateSessionRequest(BaseModel):
     )
     
     user_id: str = Field(..., description="User ID")
+    user_name: Optional[str] = Field(default="用户名称", description="用户登录后的名字")
+    head_url: Optional[str] = Field(default="用户头像", description="用户头像")
     employee_id: str = Field(..., description="Digital employee ID")
     session_id: Optional[str] = Field(
         None,

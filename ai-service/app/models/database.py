@@ -39,6 +39,8 @@ class SessionModel(BaseModel):
     """Session model."""
     session_id: str
     user_id: str
+    user_name: Optional[str] = None
+    head_url: Optional[str] = None
     employee_id: str
     status: str = "active"  # active/ended/timeout
     message_count: int = 0
@@ -214,6 +216,20 @@ class StreamChunkModel(BaseModel):
     sequence: int = 0  # Chunk sequence number
     timestamp: datetime = Field(default_factory=datetime.now)
     created_at: datetime = Field(default_factory=datetime.now)
+
+
+class RawTokenModel(BaseModel):
+    """Raw streaming token for per-token persistence."""
+    token_id: str           # "{chat_id}_raw_{token_index}"
+    chat_id: str
+    session_id: str
+    user_id: str
+    employee_id: str
+    conversation_id: Optional[str] = None
+    token_text: str
+    token_index: int        # 单调递增序列号
+    streaming_source: str   # "raganything" | "phi4_math" | "langchain_llm" | "rag_fallback"
+    created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
 class FAQModel(BaseModel):

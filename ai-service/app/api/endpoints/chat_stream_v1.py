@@ -16,7 +16,7 @@ from typing import AsyncGenerator, Optional, Any
 from langchain_openai import ChatOpenAI
 
 from app.models.schemas import OpenAIChatRequest
-from app.models.database import StreamChunkModel
+from app.models.database import StreamChunkModel, RawTokenModel
 from app.core.logging import get_logger
 from app.core.database import get_database
 from app.services.conversation_service import conversation_workflow
@@ -606,6 +606,36 @@ async def save_stream_chunk(
     )
     await db.stream_chunks.insert_one(chunk_record.model_dump())
 
+
+async def save_raw_token(
+    db: Any,
+    chat_id: str,
+    session_id: str,
+    user_id: str,
+    employee_id: str,
+    token_text: str,
+    token_index: int,
+    streaming_source: str,
+    conversation_id: Optional[str] = None,
+) -> None:
+    """Save a raw streaming token to MongoDB."""
+    try:
+        record = RawTokenModel(
+            token_id=f"{chat_id}_raw_{token_index}",
+            chat_id=chat_id,
+            session_id=session_id,
+            user_id=user_id,
+            employee_id=employee_id,
+            conversation_id=conversation_id,
+            token_text=token_text,
+            token_index=token_index,
+            streaming_source=streaming_source,
+        )
+        await db.raw_stream_tokens.insert_one(record.model_dump())
+    except Exception as e:
+        logger.warning(f"Failed to save raw token: index={token_index}, error={e}")
+
+
 async def generate_openai_stream_v1(
     request: OpenAIChatRequest,
 ) -> AsyncGenerator[str, None]:
@@ -647,6 +677,7 @@ async def generate_openai_stream_v1(
     finish_chunk_data = _build_finish_chunk_data(chat_id, created, request.model, user_query)
 
     chunk_sequence = 0
+    raw_token_index = 0
 
     chunk_sequence += 1
     user_query_chunk_data = {
@@ -878,6 +909,12 @@ async def generate_openai_stream_v1(
                         if content is None:
                             continue
                         full_answer += content
+                        raw_token_index += 1
+                        await save_raw_token(
+                            db, chat_id, session_id, request.user_id, request.employee_id,
+                            content, raw_token_index, "raganything",
+                            current_state.get("conversation_id"),
+                        )
                         segment = sentence_buffer.add(content)
                         if segment:
                             chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
@@ -999,6 +1036,12 @@ async def generate_openai_stream_v1(
                             if not fb_token:
                                 continue
                             full_answer += fb_token
+                            raw_token_index += 1
+                            await save_raw_token(
+                                db, chat_id, session_id, request.user_id, request.employee_id,
+                                fb_token, raw_token_index, "rag_fallback",
+                                current_state.get("conversation_id"),
+                            )
                             fb_segment = sentence_buffer.add(fb_token)
                             if fb_segment:
                                 chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
@@ -1080,6 +1123,12 @@ async def generate_openai_stream_v1(
                 async for chunk in streaming_llm.astream(messages):
                     token = chunk.content if hasattr(chunk, 'content') else str(chunk)
                     if token:
+                        raw_token_index += 1
+                        await save_raw_token(
+                            db, chat_id, session_id, request.user_id, request.employee_id,
+                            token, raw_token_index, "phi4_math",
+                            current_state.get("conversation_id"),
+                        )
                         # 过滤 think 标签
                         filtered_token = think_tag_buffer.add(token)
                         if not filtered_token:
@@ -1162,6 +1211,12 @@ async def generate_openai_stream_v1(
                     token = chunk.content
                     if token:
                         full_answer += token
+                        raw_token_index += 1
+                        await save_raw_token(
+                            db, chat_id, session_id, request.user_id, request.employee_id,
+                            token, raw_token_index, "langchain_llm",
+                            current_state.get("conversation_id"),
+                        )
                         segment = sentence_buffer.add(token)
                         token_len = len(token)
                         buffer_len = sentence_buffer.get_buffer_length()

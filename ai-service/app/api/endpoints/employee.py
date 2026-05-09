@@ -65,7 +65,7 @@ async def create_employee(
 
         result = await db.digital_employee_configs.insert_one(insert_data.model_dump())
 
-        if result and result.inserted_id:
+        if result:
             return ResponseResult.success(None)
         else:
             return ResponseResult.error(status.HTTP_400_BAD_REQUEST, "error",

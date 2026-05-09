@@ -21,15 +21,15 @@ async def create_dataset_video(
     api_key: str = Depends(get_api_key)
 ):
     """
-        创建知识库视频资源
+    创建知识库视频资源
 
-        \nArgs:
-            \n- request: create_dataset_video request
-            \n- api_key: API key from auth
-            \n- db: Database instance
+    \nArgs:
+        \n- request: create_dataset_video request
+        \n- api_key: API key from auth
+        \n- db: Database instance
 
-        \nReturns:
-            \n- ResponseResult
+    \nReturns:
+        \n- ResponseResult
     """
     kb_id = request.kb_id
     try:
@@ -83,15 +83,15 @@ async def delete_documents(
     db=Depends(get_database)
 ):
     """
-        删除文档或视频资源
+    删除文档或视频资源
 
-        \nArgs:
-            \n- doc_id: document ID
-            \n- api_key: API key from auth
-            \n- db: Database instance
+    \nArgs:
+        \n- doc_id: document ID
+        \n- api_key: API key from auth
+        \n- db: Database instance
 
-        \nReturns:
-            - ResponseResult
+    \nReturns:
+        - ResponseResult
     """
     try:
         logger.info(f"delete_documents request: doc_id={doc_id}")
@@ -132,15 +132,15 @@ async def restart_task(
     db=Depends(get_database)
 ):
     """
-        重新启动任务：文档或视频资源
+    重新启动任务：文档或视频资源
 
-        \nArgs:
-            \n- task_id: task ID
-            \n- api_key: API key from auth
-            \n- db: Database instance
+    \nArgs:
+        \n- task_id: task ID
+        \n- api_key: API key from auth
+        \n- db: Database instance
 
-        \nReturns:
-            \n- ResponseResult
+    \nReturns:
+        \n- ResponseResult
     """
     try:
         logger.info(f"restart_task request: task_id={task_id}")
@@ -154,6 +154,7 @@ async def restart_task(
         await task_processor.re_submit_task(
             task_id=task_id,
             kb_id=task["kb_id"],
+            enhance=task["enhance"],
             filename=task["filename"],
             file_path=task["file_path"],
             category=task["category"],
@@ -185,16 +186,16 @@ async def set_enhance(
     db=Depends(get_database)
 ):
     """
-        设置文档或视频资源是否知识增强
+    设置文档或视频资源是否知识增强
 
-        \nArgs:
-            \n- doc_id: 文档或视频资源 ID
-            \n- enhance: 0=不增强，1=增强
-            \n- api_key: API key from auth
-            \n- db: Database instance
+    \nArgs:
+        \n- doc_id: 文档或视频资源 ID
+        \n- enhance: 0=不增强，1=增强
+        \n- api_key: API key from auth
+        \n- db: Database instance
 
-        \nReturns:
-            \n- ResponseResult
+    \nReturns:
+        \n- ResponseResult
     """
     try:
         logger.info(f"set_enhance request: doc_id={doc_id}")
@@ -222,6 +223,7 @@ async def set_enhance(
             await task_processor.re_submit_task(
                 task_id=task["task_id"],
                 kb_id=task["kb_id"],
+                enhance=enhance,
                 filename=task["filename"],
                 file_path=task["file_path"],
                 category=task["category"],
