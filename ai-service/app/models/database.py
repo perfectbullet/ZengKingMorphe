@@ -216,6 +216,20 @@ class StreamChunkModel(BaseModel):
     created_at: datetime = Field(default_factory=datetime.now)
 
 
+class RawTokenModel(BaseModel):
+    """Raw streaming token for per-token persistence."""
+    token_id: str           # "{chat_id}_raw_{token_index}"
+    chat_id: str
+    session_id: str
+    user_id: str
+    employee_id: str
+    conversation_id: Optional[str] = None
+    token_text: str
+    token_index: int        # 单调递增序列号
+    streaming_source: str   # "raganything" | "phi4_math" | "langchain_llm" | "rag_fallback"
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
 class FAQModel(BaseModel):
     """FAQ model for vector and keyword retrieval."""
     faq_id: str  # FAQ问答唯一id: faq_{employee_id}_{external_faq_id}

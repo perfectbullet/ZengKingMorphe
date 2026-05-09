@@ -161,6 +161,15 @@ class MongoDB:
                 IndexModel([("chat_id", ASCENDING), ("sequence", ASCENDING)]),
                 IndexModel([("created_at", DESCENDING)]),
             ])
+
+            # Raw stream tokens collection indexes
+            await self.db.raw_stream_tokens.create_indexes([
+                IndexModel([("token_id", ASCENDING)], unique=True),
+                IndexModel([("chat_id", ASCENDING), ("token_index", ASCENDING)]),
+                IndexModel([("session_id", ASCENDING), ("created_at", DESCENDING)]),
+                IndexModel([("streaming_source", ASCENDING)]),
+                IndexModel([("created_at", DESCENDING)]),
+            ])
             
             # FAQs collection indexes
             await self.db.faqs.create_indexes([
