@@ -158,9 +158,9 @@ async def restart_task(
             filename=task["filename"],
             file_path=task["file_path"],
             category=task["category"],
-            chunk_config=task["metadata"]["chunk_config"],
+            chunk_config=task["metadata"].get("chunk_config"),
             doc_id=task["doc_id"],
-            resource_id=task["metadata"]["resource_id"],
+            resource_id=task["metadata"].get("resource_id"),
         )
 
         return ResponseResult.success(None)
@@ -227,9 +227,9 @@ async def set_enhance(
                 filename=task["filename"],
                 file_path=task["file_path"],
                 category=task["category"],
-                chunk_config=task["metadata"]["chunk_config"],
+                chunk_config=task["metadata"].get("chunk_config"),
                 doc_id=task["doc_id"],
-                resource_id=task["metadata"]["resource_id"],
+                resource_id=task["metadata"].get("resource_id"),
             )
 
             return ResponseResult.success(None)

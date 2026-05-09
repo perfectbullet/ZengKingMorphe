@@ -2,4 +2,4 @@
 services:
   ai-service:
     env_file:
-      - ./ai-service/.env-win
+      - ./ai-service/.env

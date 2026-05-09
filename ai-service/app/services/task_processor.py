@@ -1,20 +1,64 @@
 """
 Async document task processor with queue management.
+
+使用 llama-rag-sdk RAGSystem 进行文档处理。
 """
 import asyncio
+import os
 import random
 import string
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, Optional, List
+
 from app.core.logging import get_logger
 from app.core.database import get_database
-from app.models.database import DocumentTaskModel
-from app.services.document_service import document_processor as doc_processor
-from app.services.dataset_faq_service import faq_processor
+from app.models.database import DocumentModel, DocumentTaskModel
+# from app.services.dataset_faq_service import faq_processor
 from app.services.thesaurus_major_service import thesaurus_major_processor
 from app.services.thesaurus_sensitive_service import thesaurus_sensitive_processor
+from app.services.document_service import generate_doc_id
 
 logger = get_logger(__name__)
+
+
+# ============ 文本提取工具函数 ============
+
+async def extract_text_from_file(file_path: str, file_ext: str) -> str:
+    """
+    从非 PDF 文件提取文本
+
+    Args:
+        file_path: 文件路径
+        file_ext: 文件扩展名（包含点号，如 .txt）
+
+    Returns:
+        提取的文本内容
+
+    Raises:
+        ValueError: 不支持的文件格式
+    """
+    import aiofiles
+    from pathlib import Path
+
+    if file_ext in [".txt", ".md"]:
+        async with aiofiles.open(file_path, 'r', encoding='utf-8') as f:
+            return await f.read()
+    elif file_ext == ".docx":
+        from docx import Document
+        doc = Document(file_path)
+        return "\n".join([paragraph.text for paragraph in doc.paragraphs])
+    elif file_ext == ".html":
+        from bs4 import BeautifulSoup
+        async with aiofiles.open(file_path, 'r', encoding='utf-8') as f:
+            html_content = await f.read()
+        soup = BeautifulSoup(html_content, 'html.parser')
+        return soup.get_text()
+    else:
+        raise ValueError(f"Unsupported file format: {file_ext}")
+
+
+# ============ 任务处理器 ============
 
 
 def generate_task_id() -> str:
@@ -25,18 +69,53 @@ def generate_task_id() -> str:
 
 
 class DocumentTaskProcessor:
-    """Background task processor for document processing."""
-    
+    """Background task processor for document processing.
+
+    使用 llama-rag-sdk RAGSystem 进行文档处理，包括：
+    - PDF 解析（MinerU）
+    - 结构感知分块
+    - Embedding 生成
+    - 存储（ChromaDB + MongoDB DocStore）
+    """
+
     def __init__(self):
         self.task_queue: asyncio.Queue = asyncio.Queue()
         self.running = False
         self.worker_task: Optional[asyncio.Task] = None
         self.active_tasks: Dict[str, bool] = {}  # task_id -> cancellation flag
+        self._rag_systems: Dict[str, "RAGSystem"] = {}  # kb_id -> RAGSystem 缓存
+
+    def _get_rag_system(self, kb_id: str):
+        """
+        获取或创建指定 kb_id 的 RAGSystem
+
+        每个 kb_id 使用独立的 ChromaDB 集合（rag_documents_<kb_id>）
+
+        Args:
+            kb_id: 知识库 ID
+
+        Returns:
+            对应的 RAGSystem 实例
+        """
+        if kb_id not in self._rag_systems:
+            from llama_rag_sdk.rag_system import RAGSystem
+            logger.info(f"创建 RAGSystem for kb_id={kb_id}, 集合名=rag_documents_{kb_id}")
+            self._rag_systems[kb_id] = RAGSystem(
+                kb_id=kb_id,  # 自动生成集合名 rag_documents_<kb_id>
+                enable_image_description=False,
+                enable_summarization=True,
+            )
+        return self._rag_systems[kb_id]
+
+    async def close(self):
+        """关闭所有 RAGSystem 资源"""
+        for rag_system in self._rag_systems.values():
+            await rag_system.close()
+        self._rag_systems.clear()
 
     async def submit_task(
         self,
         kb_id: str,
-        enhance: int,
         filename: str,
         file_path: str,
         category: Optional[str] = None,
@@ -49,7 +128,6 @@ class DocumentTaskProcessor:
 
         Args:
             kb_id: Knowledge base ID
-            enhance: 设置文档或视频资源是否知识增强：0=不增强，1=增强
             filename: Original filename
             file_path: Path to uploaded file
             category: Document category
@@ -67,7 +145,7 @@ class DocumentTaskProcessor:
         task_model = DocumentTaskModel(
             task_id=task_id,
             kb_id=kb_id,
-            enhance=enhance,
+            enhance=1,  # 保持默认值以兼容现有数据
             filename=filename,
             file_path=file_path,
             category=category,
@@ -92,7 +170,6 @@ class DocumentTaskProcessor:
         await self.task_queue.put({
             "task_id": task_id,
             "kb_id": kb_id,
-            "enhance": enhance,
             "filename": filename,
             "file_path": file_path,
             "category": category,
@@ -111,7 +188,6 @@ class DocumentTaskProcessor:
         self,
         task_id: str,
         kb_id: str,
-        enhance: str,
         filename: str,
         file_path: str,
         category: Optional[str] = None,
@@ -123,7 +199,6 @@ class DocumentTaskProcessor:
         await self.task_queue.put({
             "task_id": task_id,
             "kb_id": kb_id,
-            "enhance": enhance,
             "filename": filename,
             "file_path": file_path,
             "category": category,
@@ -148,13 +223,13 @@ class DocumentTaskProcessor:
         """Stop the background task processor."""
         if not self.running:
             return
-        
+
         self.running = False
-        
+
         # Cancel all active tasks
         for task_id in list(self.active_tasks.keys()):
             await self.cancel_task(task_id)
-        
+
         # Wait for worker to finish
         if self.worker_task:
             self.worker_task.cancel()
@@ -162,7 +237,10 @@ class DocumentTaskProcessor:
                 await self.worker_task
             except asyncio.CancelledError:
                 pass
-        
+
+        # 关闭 RAGSystem 资源
+        await self.close()
+
         logger.info("Document task processor stopped")
     
     async def _process_tasks(self):
@@ -446,28 +524,138 @@ class DocumentTaskProcessor:
             self.active_tasks.pop(task_id, None)
 
     async def _exec_process_document(self, task_data: Dict) -> str:
-        """Process document with progress updates.
-            保存文档
+        """
+        使用 RAGSystem 处理文档
+
+        流程：
+        1. 创建 MongoDB 文档记录
+        2. 使用 RAGSystem 索引文档
+        3. 更新文档状态为完成
+
+        Args:
+            task_data: 任务数据
+
+        Returns:
+            文档 ID
         """
         task_id = task_data["task_id"]
+        file_path = task_data["file_path"]
+        filename = task_data["filename"]
+        kb_id = task_data["kb_id"]
+        category = task_data.get("category")
+        doc_id = task_data.get("doc_id") or generate_doc_id(filename, kb_id)
+        resource_id = task_data.get("resource_id")
 
-        # Call original document processor
-        # We'll wrap it to track progress
-        doc_id = await doc_processor.process_document(
-            file_path=task_data["file_path"],
-            filename=task_data["filename"],
-            kb_id=task_data["kb_id"],
-            enhance=task_data["enhance"],
-            category=task_data.get("category"),
-            task_id=task_id,  # Pass task_id for progress tracking
-            chunk_config=task_data.get("chunk_config"),  # Pass chunk_config
-            doc_id=task_data.get("doc_id"),  # Pass pre-generated doc_id
-            resource_id=task_data.get("resource_id")  # Pass resource_id
-        )
+        # 获取文件信息
+        file_size = os.path.getsize(file_path)
+        file_ext = os.path.splitext(filename)[1].lower()
 
-        logger.info(f"Document task submitted: doc_id={doc_id}, task_id={task_id}")
+        # 合并元数据
+        doc_metadata = {}
+        if resource_id:
+            doc_metadata["resource_id"] = resource_id
 
-        return doc_id
+        # 创建/更新 MongoDB 文档记录
+        db = await get_database()
+        doc = await db.documents.find_one({"doc_id": doc_id})
+
+        if not doc:
+            doc_model = DocumentModel(
+                doc_id=doc_id,
+                filename=filename,
+                kb_id=kb_id,
+                category=category,
+                size=file_size,
+                format=file_ext[1:].upper(),
+                status="processing",
+                metadata=doc_metadata,
+            )
+
+            result = await db.documents.insert_one(doc_model.model_dump())
+
+            if result and result.inserted_id:
+                logger.info(
+                    "insert-document",
+                    doc_id=doc_id,
+                    filename=filename,
+                    kb_id=kb_id,
+                )
+            else:
+                logger.error(f"insert-document {doc_id} failed")
+                raise ValueError("Failed to create document record")
+
+        try:
+            # 使用 RAGSystem 索引文档
+            if file_ext == ".pdf":
+                # PDF: 使用 MinerU 解析 + 结构感知分块
+                await self._get_rag_system(kb_id).index_document(
+                    file_path,
+                    metadata={
+                        "doc_id": doc_id,
+                        "kb_id": kb_id,
+                        "filename": filename,
+                    }
+                )
+            else:
+                # 非 PDF 格式: 先提取文本，然后创建 ParsedDocument 索引
+                text_content = await extract_text_from_file(file_path, file_ext)
+
+                from llama_rag_sdk.document_parser.base import ParsedDocument, TextChunk
+
+                parsed_doc = ParsedDocument(
+                    title=filename,
+                    content=text_content,
+                    chunks=[
+                        TextChunk(
+                            text=text_content,
+                            page=0,
+                            chunk_index=0,
+                            metadata={
+                                "doc_id": doc_id,
+                                "kb_id": kb_id,
+                                "filename": filename,
+                            }
+                        )
+                    ]
+                )
+
+                await self._get_rag_system(kb_id).index_parsed_document(parsed_doc, source_path=file_path)
+
+            # 更新文档状态为完成
+            await db.documents.update_one(
+                {"doc_id": doc_id},
+                {"$set": {
+                    "status": "completed",
+                    "processed_at": datetime.utcnow(),
+                }}
+            )
+
+            logger.info(
+                "Document processing completed",
+                doc_id=doc_id,
+                filename=filename,
+                kb_id=kb_id,
+                task_id=task_id,
+            )
+
+            return doc_id
+
+        except Exception as e:
+            logger.error(
+                "Document processing failed",
+                doc_id=doc_id,
+                filename=filename,
+                error=str(e),
+                exc_info=True,
+            )
+
+            # 更新文档状态为失败
+            await db.documents.update_one(
+                {"doc_id": doc_id},
+                {"$set": {"status": "failed", "error_message": str(e)}},
+            )
+
+            raise
 
     async def _execute_faq_vectorization(self, task_data: Dict):
         """ 执行FAQ向量化任务 """
@@ -488,10 +676,10 @@ class DocumentTaskProcessor:
 
             logger.info(f"_execute_faq_vectorization task task_id={task_id}, task_data={task_data}")
 
-            faq_id = await faq_processor.faq_vectorization(
-                    task_id=task_id,
-                    faq_id=task_data["faq_id"]
-                )
+            # faq_id = await faq_processor.faq_vectorization(
+            #         task_id=task_id,
+            #         faq_id=task_data["faq_id"]
+            #     )
 
             # Check if task was cancelled
             if self.active_tasks.get(task_id, False):

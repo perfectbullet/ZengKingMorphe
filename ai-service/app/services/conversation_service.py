@@ -3,20 +3,27 @@ LangGraph-based Conversation Workflow for Digital Employee.
 
 This module implements a state-based conversation workflow using LangGraph, supporting:
 - Multi-source knowledge retrieval (RAG + FAQ + Web Search)
-- Query optimization (rewriting, compression)
+- LLM-based query classification (QueryClassifier)
 - Dual-LLM architecture (local Ollama + remote OpenAI-style API)
 - Streaming responses with performance monitoring
 
-Workflow Graph (16 nodes):
+Workflow Graph (8 nodes):
     load_employee_config → load_session_context → input_validation
         → classify_query_type
-        → [conditional: greeting?] → generate_answer
-        → [conditional: realtime?] → web_search
-        → [conditional: normal?] → evaluate_complexity → rewrite_query → match_faq
-        → [conditional: FAQ matched?] → generate_answer OR intent_recognition
-        → knowledge_retrieval → rerank_documents → compress_context
-        → [conditional: low relevance?] → web_search OR generate_answer
-        → generate_answer → verify_answer → save_conversation → END
+        → [conditional: greeting/noise?]   → generate_answer
+        → [conditional: realtime?]          → web_search → generate_answer
+        → [conditional: math?]              → generate_answer (Phi-4)
+        → [conditional: rag (concept)?]     → evaluate_complexity → generate_answer (RAGAnything)
+        → [conditional: general?]           → generate_answer (通用 LLM，不走 RAG)
+        → save_conversation → END
+
+意图 → 回答路径的映射统一维护在
+``app/services/conversation/intent_routing.py``（INTENT_TO_ANSWER_MODE）。
+新增分类标签或调整路由策略只改那张表，不需要改工作流。
+
+Note: Simplified workflow using RAGAnything for RAG retrieval.
+Removed nodes: intent_recognition, knowledge_retrieval, grade_documents,
+               compress_context, match_faq, rewrite_query, check_math_problem
 """
 import os
 from pathlib import Path
@@ -29,6 +36,7 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.services.conversation.conversation_state import ConversationState
 from app.services.conversation.conversation_nodes import ConversationNodes
+from app.utils.get_vllm_first_model import get_vllm_first_model
 
 logger = get_logger(__name__)
 
@@ -43,27 +51,20 @@ class ConversationWorkflow:
     Features:
     - Dual-LLM support: Local Ollama for fast responses, remote API for complex tasks
     - Hybrid routing: Automatically select LLM based on query complexity
-    - Hybrid retrieval: Vector search + keyword search + RRF fusion
-    - FAQ fast-path: Direct answer matching with configurable threshold
-    - Realtime query detection: Auto-route to web search for time-sensitive queries
-    - Query optimization: Rewriting, context compression, document reranking
-    - Answer verification: Consistency checking against source documents
+    - RAGAnything integration: Knowledge graph + vector retrieval with streaming
+    - LLM-based query classification: QueryClassifier with 9 categories
+    - Simplified workflow: 8 nodes
 
-    Workflow consists of 17 nodes connected by conditional edges.
+    Workflow consists of 8 nodes connected by conditional edges.
 
     LLM Routing Strategy (hybrid mode):
-    - Use local Ollama for: greetings, FAQs, simple queries (<30 chars), early turns
-    - Use remote API for: RAG retrieval, web search, long context, complex queries
+    - Use local Ollama for: greetings, simple queries (<30 chars), early turns
+    - Use remote API for: RAGAnything queries, web search, long context, complex queries
     """
 
     def __init__(self):
         """Initialize workflow with dual LLM instances for hybrid routing."""
         # Initialize local LLM (Ollama) - for fast, simple responses
-        logger.info(
-            "Initializing local Ollama LLM",
-            model=settings.ollama_model,
-            base_url=settings.ollama_base_url
-        )
         self.local_llm = ChatOllama(
             base_url=settings.ollama_base_url,
             model=settings.ollama_model,
@@ -71,25 +72,10 @@ class ConversationWorkflow:
             streaming=True,
             keep_alive=-1
         )
-        self.local_grader_llm = ChatOllama(
-            base_url=settings.ollama_base_url,
-            model=settings.ollama_grader_model,
-            temperature=0,
-            format="json",
-            keep_alive=-1
-        )
-
         # 打印 local_llm 配置
         logger.info(
             f"Local LLM configured | base_url={self.local_llm.base_url} | model={self.local_llm.model} | "
             f"temperature={self.local_llm.temperature} | keep_alive={self.local_llm.keep_alive}"
-        )
-
-        # 打印 local_grader_llm 配置
-        logger.info(
-            f"Local Grader LLM configured | base_url={self.local_grader_llm.base_url} | model={self.local_grader_llm.model} | "
-            f"temperature={self.local_grader_llm.temperature} | format={getattr(self.local_grader_llm, 'format', None)} | "
-            f"keep_alive={self.local_grader_llm.keep_alive}"
         )
 
         # Initialize remote LLM (OpenAI-style API) - for complex, accurate responses
@@ -105,28 +91,6 @@ class ConversationWorkflow:
             temperature=settings.openai_temperature,
             streaming=True,
         )
-        self.remote_grader_llm = ChatOpenAI(
-            base_url=settings.openai_api_base,
-            api_key=settings.siliconflow_api_key,
-            model=settings.openai_grader_model,
-            temperature=0,
-            model_kwargs={"response_format": {"type": "json_object"}},
-        )
-
-        # Set default LLM based on routing mode
-        routing_mode = getattr(settings, 'llm_routing_mode', 'local_only')
-        if routing_mode == 'local_only':
-            self.llm = self.local_llm
-            self.grader_llm = self.local_grader_llm
-            logger.info("LLM routing mode: local_only - using Ollama only")
-        elif routing_mode == 'remote_only':
-            self.llm = self.remote_llm
-            self.grader_llm = self.remote_grader_llm
-            logger.info("LLM routing mode: remote_only - using remote API only")
-        else:  # hybrid mode - will select dynamically per request
-            self.llm = self.local_llm  # default to local
-            self.grader_llm = self.local_grader_llm
-            logger.info("LLM routing mode: hybrid - will select dynamically")
 
         # Initialize nodes container
         self.nodes = ConversationNodes(self)
@@ -148,15 +112,13 @@ class ConversationWorkflow:
             state: Current conversation state
 
         Returns:
-            Tuple of (llm, grader_llm, model_name)
+            Tuple of (llm, model_name)
         """
         from app.services.conversation.conversation_helpers import select_llm
         return select_llm(
             state,
             self.local_llm,
-            self.local_grader_llm,
-            self.remote_llm,
-            self.remote_grader_llm
+            self.remote_llm
         )
 
     def get_streaming_llm(self, state: ConversationState):
@@ -173,18 +135,39 @@ class ConversationWorkflow:
         - llm_presence_penalty: Presence penalty
         - llm_frequency_penalty: Frequency penalty
 
+        Determinism override（事实性人事查询）:
+            「现任 X 职务是谁」等需要广博/最新世界知识的查询若沿用调用方传入的
+            ``temperature=0.7`` 默认值，会让 DeepSeek-V3 在「李强」与「李克强」
+            之间随机偏移（实测 10 次约 20% 错答）。这里检测到此类 query 时强制
+            把采样参数压回 ``temperature=0 / top_p=1``，让答案完全由模型权重决定，
+            消除随机性带来的"一会对一会错"。注：复杂度评估、人格、其它生成路径
+            不受影响——仅当 ``_needs_big_world_knowledge`` 命中时才覆盖。
+
         Args:
             state: Current conversation state
 
         Returns:
             Tuple of (llm, model_name) for streaming
         """
-        llm, _, model_name = self.get_active_llm(state)
+        llm, model_name = self.get_active_llm(state)
 
         # Check if custom LLM parameters are provided in the state
         temperature = state.get("llm_temperature")
         top_p = state.get("llm_top_p")
         max_tokens = state.get("llm_max_tokens")
+
+        # 「现任 X 职务是谁」类事实查询的"确定性兜底"。
+        # 复用 select_llm 已有的 _needs_big_world_knowledge 启发式，避免在两处分别
+        # 维护词表；命中后强制压低采样随机性，确保 DeepSeek 等大模型给出稳定答案。
+        from app.services.conversation.conversation_helpers import _needs_big_world_knowledge
+        big_world_query = (state.get("rewritten_query") or state.get("user_query") or "").strip()
+        if _needs_big_world_knowledge(big_world_query):
+            temperature = 0.0
+            top_p = 1.0
+            logger.info(
+                f"Force deterministic LLM (temperature=0, top_p=1) for big-world-knowledge query: "
+                f"query={big_world_query[:80]!r}"
+            )
 
         # If custom parameters are provided, create a new LLM instance with them
         if temperature is not None or top_p is not None or max_tokens is not None:
@@ -195,7 +178,7 @@ class ConversationWorkflow:
             # Determine which LLM type to use based on the current llm instance
             if isinstance(llm, ChatOllama):
                 # Create new Ollama LLM with custom parameters
-                base_url = getattr(llm, 'base_url', None)
+                base_url = getattr(llm, 'base_url', 'http://localhost:11434')
                 model_name = getattr(llm, 'model_name', None) or getattr(llm, 'model', '')
                 llm = ChatOllama(
                     base_url=base_url,
@@ -203,7 +186,6 @@ class ConversationWorkflow:
                     temperature=temperature if temperature is not None else getattr(llm, 'temperature', 0.7),
                     top_p=top_p if top_p is not None else getattr(llm, 'top_p', None),
                     num_predict=max_tokens if max_tokens is not None else getattr(llm, 'num_predict', None),
-                    streaming=True,
                 )
                 logger.info(
                     "Created custom Ollama LLM for streaming",
@@ -214,8 +196,8 @@ class ConversationWorkflow:
             elif isinstance(llm, ChatOpenAI):
                 # Create new OpenAI LLM with custom parameters
                 # ChatOpenAI uses openai_api_base for base URL in some versions
-                base_url = getattr(llm, 'openai_api_base', None) or getattr(llm, 'base_url', None)
-                api_key = getattr(llm, 'openai_api_key', None) or getattr(llm, 'api_key', None)
+                base_url = getattr(llm, 'openai_api_base', 'https://api.openai.com/v1') or getattr(llm, 'base_url', 'https://api.openai.com/v1')
+                api_key = getattr(llm, 'openai_api_key', '') or getattr(llm, 'api_key', '')
                 model_name = getattr(llm, 'model_name', None) or getattr(llm, 'model', '')
                 llm = ChatOpenAI(
                     base_url=base_url,
@@ -223,7 +205,6 @@ class ConversationWorkflow:
                     model=model_name,
                     temperature=temperature if temperature is not None else getattr(llm, 'temperature', 0.7),
                     max_tokens=max_tokens if max_tokens is not None else getattr(llm, 'max_tokens', None),
-                    streaming=True,
                 )
                 logger.info(
                     "Created custom OpenAI LLM for streaming",
@@ -249,6 +230,54 @@ class ConversationWorkflow:
         from app.services.conversation.conversation_helpers import build_generation_messages
         return build_generation_messages(state)
 
+    def get_phi4_streaming_llm(self, state: ConversationState):
+        """
+        动态创建 Phi-4 流式 LLM（不存储为实例变量）。
+
+        根据环境配置创建 Phi-4 LLM 实例用于数学问题解答。
+
+        Args:
+            state: Current conversation state
+
+        Returns:
+            Tuple of (llm, model_name) for Phi-4 streaming
+
+        Notes:
+            - 读取环境变量而非从 state
+            - vLLM 不需要真实 API key
+        """
+        # 检查是否启用
+        enabled = os.getenv("PHI4_ENABLED", "true").lower() == "true"
+        if not enabled:
+            logger.info("Phi-4 disabled, falling back to default LLM")
+            return self.get_streaming_llm(state)
+
+        # 读取配置
+        base_url = os.getenv("PHI4_BASE_URL", "http://192.168.8.235:8000/v1")
+        model_id = get_vllm_first_model(base_url)
+        # temperature = float(os.getenv("PHI4_TEMPERATURE", "0.0"))
+        # max_tokens = int(os.getenv("PHI4_MAX_TOKENS", "16384"))
+        max_tokens = 1024 * 3
+        temperature = 0.6
+
+        # 动态创建 ChatOpenAI 实例
+        phi4_llm = ChatOpenAI(
+            base_url=base_url,
+            api_key="dummy-key",  # vLLM 不需要真实 key
+            model=model_id,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            streaming=True,
+            top_p=0.95,
+        )
+
+        logger.info(
+            f"Phi-4 LLM created | model={model_id} | base_url={base_url} | "
+            f"temperature={temperature} | max_tokens={max_tokens}"
+        )
+
+        return phi4_llm, model_id
+
     async def save_conversation(self, state: ConversationState):
         """
         Save conversation record (delegates to nodes container).
@@ -270,29 +299,24 @@ class ConversationWorkflow:
 
         Graph structure:
         - Entry: load_employee_config
-        - Middle: 17 processing nodes with conditional routing
+        - Middle: classify_query_type with conditional routing
         - Exit: save_conversation → END
+
+        Simplified workflow using RAGAnything for RAG retrieval.
 
         Returns:
             Compiled StateGraph ready for execution
         """
         graph = StateGraph(ConversationState)
 
-        # Add all 16 workflow nodes (delegated to nodes container)
+        # Add all workflow nodes (delegated to nodes container)
         graph.add_node("load_employee_config", self.nodes.load_employee_config)
         graph.add_node("load_session_context", self.nodes.load_session_context)
         graph.add_node("input_validation", self.nodes.validate_input)
         graph.add_node("classify_query_type", self.nodes.classify_query_type)
         graph.add_node("evaluate_complexity", self.nodes.evaluate_complexity)
-        graph.add_node("rewrite_query", self.nodes.rewrite_query)
-        graph.add_node("match_faq", self.nodes.match_faq)
-        graph.add_node("intent_recognition", self.nodes.recognize_intent)
-        graph.add_node("knowledge_retrieval", self.nodes.knowledge_retrieval)
-        graph.add_node("grade_documents", self.nodes.grade_documents)
-        graph.add_node("compress_context", self.nodes.compress_context)
         graph.add_node("web_search", self.nodes.web_search)
         graph.add_node("generate_answer", self.nodes.generate_answer)
-        graph.add_node("verify_answer", self.nodes.verify_answer)
         graph.add_node("save_conversation", self.nodes.save_conversation)
 
         # Set entry point
@@ -303,66 +327,39 @@ class ConversationWorkflow:
         graph.add_edge("load_session_context", "input_validation")
         graph.add_edge("input_validation", "classify_query_type")
 
-        # Conditional routing after query classification
+        # Conditional routing after query classification.
+        # path_map 的 key 必须与 ``intent_routing.ROUTE_BRANCH_*`` 一一对应，
+        # 任何新增的分支都需要在这里登记，否则 LangGraph 会抛 KeyError。
+        from app.services.conversation.intent_routing import (
+            ROUTE_BRANCH_GENERAL,
+            ROUTE_BRANCH_GREETING,
+            ROUTE_BRANCH_MATH,
+            ROUTE_BRANCH_RAG,
+            ROUTE_BRANCH_REALTIME,
+        )
         graph.add_conditional_edges(
             "classify_query_type",
             self.nodes.route_after_classification,
             {
-                "greeting": "generate_answer",      # Greeting → direct to answer
-                "realtime": "web_search",           # Realtime query → web search
-                "normal": "evaluate_complexity"     # Normal query → complexity eval
+                ROUTE_BRANCH_GREETING: "generate_answer",   # Greeting / noise → 直接回答
+                ROUTE_BRANCH_REALTIME: "web_search",        # 实时类 → 联网检索
+                ROUTE_BRANCH_MATH: "generate_answer",       # 数学题 → Phi-4 直接回答
+                ROUTE_BRANCH_RAG: "evaluate_complexity",    # 概念/教材类 → 复杂度评估 → RAG
+                ROUTE_BRANCH_GENERAL: "generate_answer",    # 通用 LLM（英语/常识/闲聊）→ 直接回答
             }
         )
 
-        # Normal flow: complexity → rewrite → FAQ
-        graph.add_edge("evaluate_complexity", "rewrite_query")
-        graph.add_edge("rewrite_query", "match_faq")
-
-        # Conditional routing after FAQ matching
-        graph.add_conditional_edges(
-            "match_faq",
-            lambda state: "generate_answer" if state.get("faq_matched") else "intent_recognition",
-            {
-                "generate_answer": "generate_answer",
-                "intent_recognition": "intent_recognition"
-            }
-        )
-
-        # Intent recognition now mainly handles general_query routing
-        graph.add_edge("intent_recognition", "knowledge_retrieval")
-
-        # RAG pipeline edges
-        graph.add_edge("knowledge_retrieval", "grade_documents")
-
-        # Conditional routing after grade_documents: QA 直接匹配时跳过 compress_context
-        graph.add_conditional_edges(
-            "grade_documents",
-            lambda state: "verify_answer" if state.get("final_answer") else "compress_context",
-            {
-                "verify_answer": "verify_answer",
-                "compress_context": "compress_context"
-            }
-        )
-
-        # Conditional routing after context compression
-        graph.add_conditional_edges(
-            "compress_context",
-            lambda state: "web_search" if state.get("relevance_score", 0) < settings.relevance_threshold else "generate_answer",
-            {
-                "web_search": "web_search",
-                "generate_answer": "generate_answer"
-            }
-        )
+        # Concept / textbook flow: complexity → generate_answer (RAGAnything)
+        graph.add_edge("evaluate_complexity", "generate_answer")
 
         # Final sequence
         graph.add_edge("web_search", "generate_answer")
-        graph.add_edge("generate_answer", "verify_answer")
-        graph.add_edge("verify_answer", "save_conversation")
+        graph.add_edge("generate_answer", "save_conversation")
         graph.add_edge("save_conversation", END)
 
         # Compile and export graph for debugging
         compiled_graph = graph.compile()
-        self._dump_graph_debug(compiled_graph)
+        # self._dump_graph_debug(compiled_graph)
         return compiled_graph
 
     def _dump_graph_debug(self, compiled_graph) -> None:

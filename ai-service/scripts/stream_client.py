@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-OpenAI-style streaming client for /api/chat/v1/chat/completions.
+OpenAI-style streaming client for /api/chat/v1/chat/completions and /api/chat/v2/chat/completions.
 
 依赖: requests
 
@@ -18,6 +18,9 @@ OpenAI-style streaming client for /api/chat/v1/chat/completions.
 
   # 生产服务器
   python scripts/stream_client.py --host http://192.168.8.233:8100 --query "你好"
+
+【使用 v2 API】
+  python scripts/stream_client.py --api-version v2 --query "你好"
 
 【指定员工/用户/会话】
   python scripts/stream_client.py \\
@@ -45,17 +48,21 @@ OpenAI-style streaming client for /api/chat/v1/chat/completions.
   --user_id        3
   --session_id     sess_4_3_29
   --model          qwen2.5:7b
+  --api-version    v1
 
 =======
 脚本特点
 =======
 - 支持参数化 host/employee_id/user_id/session_id/model/stream/query
+- 支持 v1/v2 API 切换
+- v2 API 支持额外的 user_name 和 head_url 参数
 - 使用 requests.post(..., stream=True) 读取响应
 - 解析 SSE 风格的 `data: {...}` 行，或直接的 JSON 行
 - 对 streaming chunk (object == "chat.completion.chunk") 输出 partial content
 - 遇到 finish_reason == "stop" 或 payload == "[DONE]" 时结束
 - 支持从环境变量 API_KEY 注入 X-API-Key 头
-- 显示 TTFB (首字节响应时间) 和 First Token Latency (首token延迟)
+- 显示 TTFB (首字节响应时间)、First Token Latency (首 token 延迟)、
+  Total request time (从发起 POST 到流结束/收到完整响应的端到端耗时)
 """
 from __future__ import annotations
 import argparse
@@ -66,12 +73,19 @@ import time
 import requests
 from typing import Iterator, Optional
 
-
-def build_body(model: str, query: str, employee_id: Optional[str],
-               user_id: Optional[str], session_id: Optional[str],
-               channel_name: Optional[str] = None,
-               team_id: Optional[str] = None,
-               extra_body: Optional[dict] = None) -> dict:
+def build_body(
+    model: str,
+    query: str,
+    employee_id: Optional[str],
+    user_id: Optional[str],
+    session_id: Optional[str],
+    channel_name: Optional[str] = None,
+    team_id: Optional[str] = None,
+    user_name: Optional[str] = None,
+    head_url: Optional[str] = None,
+    api_version: str = "v1",
+    extra_body: Optional[dict] = None
+) -> dict:
     messages = [{"role": "user", "content": query}]
     body = {
         "model": model,
@@ -88,12 +102,18 @@ def build_body(model: str, query: str, employee_id: Optional[str],
     if team_id:
         body["team_id"] = team_id
 
+    # v2 API 特有参数
+    if api_version == "v2":
+        if user_name:
+            body["user_name"] = user_name
+        if head_url:
+            body["head_url"] = head_url
+
     # 合并 extra_body 中的参数
     if extra_body:
         body.update(extra_body)
 
     return body
-
 
 def iter_sse_payloads(resp: requests.Response) -> Iterator[str]:
     """
@@ -118,7 +138,6 @@ def iter_sse_payloads(resp: requests.Response) -> Iterator[str]:
             payload = line
         yield payload
 
-
 def handle_stream_payloads(payload_iter: Iterator[str], start_time: float) -> int:
     """
     处理 SSE payload 迭代器。
@@ -126,7 +145,7 @@ def handle_stream_payloads(payload_iter: Iterator[str], start_time: float) -> in
     """
     first_token_latency = None
     try:
-        for payload in payload_iter:
+        for idx, payload in enumerate(payload_iter):
             if payload == "[DONE]":
                 print("\n[DONE]")
                 return 0
@@ -158,10 +177,9 @@ def handle_stream_payloads(payload_iter: Iterator[str], start_time: float) -> in
                         if first_token_latency is None:
                             first_token_latency = time.perf_counter() - start_time
                             print(f"⏱️ First token latency: {first_token_latency*1000:.2f}ms\n", file=sys.stderr)
-                        # 不换行，直接 flush
-                        sys.stdout.write(content)
-                        sys.stdout.flush()
-                        # print('time:', time.time())
+                        
+                        print(f'# {idx}: {content!r}')
+
                     # 检查 finish_reason
                     finish = choice.get("finish_reason")
                     if finish == "stop":
@@ -180,7 +198,7 @@ def handle_stream_payloads(payload_iter: Iterator[str], start_time: float) -> in
                     message = first.get("message") or {}
                     content = message.get("content")
                     if content:
-                        print(content)
+                        print(repr(content))
                 # 打印元信息以便调试
                 try:
                     print("\n--- metadata ---")
@@ -200,11 +218,16 @@ def handle_stream_payloads(payload_iter: Iterator[str], start_time: float) -> in
     except KeyboardInterrupt:
         print("\nInterrupted by user", file=sys.stderr)
         return 130
+    finally:
+        total_s = time.perf_counter() - start_time
+        print(
+            f"⏱️ Total request time: {total_s * 1000:.2f}ms",
+            file=sys.stderr,
+        )
     return 0
 
-
-def run_stream(host: str, body: dict, api_key: Optional[str], timeout: int = 60) -> int:
-    url = host.rstrip("/") + "/api/chat/v1/chat/completions"
+def run_stream(host: str, body: dict, api_key: Optional[str], timeout: int = 60, api_version: str = "v1") -> int:
+    url = host.rstrip("/") + f"/api/chat/{api_version}/chat/completions"
     headers = {
         "Content-Type": "application/json",
         "Accept": "text/event-stream",
@@ -214,11 +237,16 @@ def run_stream(host: str, body: dict, api_key: Optional[str], timeout: int = 60)
 
     try:
         start_time = time.perf_counter()
-        print('url is {}'.format(url))
+        print(f"url is {url} (API version: {api_version})")
         with requests.post(url, json=body, headers=headers, stream=True, timeout=(5, timeout)) as resp:
             try:
                 resp.raise_for_status()
             except requests.HTTPError:
+                total_s = time.perf_counter() - start_time
+                print(
+                    f"⏱️ Total request time (end-to-end): {total_s * 1000:.2f}ms",
+                    file=sys.stderr,
+                )
                 print(f"HTTP error {resp.status_code}:", resp.text, file=sys.stderr)
                 return 2
             ttfb = time.perf_counter() - start_time
@@ -226,9 +254,13 @@ def run_stream(host: str, body: dict, api_key: Optional[str], timeout: int = 60)
             payload_iter = iter_sse_payloads(resp)
             return handle_stream_payloads(payload_iter, start_time)
     except requests.RequestException as e:
+        total_s = time.perf_counter() - start_time
+        print(
+            f"⏱️ Total request time (end-to-end): {total_s * 1000:.2f}ms",
+            file=sys.stderr,
+        )
         print(f"Request error: url is {url}", str(e), file=sys.stderr)
         return 2
-
 
  
 
@@ -241,6 +273,10 @@ def main():
   %(prog)s --query "你好"
   %(prog)s --host http://192.168.8.233:8100 --query "北京天气"
 
+  # 使用 v2 API
+  %(prog)s --api-version v2 --query "你好"
+  %(prog)s --api-version v2 --user-name "张三" --head-url "http://example.com/avatar.jpg" --query "你好"
+
   # 使用 channel_name (格式: employee_<team_id>_<user_id>_<employee_id>)
   %(prog)s --channel_name "employee_4_46935014_29" --query "你好"
 
@@ -249,15 +285,20 @@ def main():
         """
     )
     parser.add_argument("--host", default="http://192.168.8.233:8100", help="Base host (including port), 默认: http://192.168.8.233:8100")
-    parser.add_argument("--employee_id", default="33", help="Employee ID, 默认: 33")
+    parser.add_argument("--employee_id", default="29", help="Employee ID, 默认: 29")
     parser.add_argument("--user_id", default="3", help="User ID, 默认: 3")
-    parser.add_argument("--session_id", default="sess_4_3_33", help="Session ID, 默认: sess_4_3_33")
+    parser.add_argument("--session_id", default="sess_4_3_29", help="Session ID, 默认: sess_4_3_29")
     parser.add_argument("--model", default="qwen2.5:7b", help="Model name, 默认: qwen2.5:7b")
 
     # 新增参数
     parser.add_argument("--channel_name", default=None, help="Channel name (格式: employee_<team_id>_<user_id>_<employee_id>)")
-    parser.add_argument("--team_id", default=None, help="Team ID")
+    parser.add_argument("--team_id", default="4", help="Team ID")
     parser.add_argument("--extra-body", default=None, help="Extra body parameters as JSON string, e.g., '{\"team_id\": \"4\"}'")
+
+    # v2 API 特有参数
+    parser.add_argument("--api-version", choices=["v1", "v2"], default="v1", help="API version (v1 or v2), 默认: v1")
+    parser.add_argument("--user-name", default=None, help="User name (v2 API only)")
+    parser.add_argument("--head-url", default=None, help="User avatar URL (v2 API only)")
 
     parser.add_argument("--query", required=True, help="User query text（必填）")
     parser.add_argument("--timeout", type=int, default=60, help="Stream timeout seconds, 默认: 60")
@@ -278,13 +319,15 @@ def main():
         args.model, args.query, args.employee_id, args.user_id, args.session_id,
         channel_name=args.channel_name,
         team_id=args.team_id,
+        user_name=args.user_name,
+        head_url=args.head_url,
+        api_version=args.api_version,
         extra_body=extra_body
     )
     print(f'body: {body}')
-    rc = run_stream(args.host, body, api_key, timeout=args.timeout)
+    rc = run_stream(args.host, body, api_key, timeout=args.timeout, api_version=args.api_version)
 
     sys.exit(rc)
-
 
 if __name__ == "__main__":
     main()

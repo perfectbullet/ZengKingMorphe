@@ -29,13 +29,14 @@ from typing import List, Dict, Any, Optional, Tuple
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / "llama-rag-sdk"))
 
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.database import get_database
 from app.services.rag_service import rag_retrieval
-from app.services.document_service import document_processor
 from app.services.conversation_service import conversation_workflow
+from llama_rag_sdk.rag_system import RAGSystem
 from app.utils.embeddings import get_embedding
 
 logger = get_logger(__name__)
@@ -118,11 +119,11 @@ class RAGEvaluationTest:
         chunk_config: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
-        测试文档上传流程
+        测试文档上传流程（使用 RAGSystem + MinerU 结构感知分块）
 
         测试点：
-        1. 文件解析是否正确
-        2. 文本切分是否合理
+        1. 文件解析是否正确（MinerU）
+        2. 结构感知分块是否合理
         3. 向量化是否成功
         4. 存储是否完整
         """
@@ -134,56 +135,50 @@ class RAGEvaluationTest:
         results = {
             "file_path": file_path,
             "file_size": os.path.getsize(file_path),
-            "chunk_config": chunk_config,
             "steps": {}
         }
 
         try:
-            # Step 1: 文件解析
+            # 使用 RAGSystem 解析文档
+            rag = RAGSystem(
+                collection_name="test_evaluation",
+                enable_summarization=False,
+            )
+
+            # Step 1: 文件解析 + 结构感知分块
             step_start = time.time()
-            filename = os.path.basename(file_path)
-            file_ext = os.path.splitext(filename)[1].lower()
-
-            # 直接调用文档处理器的内部方法进行测试
-            from app.services.document_service import DocumentProcessor
-            processor = DocumentProcessor()
-
-            text_content = await processor._extract_text(file_path, file_ext, use_mineru=False)
+            document = await rag.parse_document(file_path, generate_image_descriptions=False)
             parse_time = time.time() - step_start
+
+            chunks = document.chunks
+            chunk_sizes = [len(c.text) for c in chunks]
 
             results["steps"]["parse"] = {
                 "success": True,
-                "text_length": len(text_content),
+                "text_length": len(document.content),
                 "time_ms": int(parse_time * 1000),
-                "preview": text_content[:200] + "..." if len(text_content) > 200 else text_content
+                "preview": document.content[:200] + "..." if len(document.content) > 200 else document.content
             }
-            logger.info(f"文件解析成功: 提取 {len(text_content)} 字符, 耗时 {parse_time:.2f}s")
+            logger.info(f"文件解析成功: 提取 {len(document.content)} 字符, 耗时 {parse_time:.2f}s")
 
-            # Step 2: 文本切分
-            step_start = time.time()
-            chunks = processor._chunk_text(text_content, "test_doc", self.kb_id, file_ext, chunk_config)
-            chunk_time = time.time() - step_start
-
-            chunk_sizes = [len(c.content) for c in chunks]
             results["steps"]["chunk"] = {
                 "success": True,
                 "chunk_count": len(chunks),
                 "avg_chunk_size": sum(chunk_sizes) / len(chunk_sizes) if chunks else 0,
                 "min_chunk_size": min(chunk_sizes) if chunks else 0,
                 "max_chunk_size": max(chunk_sizes) if chunks else 0,
-                "time_ms": int(chunk_time * 1000),
-                "chunks_preview": [{"index": i, "size": len(c.content), "content": c.content[:100]}
+                "time_ms": int(parse_time * 1000),
+                "chunks_preview": [{"index": i, "size": len(c.text), "page": c.page, "content": c.text[:100]}
                                    for i, c in enumerate(chunks[:3])]
             }
-            logger.info(f"文本切分成功: {len(chunks)} 个chunk, "
-                       f"平均大小 {results['steps']['chunk']['avg_chunk_size']:.0f} 字符, "
-                       f"耗时 {chunk_time:.2f}s")
+            logger.info(f"结构感知分块成功: {len(chunks)} 个chunk, "
+                       f"平均大小 {results['steps']['chunk']['avg_chunk_size']:.0f} 字符")
 
-            # Step 3: 向量化（仅测试第一个chunk）
+            # Step 2: 向量化（仅测试第一个chunk）
             if chunks:
                 step_start = time.time()
                 try:
-                    embedding = await self.embedding_service.embed_query(chunks[0].content)
+                    embedding = await self.embedding_service.embed_query(chunks[0].text)
                     embed_time = time.time() - step_start
 
                     results["steps"]["embed"] = {
@@ -206,6 +201,9 @@ class RAGEvaluationTest:
             )
 
             self.test_results["upload"] = results
+
+            # 清理
+            await rag.close()
 
         except Exception as e:
             logger.error(f"文档上传测试失败: {e}", exc_info=True)

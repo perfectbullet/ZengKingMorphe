@@ -1,5 +1,5 @@
 """
-RAG系统批量测试脚本 - 批量测试所有文档
+RAG系统批量测试脚本 - 使用 RAGSystem + MinerU 结构感知分块
 """
 
 import asyncio
@@ -14,29 +14,37 @@ from typing import Dict, List, Any, Optional
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / "llama-rag-sdk"))
 
 from app.core.logging import get_logger
 from app.core.database import mongodb
-from app.services.document_service import DocumentProcessor
-from app.utils.embeddings import get_embedding
+from llama_rag_sdk.rag_system import RAGSystem
 
 logger = get_logger(__name__)
 
 
 class RAGBatchTester:
-    """RAG系统批量测试"""
+    """RAG系统批量测试（使用 RAGSystem + MinerU 结构感知分块）"""
 
-    def __init__(self, use_mineru: bool = True):
-        self.processor = DocumentProcessor()
-        self.embedding_service = get_embedding()
+    def __init__(self):
+        self.rag_system = None
         self.results = []
         self.start_time = time.time()
-        self.use_mineru = use_mineru
         self._mongodb_initialized = False
+
+    async def get_rag_system(self):
+        """获取 RAGSystem 实例"""
+        if self.rag_system is None:
+            await self.ensure_mongodb()
+            self.rag_system = RAGSystem(
+                collection_name="test_batch",
+                enable_summarization=False,
+            )
+        return self.rag_system
 
     async def ensure_mongodb(self):
         """确保 MongoDB 连接已初始化"""
-        if not self._mongodb_initialized and self.use_mineru:
+        if not self._mongodb_initialized:
             try:
                 await mongodb.connect()
                 self._mongodb_initialized = True
@@ -48,49 +56,44 @@ class RAGBatchTester:
     async def test_single_document(
         self,
         file_path: str,
-        chunk_configs: List[tuple] = None
     ) -> Dict[str, Any]:
-        """测试单个文档"""
-        # 确保 MongoDB 已连接
+        """
+        测试单个文档（使用 RAGSystem + MinerU 结构感知分块）
+
+        RAGSystem 使用 MinerU 的结构感知分块，无需指定 chunk_size/overlap
+        """
         await self.ensure_mongodb()
 
-        if chunk_configs is None:
-            chunk_configs = [
-                (256, 50, "默认(256/50)"),
-                (512, 128, "中chunk(512/128)"),
-                (800, 200, "超大chunk(800/200)"),
-            ]
-
         filename = os.path.basename(file_path)
-        file_ext = os.path.splitext(filename)[1].lower()
-
         result = {
             "filename": filename,
             "file_path": file_path,
-            "configs": []
         }
 
         try:
-            # 解析文件
-            text_content = await self.processor._extract_text(file_path, file_ext, use_mineru=self.use_mineru)
-            text_length = len(text_content)
-            result["text_length"] = text_length
+            rag = await self.get_rag_system()
+
+            # 使用 RAGSystem 解析文档（MinerU 结构感知分块）
+            start_time = time.time()
+            document = await rag.parse_document(file_path, generate_image_descriptions=False)
+            parse_time = time.time() - start_time
+
+            chunks = document.chunks
+            chunk_sizes = [len(c.text) for c in chunks]
+
+            result["text_length"] = len(document.content)
+            result["chunk_count"] = len(chunks)
+            result["avg_chunk_size"] = sum(chunk_sizes) / len(chunk_sizes) if chunks else 0
+            result["min_chunk_size"] = min(chunk_sizes) if chunks else 0
+            result["max_chunk_size"] = max(chunk_sizes) if chunks else 0
+            result["parse_time_ms"] = int(parse_time * 1000)
+            result["image_count"] = len(document.images)
 
             # 确定领域和文档分类
             result["domain"] = self._classify_domain(filename)
-            result["length_category"] = self._classify_length(text_length)
+            result["length_category"] = self._classify_length(len(document.content))
 
-            # 测试每个配置
-            for chunk_size, overlap, config_name in chunk_configs:
-                config_result = await self._test_config(
-                    text_content, filename, file_ext, chunk_size, overlap, config_name
-                )
-                result["configs"].append(config_result)
-
-            # 确定最佳配置
-            result["recommendation"] = self._get_best_config(result["configs"])
-
-            logger.info(f"[*] 完成: {filename} (长度:{text_length}, 最佳:{result['recommendation']['best_config']})")
+            logger.info(f"[*] 完成: {filename} ({len(chunks)} chunks, 平均大小: {result['avg_chunk_size']:.0f} 字符)")
 
         except Exception as e:
             logger.error(f"[!] 失败: {filename} - {e}")

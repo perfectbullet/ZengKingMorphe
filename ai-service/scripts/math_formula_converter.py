@@ -63,7 +63,7 @@ class MathFormulaConverter:
 
     def __init__(
         self,
-        api_key: Optional[str] = "sk-ldtkmrwzqnhmzrgeednfbdulupqjjcaimcwdcwyofxmwljqi",  # Ollama 不需要真实 API key，任意值即可
+        api_key: Optional[str] = "no-key",  # Ollama 不需要真实 API key，任意值即可
         base_url: str = "http://192.168.8.233:11434",
         model: str = "qwen2.5:7b-instruct",
         timeout: int = 30,  # API 请求超时时间（秒）

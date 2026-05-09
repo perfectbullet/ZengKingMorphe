@@ -9,15 +9,20 @@ from datetime import datetime
 from pathlib import Path
 
 from app.api.middleware.auth import get_api_key
-from app.core.chroma import chroma_db
+# from app.core.chroma import chroma_db
 from app.core.elasticsearch import es_db
 from app.core.logging import get_logger
 from app.core.database import get_database
 from app.core.config import settings
 from app.models.schemas import (
     CreateKnowledgeBaseRequest,
-    UpdateKnowledgeBaseRequest, ResponseResult,
+    UpdateKnowledgeBaseRequest,
+    SearchDocumentsRequest,
+    SearchDocumentsResponse,
+    SearchResultItem,
+    ResponseResult,
 )
+# from app.services.rag_service import rag_retrieval
 
 logger = get_logger(__name__)
 
@@ -70,7 +75,7 @@ async def create_knowledge_base(
         # Insert into knowledge_bases collection
         result = await db.knowledge_bases.insert_one(kb_doc)
 
-        if result:
+        if result and result.inserted_id:
             data = {
                 "kb_id": kb_id
             }
@@ -166,6 +171,14 @@ async def delete_knowledge_bases(
     """
         删除知识库信息。
 
+        删除流程：
+        1. 删除 SDK ChromaDB 向量数据 (collection_name="rag_documents")
+        2. 删除 SDK DocStore 数据 (collection="docstore")
+        3. 删除 MongoDB document_chunks (保留用于查询功能)
+        4. 删除 MongoDB documents
+        5. 删除 ElasticSearch 索引数据 (保留用于关键词搜索)
+        6. 删除知识库元数据
+
         Args:
             - kb_id: knowledge base ID
             - api_key: API key from auth
@@ -183,48 +196,58 @@ async def delete_knowledge_bases(
             return ResponseResult.error(status.HTTP_404_NOT_FOUND, "error",
                                         f"delete_knowledge_bases not found: kb_id={kb_id}")
 
-        # 获取该知识库的所有 chunk_id（用于删除 ChromaDB 和 ES）
-        chunks_cursor = db.document_chunks.find({"kb_id": kb_id}, {"chunk_id": 1})
-        chunks = await chunks_cursor.to_list(length=None)
-        chunk_ids = [c["chunk_id"] for c in chunks]
+        # 1. 删除 SDK ChromaDB 向量数据 (按 kb_id metadata 过滤)
+        try:
+            from llama_rag_sdk.document_indexer.storage import VectorStore
+            vector_store = VectorStore(collection_name="rag_documents")
+            vector_store.delete(where={"kb_id": kb_id})
+            logger.info(f"delete_knowledge_bases: deleted from SDK ChromaDB, kb_id={kb_id}")
+        except Exception as e:
+            logger.error(f"delete_knowledge_bases SDK ChromaDB delete exception: kb_id={kb_id} error={str(e)}", exc_info=True)
 
-        logger.info(f"delete_knowledge_bases: kb_id={kb_id}, chunks_count={len(chunk_ids)}")
+        # 2. 删除 SDK DocStore 数据 (按 metadata.kb_id 过滤)
+        try:
+            from llama_rag_sdk.config import settings
+            from llama_rag_sdk.document_indexer.docstore import create_docstore
+            docstore = create_docstore(
+                uri=settings.mongodb_uri,
+                db_name=settings.mongodb_db_name,
+                collection_name=settings.docstore_collection
+            )
+            # DocStore 存储 metadata.collection_name，需要先查询匹配的文档
+            deleted_docstore_count = 0
+            # 注意：DocStore 没有按 metadata.kb_id 批量删除的方法，暂时跳过
+            # 未来可以通过在索引时添加 collection_name="rag_{kb_id}" 来支持按 collection 删除
+            logger.info(f"delete_knowledge_bases: DocStore cleanup skipped (need manual implementation), kb_id={kb_id}")
+        except Exception as e:
+            logger.warning(f"delete_knowledge_bases DocStore delete exception: kb_id={kb_id} error={str(e)}")
 
-        # 1. 删除 MongoDB document_chunks
+        # 3. 删除 MongoDB document_chunks (保留用于查询功能)
         chunks_result = await db.document_chunks.delete_many({"kb_id": kb_id})
         logger.info(f"delete_knowledge_bases delete document_chunks: kb_id={kb_id}, count={chunks_result.deleted_count}")
 
-        # 2. 删除 MongoDB documents
+        # 4. 删除 MongoDB documents
         docs_result = await db.documents.delete_many({"kb_id": kb_id})
         logger.info(f"delete_knowledge_bases delete documents: kb_id={kb_id}, count={docs_result.deleted_count}")
 
-        # 3. 删除 ChromaDB 向量数据
-        if chunk_ids:
-            try:
-                await chroma_db.delete_documents(collection_name="doc", ids=chunk_ids)
-                logger.info(f"delete_knowledge_bases delete ChromaDB documents: kb_id={kb_id}, count={len(chunk_ids)}")
-            except Exception as e:
-                logger.error(f"delete_knowledge_bases delete ChromaDB documents exception: kb_id={kb_id} error={str(e)}", exc_info=True)
+        # 5. 删除 ElasticSearch 索引数据 (保留用于关键词搜索)
+        try:
+            await es_db.delete_by_query(
+                index='doc',
+                body={"query": {"term": {"kb_id": kb_id}}},
+            )
+            logger.info(f"delete_knowledge_bases: deleted from ElasticSearch, kb_id={kb_id}")
+        except Exception as e:
+            logger.warning(f"delete_knowledge_bases ElasticSearch delete exception: kb_id={kb_id} error={str(e)}")
 
-        # 4. 删除 ElasticSearch 索引数据
-        if chunk_ids:
-            deleted_es_count = 0
-            for chunk_id in chunk_ids:
-                try:
-                    await es_db.delete_document(index=es_db.doc_index, doc_id=chunk_id)
-                    deleted_es_count += 1
-                except Exception as e:
-                    logger.warning(f"delete_knowledge_bases delete ES document exception: chunk_id={chunk_id} error={str(e)}")
-            logger.info(f"delete_knowledge_bases deleted ES documents: kb_id={kb_id} count={deleted_es_count}")
-
-        # 5. 最后删除知识库元数据
+        # 6. 最后删除知识库元数据
         result = await db.knowledge_bases.delete_one({'kb_id': kb_id})
 
         if result and result.deleted_count == 1:
-            logger.info(f"delete_knowledge_bases success: kb_id={kb_id} chunks_deleted={len(chunk_ids)}")
+            logger.info(f"delete_knowledge_bases success: kb_id={kb_id}")
             return ResponseResult.success({
                 "kb_id": kb_id,
-                "chunks_deleted": len(chunk_ids)
+                "chunks_deleted": chunks_result.deleted_count
             })
         else:
             logger.error(f"delete_knowledge_bases failed: kb_id={kb_id}")
@@ -481,4 +504,91 @@ async def get_knowledge_base_detail(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to get knowledge base detail"
+        )
+
+
+@router.post("/search")
+async def search_documents(
+    request: SearchDocumentsRequest,
+    api_key: str = Depends(get_api_key),
+    db=Depends(get_database)
+):
+    """
+    在指定知识库中检索相关文档
+
+    Args:
+        - request: search_documents request
+            - kb_id: 知识库 ID
+            - query: 查询文本
+            - top_k: 返回结果数量（默认 5）
+            - use_hybrid: 是否使用混合检索（默认 True）
+            - enable_rerank: 是否启用重排序（默认 True）
+        - api_key: API key from auth
+        - db: Database instance
+
+    Returns:
+        - 检索结果列表，按相关性排序
+    """
+    try:
+        logger.info(f"search_documents request: kb_id={request.kb_id}, query={request.query[:100]}")
+
+        # 验证知识库是否存在
+        kb = await db.knowledge_bases.find_one({"kb_id": request.kb_id})
+        if not kb:
+            return ResponseResult.error(
+                status.HTTP_404_NOT_FOUND,
+                "error",
+                f"Knowledge base not found: kb_id={request.kb_id}"
+            )
+
+        # 调用 RAG 检索服务
+        results = await rag_retrieval.search(
+            query=request.query,
+            kb_ids=[request.kb_id],
+            top_k=request.top_k,
+            use_hybrid=request.use_hybrid,
+            enable_rerank=request.enable_rerank,
+        )
+
+        # 转换为响应格式
+        search_results = []
+        for i, result in enumerate(results, 1):
+            search_results.append(SearchResultItem(
+                rank=i,
+                doc_id=result.get("doc_id", ""),
+                chunk_id=result.get("chunk_id"),
+                content=result.get("content", ""),
+                score=result.get("score", 0.0),
+                metadata={
+                    "chunk_index": result.get("chunk_index"),
+                    "content_type": result.get("content_type"),
+                    "page": result.get("metadata", {}).get("page"),
+                    "title": result.get("metadata", {}).get("title"),
+                    "section": result.get("metadata", {}).get("section"),
+                }
+            ))
+
+        response_data = SearchDocumentsResponse(
+            query=request.query,
+            kb_id=request.kb_id,
+            total=len(search_results),
+            results=search_results
+        )
+
+        logger.info(
+            f"search_documents success: kb_id={request.kb_id}, "
+            f"results={len(search_results)}"
+        )
+
+        return ResponseResult.success(response_data.model_dump())
+
+    except Exception as e:
+        logger.error(
+            f"search_documents error: kb_id={request.kb_id}, "
+            f"query={request.query[:50]}, error={str(e)}",
+            exc_info=True
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to search documents"
         )

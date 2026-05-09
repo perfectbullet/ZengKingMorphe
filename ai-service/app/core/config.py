@@ -12,34 +12,13 @@ from pydantic import Field
 # Load environment variables before importing settings
 from dotenv import load_dotenv
 
-# 智能环境变量加载：根据运行环境选择合适的 .env 文件
+# 加载项目根目录的 .env 文件
 def _load_env_file():
-    """
-    根据运行环境自动加载对应的环境变量文件。
-
-    优先级：
-    1. 如果显式指定了 ENV_FILE 环境变量，使用该文件
-    2. 本地开发：尝试加载 .env-local
-    3. Docker/容器环境：使用 .env
-    """
-    # 检查是否显式指定了环境文件
-    env_file = os.getenv("ENV_FILE")
-    if env_file and os.path.exists(env_file):
-        load_dotenv(env_file, override=True)
-        print(f"[OK] Loaded environment from: {env_file}")
-        return
-
-    # 本地开发：尝试 .env-local
-    env_local_path = os.path.join(os.path.dirname(__file__), "..", "..", ".env-local")
-    env_local_path = os.path.abspath(env_local_path)
-    if os.path.exists(env_local_path):
-        load_dotenv(env_local_path, override=True)
-        print(f"[OK] Loaded environment from .env-local")
-        return
-
-    # 默认加载 .env (Docker/容器环境)
-    load_dotenv()
-    print(f"[OK] Loaded default .env file")
+    """加载项目根目录的 .env 文件"""
+    load_dotenv(
+        dotenv_path=os.path.join(os.path.dirname(__file__), "..", "..", ".env"),
+        override=True  # 覆盖已存在的环境变量
+    )
 
 # 加载环境变量
 _load_env_file()
@@ -127,12 +106,6 @@ class Settings(BaseSettings):
         default="BAAI/bge-large-zh-v1.5", description="SiliconFlow Embedding Model"
     )
 
-    # Ollama Embedding Configuration
-    embedding_ollama_model: str = Field(
-        default="bge-large-zh-v1.5-2k:latest",
-        description="Ollama embedding model name",
-    )
-
     # Web Search Configuration
     tavily_api_key: Optional[str] = Field(default=None)
     web_search_enabled: bool = Field(default=True)
@@ -140,7 +113,9 @@ class Settings(BaseSettings):
     web_search_max_results: int = Field(default=5, ge=1, le=10)
     web_search_only_for_realtime: bool = Field(default=False)
     realtime_query_enabled: bool = Field(default=True)
-    realtime_query_llm_fallback_enabled: bool = Field(default=False)
+    realtime_query_llm_fallback_enabled: bool = Field(default=True)
+    realtime_query_search_rewrite_enabled: bool = Field(default=True)
+    realtime_traffic_min_web_score: float = Field(default=0.5, ge=0.0, le=1.0)
 
     # MongoDB Configuration
     mongodb_uri: str = Field(default="mongodb://localhost:27017/digital_employee")
@@ -191,6 +166,46 @@ class Settings(BaseSettings):
     session_timeout_minutes: int = Field(default=30, ge=1)
     relevance_threshold: float = Field(default=0.6, ge=0.0, le=1.0)
     confidence_threshold: float = Field(default=0.7, ge=0.0, le=1.0)
+
+    # 动态上下文记忆：判定本轮问题是否依赖历史对话
+    # - True  → 走 LLM 判定，无关历史问题不注入上下文，相关问题保留完整上下文
+    # - False → 关闭判定，保持旧行为（始终注入上下文）
+    dynamic_context_memory_enabled: bool = Field(
+        default=True,
+        description="Enable dynamic context memory: drop history when current query is unrelated"
+    )
+
+    # ---- 噪声预设话术拦截（"抱歉，我没有听清您的问题"路径）----
+    # 背景：分类器把用户输入归为 noise 时，原实现会**完全跳过 LLM**直接返回预设话术，
+    # 用户在数字人侧听到这句话极易误判为"麦克风/ASR 故障"。
+    # 这一组开关让该拦截可以快速回滚或收紧到只在"高度确信噪声"时才触发。
+    #
+    # noise_preset_response_enabled
+    # - True  → 启用预设话术拦截（命中 noise 且通过下方闸门时直出文案）；
+    # - False → **整条路径回滚**，noise 一律走通用 LLM 兜底（紧急回滚开关）。
+    noise_preset_response_enabled: bool = Field(
+        default=True,
+        description="Enable preset response for queries classified as noise. "
+                    "Set False to fully roll back the noise→preset pathway and let GENERAL_LLM handle it."
+    )
+    # noise_preset_min_confidence
+    # 仅当 LLM 分类置信度 >= 此等级时才允许判 noise；其余降级为 GENERAL_LLM。
+    # qwen2.5:7b 这类小分类器对短/口语化输入误判率较高，默认要求 ``high``
+    # 才能触发预设话术，把 medium/low 的噪声判定一律放行给 LLM。
+    noise_preset_min_confidence: str = Field(
+        default="high",
+        description="Minimum classifier confidence to trigger noise preset response: high|medium|low"
+    )
+    # noise_preset_max_query_length
+    # 仅当 query 长度（按 strip 后字符数）<= 此值时，才允许触发噪声预设。
+    # 含义：超过这个长度的输入即便分类器判 noise 也按"内容足够丰富"放行，
+    # 避免吞掉"那个数列怎么算？""嗯，刚刚那道函数题再讲一遍"这类合法长问。
+    noise_preset_max_query_length: int = Field(
+        default=12,
+        ge=1,
+        description="Max query length (chars) eligible for noise preset response; "
+                    "longer queries bypass preset and go to GENERAL_LLM."
+    )
 
     # Document Processing Configuration
     chunk_size: int = Field(
@@ -376,9 +391,46 @@ class Settings(BaseSettings):
         default=False,
         description="Enable context compression to reduce token usage"
     )
-    answer_verification_enabled: bool = Field(
-        default=False,
-        description="Enable answer consistency checking with source documents"
+
+    # RAGAnything Configuration (替代 llama-rag-sdk)
+    raganything_working_dir: str = Field(
+        default="./rag_storage_db",
+        description="Working directory for RAGAnything storage"
+    )
+    raganything_enabled: bool = Field(
+        default=True,
+        description="Enable RAGAnything for RAG queries"
+    )
+
+    # Milvus Configuration (向量数据库)
+    milvus_uri: str = Field(
+        default="http://192.168.8.233:19530",
+        description="Milvus service URI"
+    )
+    milvus_user: str = Field(default="root", description="Milvus username")
+    milvus_password: str = Field(default="", description="Milvus password")
+    milvus_db_name: str = Field(default="rag_db", description="Milvus database name")
+
+    # Neo4j Configuration (图数据库)
+    neo4j_uri: str = Field(
+        default="bolt://192.168.8.233:7687",
+        description="Neo4j connection URI"
+    )
+    neo4j_username: str = Field(default="neo4j", description="Neo4j username")
+    neo4j_password: str = Field(default="", description="Neo4j password")
+
+    # VLLM Embedding Configuration (RAGAnything 使用)
+    vllm_embedding_base_url: str = Field(
+        default="http://192.168.8.233:8092",
+        description="VLLM embedding service base URL"
+    )
+    vllm_embedding_model: str = Field(
+        default="BAAI/bge-m3",
+        description="VLLM embedding model name"
+    )
+    vllm_embedding_dim: int = Field(
+        default=1024,
+        description="VLLM embedding dimension"
     )
 
     # JWT Configuration

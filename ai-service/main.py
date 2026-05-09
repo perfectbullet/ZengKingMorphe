@@ -1,6 +1,7 @@
 """
 Main FastAPI application.
 """
+import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.responses import RedirectResponse
@@ -11,17 +12,15 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.core.config import settings
 from app.core.logging import setup_logging, get_logger
 from app.core.database import mongodb
-from app.core.chroma import chroma_db
 from app.core.elasticsearch import es_db
-from app.services.task_processor import task_processor
+# from app.services.task_processor import task_processor
 from app.services.ollama_keepalive import ollama_keep_alive
 from app.api.middleware.error_handler import (
     http_exception_handler,
     validation_exception_handler,
     general_exception_handler
 )
-from app.api.endpoints import chat, session, employee, conversation, mineru, dataset_video, thesaurus_sensitive, \
-    thesaurus_major, dataset_faq
+from app.api.endpoints import chat, session, employee, conversation, mineru, thesaurus_sensitive, thesaurus_major
 from app.api.endpoints import knowledge_base_kb, documents, metrics, websocket, websocket_view
 
 # Setup logging
@@ -41,6 +40,42 @@ UVICORN_RELOAD_EXCLUDES = [
 ]
 
 
+async def _prewarm_raganything() -> None:
+    """
+    后台预热 RAGAnything + QueryClassifier 单例。
+
+    背景：
+        - ``raganything_wrapper.get_raganything_instance()`` 首调用会跑 4 次健康
+          检查 + Milvus / Neo4j / Mongo 存储初始化，整体 ~4s；
+        - ``query_classifier.get_query_classifier()`` 首调用要建 ChatOpenAI 客户端；
+        两者在原实现中都是懒加载，叠加到首个用户请求里，TTFB 直接拉到 ~8s。
+
+    优化：
+        在 lifespan 启动里以后台任务形式触发，把这部分常驻初始化耗时摊到服务
+        启动阶段，**对真实业务请求零影响**：用户拨进来时实例多半已就绪。
+
+    容错：
+        - 不阻塞 lifespan 主流程（``create_task`` 而非 ``await``），即便预热失败
+          也只影响首次请求会落回原有懒加载路径，不会导致服务起不来；
+        - 异常完整记录但不再上抛。
+    """
+    try:
+        from app.services.raganything_wrapper import get_raganything_instance
+        from app.services.query_classifier import get_query_classifier
+
+        # QueryClassifier 是 LangChain ChatOpenAI 实例化（只是建客户端，本身不发请求），
+        # 同步预热即可；放在前面方便首请求立刻进入分类阶段。
+        get_query_classifier()
+        logger.info("[prewarm] QueryClassifier ready")
+
+        # RAGAnything 涉及多个外部依赖（Mongo / Milvus / Neo4j / VLLM），
+        # 单独 await，失败时只影响 RAG 首次调用（会回退到原有懒加载逻辑）。
+        await get_raganything_instance()
+        logger.info("[prewarm] RAGAnything ready")
+    except Exception as e:
+        logger.warning(f"[prewarm] background warmup failed (will lazy-load on demand): {e}", exc_info=True)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
@@ -54,14 +89,18 @@ async def lifespan(app: FastAPI):
     try:
         # Connect to databases
         await mongodb.connect()
-        chroma_db.connect()
         await es_db.connect()
         
         # Start task processor
-        await task_processor.start()
+        # await task_processor.start()
 
         # Start Ollama keep-alive service
         await ollama_keep_alive.start()
+
+        # 后台预热 RAGAnything / QueryClassifier 单例，避免首请求被 ~4s 懒加载拉满。
+        # 用 create_task 不阻塞 lifespan，让服务尽快开始接受请求；预热失败时回落
+        # 到原有的请求时懒加载路径，不会影响服务启动。
+        asyncio.create_task(_prewarm_raganything(), name="prewarm_raganything")
 
         logger.info("All databases connected and task processor started successfully")
         
@@ -76,7 +115,7 @@ async def lifespan(app: FastAPI):
 
     try:
         # Stop task processor first (停止任务处理器)
-        await task_processor.stop()
+        # await task_processor.stop()
         logger.debug("Task processor stopped")
 
         # Stop Ollama keep-alive service (停止 Ollama 保活服务)
@@ -86,9 +125,6 @@ async def lifespan(app: FastAPI):
         # Disconnect databases in reverse order (按相反顺序断开数据库连接)
         await mongodb.disconnect()
         logger.debug("MongoDB disconnected")
-
-        chroma_db.disconnect()
-        logger.debug("ChromaDB disconnected")
 
         await es_db.disconnect()
         logger.debug("ElasticSearch disconnected")
@@ -130,13 +166,13 @@ app.include_router(employee.router, prefix="/api/employee", tags=["employee 数�
 # Knowledge base endpoints (split into two files)
 app.include_router(knowledge_base_kb.router, prefix="/api/knowledge_base", tags=["knowledge_base RAG文档库"])
 app.include_router(documents.router, prefix="/api/knowledge_base/documents", tags=["documents RAG文档"])
-app.include_router(dataset_video.router, prefix="/api/knowledge_base/video", tags=["video 视频资源"])
+# app.include_router(dataset_video.router, prefix="/api/knowledge_base/video", tags=["video 视频资源"])
 app.include_router(conversation.router, prefix="/api/conversation", tags=["Conversation 数字员工对话记录"])
 app.include_router(mineru.router, prefix="/api/mineru", tags=["MinerU"])
 app.include_router(metrics.router, prefix="/api/metrics", tags=["Metrics"])
 app.include_router(websocket.router, prefix="/api/chat", tags=["WebSocket 数字员工对话"])
 app.include_router(websocket_view.router, prefix="/api/chat", tags=["WebSocket 数字员工对话v2"])
-app.include_router(dataset_faq.router, prefix="/api/dataset_faq", tags=["dataset_faq FAQ问答库"])
+# app.include_router(dataset_faq.router, prefix="/api/dataset_faq", tags=["dataset_faq FAQ问答库"])
 app.include_router(thesaurus_major.router, prefix="/api/thesaurus_major", tags=["thesaurus_major 专业词库"])
 app.include_router(thesaurus_sensitive.router, prefix="/api/thesaurus_sensitive", tags=["thesaurus_sensitive 敏感词库"])
 

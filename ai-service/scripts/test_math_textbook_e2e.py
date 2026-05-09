@@ -44,10 +44,10 @@ from typing import List, Dict, Any, Optional
 # Add project path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from app.core.chroma import chroma_db
+# from app.core.chroma import chroma_db
 from app.core.elasticsearch import es_db
 from app.core.database import get_database, mongodb
-from app.services.rag_service import RAGRetrieval
+# from app.services.rag_service import RAGRetrieval
 from app.utils.embeddings import get_embedding
 from app.core.logging import get_logger
 from app.models.database import KnowledgeBaseModel

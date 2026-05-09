@@ -74,12 +74,21 @@ docker-compose logs -f ai-service
 
 ```bash
 # 虚拟环境已创建，依赖已安装
+# 如果没有创建虚拟环境
+python3 -m venv venv
+
 # 如需重新安装，使用项目 Python 解释器：
-/mnt/d/zenking_work/metahuman_work/ZengKingMorphe/.venv/bin/python -m pip install -r ai-service/requirements.txt
+venv/bin/python -m pip install -r ai-service/requirements.txt
 
 # 或激活虚拟环境后安装
-source .venv/bin/activate
+source venv/bin/activate
 pip install -r ai-service/requirements.txt
+# 安装 RAG-Anything 
+cd RAG-Anything
+# 只安装类似客户端的mineru
+pip install mineru==3.0.8
+# 安装
+pip install -e .
 ```
 
 ### 2. 启动数据库服务
@@ -91,10 +100,32 @@ docker-compose up -d mongodb elasticsearch chroma
 
 ### 3. 运行开发服务器
 
+**方式一：使用启动脚本（推荐）**
+
+```bash
+# 启动服务（后台运行）
+./start_ai_service.sh start
+
+# 查看服务状态
+./start_ai_service.sh status
+
+# 查看实时日志
+./start_ai_service.sh logs
+
+# 停止服务
+./start_ai_service.sh stop
+
+# 重启服务
+./start_ai_service.sh restart
+```
+
+**方式二：手动启动**
+
 ```bash
 cd ai-service
+
 # 使用项目 Python 解释器
-/mnt/d/zenking_work/metahuman_work/ZengKingMorphe/.venv/bin/python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000
+/home/zj/miniconda3/envs/morphe/bin/python -m uvicorn main:app --reload --host 0.0.0.0 --port 8100
 
 # 或激活虚拟环境后运行
 source ../.venv/bin/activate

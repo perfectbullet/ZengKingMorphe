@@ -22,7 +22,7 @@ from app.api.middleware.auth import get_api_key
 from app.api.middleware.rate_limit import ip_rate_limit_dependency
 from app.core.logging import get_logger
 from app.core.database import get_database
-from app.core.chroma import chroma_db
+# from app.core.chroma import chroma_db
 
 from app.services.task_processor import task_processor
 from app.services.document_service import generate_doc_id, download_file, UPLOAD_DIR
@@ -530,7 +530,6 @@ async def create_rag_document_with_segment(
         # 添加到文档任务列表中
         task_id = await task_processor.submit_task(
             kb_id=kb_id,
-            enhance=request.enhance,
             filename=request.document_name,
             file_path=str(file_path),
             category=None,

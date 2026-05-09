@@ -2,13 +2,12 @@
 RAG系统基线测试脚本
 
 功能:
-1. 测试文档解析和切分
+1. 测试文档解析和切分（使用 RAGSystem + MinerU 结构感知分块）
 2. 测试向量化
-3. 对比不同切分参数的效果
+3. 分析分块质量
 
 使用方法:
     python -m tests.test_rag_baseline --file "path/to/document.pdf"
-    python -m tests.test_rag_baseline --file "path/to/document.pdf" --compare-sizes
 """
 
 import asyncio
@@ -23,10 +22,11 @@ from typing import Dict, List, Any, Optional
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / "llama-rag-sdk"))
 
 from app.core.logging import get_logger
 from app.core.database import mongodb
-from app.services.document_service import DocumentProcessor
+from llama_rag_sdk.rag_system import RAGSystem
 from app.utils.embeddings import get_embedding
 
 logger = get_logger(__name__)
@@ -41,10 +41,10 @@ DEFAULT_QUERIES = [
 
 
 class RAGBaselineTest:
-    """RAG系统基线测试"""
+    """RAG系统基线测试（使用 RAGSystem + MinerU 结构感知分块）"""
 
     def __init__(self):
-        self.processor = DocumentProcessor()
+        self.rag_system = None  # 延迟初始化
         self.embedding_service = get_embedding()
         self.results = {
             "test_time": datetime.now().isoformat(),
@@ -53,6 +53,18 @@ class RAGBaselineTest:
             "summary": {}
         }
         self._mongodb_initialized = False
+
+    async def get_rag_system(self):
+        """获取 RAGSystem 实例"""
+        if self.rag_system is None:
+            # 确保 MongoDB 已连接（MinerU 需要缓存）
+            await self.ensure_mongodb()
+
+            self.rag_system = RAGSystem(
+                collection_name="test_baseline",
+                enable_summarization=False,  # 测试时关闭摘要
+            )
+        return self.rag_system
 
     async def ensure_mongodb(self):
         """确保 MongoDB 连接已初始化"""
@@ -65,96 +77,61 @@ class RAGBaselineTest:
                 logger.error(f"MongoDB 连接失败: {e}")
                 raise
 
-    async def test_chunking_config(
+    async def test_document_parsing(
         self,
         file_path: str,
-        chunk_size: int,
-        chunk_overlap: int,
-        config_name: str
+        config_name: str = "default"
     ) -> Dict[str, Any]:
-        """测试特定切分配置"""
-        # 确保 MongoDB 已连接（MinerU 需要缓存）
+        """
+        测试文档解析（使用 RAGSystem + MinerU 结构感知分块）
+
+        直接使用 RAGSystem 的 parse_document 方法获取 MinerU 的结构化分块
+        """
         await self.ensure_mongodb()
 
         logger.info(f"\n{'='*60}")
         logger.info(f"测试配置: {config_name}")
-        logger.info(f"  chunk_size={chunk_size}, chunk_overlap={chunk_overlap}")
         logger.info(f"{'='*60}")
 
         result = {
             "config_name": config_name,
-            "chunk_size": chunk_size,
-            "chunk_overlap": chunk_overlap,
             "metrics": {}
         }
 
         try:
-            # Step 1: 解析文件
-            start_time = time.time()
-            filename = os.path.basename(file_path)
-            file_ext = os.path.splitext(filename)[1].lower()
+            rag = await self.get_rag_system()
 
-            text_content = await self.processor._extract_text(file_path, file_ext, use_mineru=True)
+            # 使用 RAGSystem 解析文档
+            start_time = time.time()
+            document = await rag.parse_document(file_path, generate_image_descriptions=False)
             parse_time = time.time() - start_time
 
-            result["metrics"]["text_length"] = len(text_content)
+            # 分析分块结果
+            chunks = document.chunks
+            chunk_sizes = [len(c.text) for c in chunks]
+
+            result["metrics"]["text_length"] = len(document.content)
             result["metrics"]["parse_time_ms"] = int(parse_time * 1000)
-
-            logger.info(f"✓ 文件解析成功: {len(text_content)} 字符, 耗时 {parse_time:.2f}s")
-
-            # Step 2: 切分文本
-            start_time = time.time()
-            chunk_config = {
-                'segment_union_max_length': chunk_size,
-                'segment_type': -1
-            }
-
-            chunks = self.processor._chunk_text(
-                text_content,
-                f"test_{config_name}",
-                "test_kb",
-                file_ext,
-                chunk_config
-            )
-            chunk_time = time.time() - start_time
-
-            chunk_sizes = [len(c.content) for c in chunks]
-
             result["metrics"]["chunk_count"] = len(chunks)
             result["metrics"]["avg_chunk_size"] = sum(chunk_sizes) / len(chunk_sizes) if chunks else 0
             result["metrics"]["min_chunk_size"] = min(chunk_sizes) if chunks else 0
             result["metrics"]["max_chunk_size"] = max(chunk_sizes) if chunks else 0
-            result["metrics"]["chunk_time_ms"] = int(chunk_time * 1000)
+            result["metrics"]["image_count"] = len(document.images)
 
             # 计算切分质量指标
             result["metrics"]["quality_metrics"] = self._calculate_chunk_quality(chunks)
 
-            logger.info(f"✓ 文本切分成功: {len(chunks)} 个chunk, 平均大小 {result['metrics']['avg_chunk_size']:.0f} 字符")
+            logger.info(f"✓ 文件解析成功: {len(document.content)} 字符, 耗时 {parse_time:.2f}s")
+            logger.info(f"✓ 结构感知分块: {len(chunks)} 个chunk, 平均大小 {result['metrics']['avg_chunk_size']:.0f} 字符")
+            logger.info(f"✓ 图片数量: {len(document.images)}")
 
-            # Step 3: 测试向量化 (前5个chunk)
-            if chunks:
-                embed_start = time.time()
-                try:
-                    test_chunks = chunks[:5]
-                    # OllamaEmbeddings.embed_documents is synchronous, not async
-                    embeddings = self.embedding_service.embed_documents([c.content for c in test_chunks])
-                    embed_time = time.time() - embed_start
-
-                    result["metrics"]["embedding_dim"] = len(embeddings[0]) if embeddings else 0
-                    result["metrics"]["avg_embed_time_ms"] = int(embed_time / len(test_chunks) * 1000) if test_chunks else 0
-
-                    logger.info(f"✓ 向量化成功: 维度 {result['metrics']['embedding_dim']}, "
-                               f"平均耗时 {result['metrics']['avg_embed_time_ms']}ms/chunk")
-
-                except Exception as e:
-                    result["metrics"]["embedding_error"] = str(e)
-                    logger.error(f"✗ 向量化失败: {e}")
-
-            # Step 4: 显示chunk预览
+            # 显示 chunk 预览（前3个）
             logger.info(f"\n--- Chunk预览 (前3个) ---")
             for i, chunk in enumerate(chunks[:3], 1):
-                preview = chunk.content[:150].replace('\n', ' ')
-                logger.info(f"  [{i}] 大小={len(chunk.content)} 字符: {preview}...")
+                preview = chunk.text[:150].replace('\n', ' ')
+                page_info = f"页{chunk.page}" if hasattr(chunk, 'page') else ""
+                section_info = f" [{chunk.section[:20]}]" if (hasattr(chunk, 'section') and chunk.section) else ""
+                logger.info(f"  [{i}] 大小={len(chunk.text)} 字符 {page_info}{section_info}: {preview}...")
 
             result["success"] = True
 

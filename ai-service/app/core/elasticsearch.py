@@ -342,7 +342,7 @@ class ElasticSearchDB:
         elif index == "sensitive":
             return self.sensitive_index
         else:
-            raise ValueError(f"Unknown index: {index}")
+            raise ValueError(f"Unknown index: {index}. Index must be one of: 'faq', 'doc', 'major', 'sensitive'")
 
 
 # Global ElasticSearch instance

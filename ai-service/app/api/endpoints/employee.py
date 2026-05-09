@@ -10,10 +10,6 @@ from app.models.schemas import CreateEmployeeRequest, UpdateEmployeeRequest, Res
 from app.api.middleware.auth import get_api_key
 from app.core.database import get_database
 from app.core.logging import get_logger
-from app.services.dataset_faq_service import faq_processor
-from app.services.task_processor import task_processor
-from app.services.thesaurus_major_service import thesaurus_major_processor
-from app.services.thesaurus_sensitive_service import thesaurus_sensitive_processor
 
 logger = get_logger(__name__)
 
@@ -187,7 +183,7 @@ async def update_employee_setting(
             else:
                 update_data = {
                     "update_time": request.update_time,
-                    "knowledge": None
+                    "knowledge": {}
                 }
         elif request.update_type == "prologue":  # 对话开始--开场白配置
             faq_ids = []
@@ -270,7 +266,7 @@ async def update_employee_setting(
             else:
                 update_data = {
                     "update_time": request.update_time,
-                    "plugins": None
+                    "plugins": []
                 }
         elif request.update_type == "thesaurus_major":  # 高级设置--专业词库配置
             major_ids = []
@@ -300,8 +296,7 @@ async def update_employee_setting(
         if result and result.modified_count == 1:
             return ResponseResult.success(None)
         else:
-            return ResponseResult.error(status.HTTP_400_BAD_REQUEST, "error",
-                                        "update_employee_setting failed")
+            return ResponseResult.error(status.HTTP_400_BAD_REQUEST, "error", "update_employee_setting failed")
     except HTTPException:
         raise
     except Exception as e:
@@ -338,28 +333,28 @@ async def delete_employee(
                                         f"delete_employee not found: employee_id={employee_id}")
 
         # 删除数字员工关联的数据：敏感词库
-        if employee["safe_rule"] and employee["safe_rule"]["thesaurus_sensitive"]:
-            for thesaurus_id in employee["safe_rule"]["thesaurus_sensitive"]:
-                # 刪除ChromaDB记录和ElasticSearch记录
-                await thesaurus_sensitive_processor.delete_thesaurus_vectorization_data(thesaurus_id)
+        # if employee["safe_rule"] and employee["safe_rule"]["thesaurus_sensitive"]:
+        #     for thesaurus_id in employee["safe_rule"]["thesaurus_sensitive"]:
+        #         # 刪除ChromaDB记录和ElasticSearch记录
+        #         await thesaurus_sensitive_processor.delete_thesaurus_vectorization_data(thesaurus_id)
 
-                # 刪除敏感词库任务记录
-                await db.document_tasks.delete_many({"kb_id": f"sensitive_{thesaurus_id}"})
+        #         # 刪除敏感词库任务记录
+        #         await db.document_tasks.delete_many({"kb_id": f"sensitive_{thesaurus_id}"})
 
-                # 删除敏感词库记录
-                await db.thesaurus_sensitive.delete_many({"thesaurus_id": thesaurus_id})
+        #         # 删除敏感词库记录
+        #         await db.thesaurus_sensitive.delete_many({"thesaurus_id": thesaurus_id})
 
         # 删除数字员工关联的数据：专业词库
-        if employee["thesaurus_major"]:
-            for thesaurus_id in employee["thesaurus_major"]:
-                # 刪除ChromaDB记录和ElasticSearch记录
-                await thesaurus_major_processor.delete_thesaurus_vectorization_data(thesaurus_id)
+        # if employee["thesaurus_major"]:
+        #     for thesaurus_id in employee["thesaurus_major"]:
+        #         # 刪除ChromaDB记录和ElasticSearch记录
+        #         await thesaurus_major_processor.delete_thesaurus_vectorization_data(thesaurus_id)
 
-                # 刪除专业词库任务记录
-                await db.document_tasks.delete_many({"kb_id": f"major_{thesaurus_id}"})
+        #         # 刪除专业词库任务记录
+        #         await db.document_tasks.delete_many({"kb_id": f"major_{thesaurus_id}"})
 
-                # 删除专业词库记录
-                await db.thesaurus_major.delete_many({"thesaurus_id": thesaurus_id})
+        #         # 删除专业词库记录
+        #         await db.thesaurus_major.delete_many({"thesaurus_id": thesaurus_id})
 
         result = await db.digital_employee_configs.delete_one({"employee_id": employee_id})
 
@@ -387,31 +382,44 @@ async def get_employee(
     db=Depends(get_database),
 ):
     """
-        获取数字员工配置。
+    获取数字员工配置（合并核心信息和设置）。
 
-        \nArgs:
-            \n- employee_id: 数字员工id
-            \n- api_key: API key from auth
-            \n- db: Database instance
+    Args:
+        - employee_id: 数字员工id
+        - api_key: API key from auth
+        - db: Database instance
 
-        \nReturns:
-            \n- Employee configuration
+    Returns:
+        - Employee configuration (merged from configs and settings collections)
     """
     try:
         logger.info(f"get_employee request: employee_id={employee_id}")
 
+        # 查询员工核心信息
         employee = await db.digital_employee_configs.find_one({"employee_id": employee_id})
 
         if not employee:
             return ResponseResult.error(status.HTTP_404_NOT_FOUND, "error",
                                         f"get_employee not found employee_id={employee_id}")
 
-        # Convert MongoDB document to dict
+        # 查询员工设置信息
+        setting = await db.digital_employee_settings.find_one({"employee_id": employee_id})
+
+        # 格式化并合并数据
         employee.pop("_id", None)
         employee["created_at"] = employee["created_at"].isoformat() + "Z"
         employee["updated_at"] = employee["updated_at"].isoformat() + "Z"
         if employee.get("synced_at"):
             employee["synced_at"] = employee["synced_at"].isoformat() + "Z"
+
+        # 合并设置信息
+        if setting:
+            setting.pop("_id", None)
+            if setting.get("updated_at"):
+                setting["updated_at"] = setting["updated_at"].isoformat() + "Z"
+            employee["setting"] = setting
+        else:
+            employee["setting"] = {}
 
         return ResponseResult.success(employee)
 
@@ -475,15 +483,15 @@ async def list_employees(
     db=Depends(get_database),
 ):
     """
-        获取数字员工列表（前N个）。
+    获取数字员工列表（前N个，包含核心信息和设置）。
 
-        \nArgs:
-            \n- limit: 返回的最大数量（默认10，最大100）
-            \n- api_key: API key from auth
-            \n- db: Database instance
+    Args:
+        - limit: 返回的最大数量（默认10，最大100）
+        - api_key: API key from auth
+        - db: Database instance
 
-        \nReturns:
-            \n- Employee list with total count
+    Returns:
+        - Employee list with total count
     """
     try:
         logger.info(f"list_employees request: limit={limit}")
@@ -495,6 +503,12 @@ async def list_employees(
         # 统计总数
         total = await db.digital_employee_configs.count_documents({})
 
+        # 获取所有员工ID，批量查询设置
+        employee_ids = [emp["employee_id"] for emp in employees]
+        settings_cursor = db.digital_employee_settings.find({"employee_id": {"$in": employee_ids}})
+        settings_list = await settings_cursor.to_list(length=len(employee_ids))
+        settings_dict = {s["employee_id"]: s for s in settings_list}
+
         # 格式化返回数据
         result = []
         for emp in employees:
@@ -503,13 +517,24 @@ async def list_employees(
             emp["updated_at"] = emp["updated_at"].isoformat() + "Z"
             if emp.get("synced_at"):
                 emp["synced_at"] = emp["synced_at"].isoformat() + "Z"
+
+            # 合并设置信息
+            setting = settings_dict.get(emp["employee_id"])
+            if setting:
+                setting.pop("_id", None)
+                if setting.get("updated_at"):
+                    setting["updated_at"] = setting["updated_at"].isoformat() + "Z"
+                emp["setting"] = setting
+            else:
+                emp["setting"] = {}
+
             result.append(emp)
 
         data = {
-                "total": total,
-                "count": len(result),
-                "employees": result,
-            }
+            "total": total,
+            "count": len(result),
+            "employees": result,
+        }
         return ResponseResult.success(data)
 
     except Exception as e:
@@ -670,9 +695,9 @@ async def _execute_add_faq(employee_id: str, faq: DatasetFaqRequest):
                 vector_id=update_faq_id,  # Use faq_id as vector_id
                 es_indexed=False,  # Will be set to True after ES indexing
             ).model_dump()
-            await db.faqs.insert_one(insert_data)
+            # await db.faqs.insert_one(insert_data)
 
-            await task_processor.submit_faq_vectorization_task(faq_id=update_faq_id, kb_id=f"faq_{faq.faq_id}")
+            # await task_processor.submit_faq_vectorization_task(faq_id=update_faq_id, kb_id=f"faq_{faq.faq_id}")
         except Exception as e:
             logger.error(f"_execute_add_faq failed: faq_id={update_faq_id} error={str(e)}", exc_info=True)
 
@@ -705,8 +730,8 @@ async def _execute_add_sensitive(employee_id: str, thesaurus: ThesaurusRequest):
                 ).model_dump()
                 await db.thesaurus_sensitive.insert_one(update_data)
 
-                await task_processor.submit_thesaurus_sensitive_vectorization_task(thesaurus_id=update_thesaurus_id,
-                                                                                   kb_id=f"sensitive_{thesaurus_id}")
+                # await task_processor.submit_thesaurus_sensitive_vectorization_task(thesaurus_id=update_thesaurus_id,
+                #                                                                    kb_id=f"sensitive_{thesaurus_id}")
         except Exception as e:
             logger.error(f"_execute_add_sensitive failed: thesaurus_id={thesaurus_id} error={str(e)}", exc_info=True)
 
@@ -740,9 +765,9 @@ async def _execute_add_major(employee_id: str, thesaurus: ThesaurusRequest):
                     vector_id=update_thesaurus_id,  # Will be set after vectorization
                     es_indexed=False,  # Will be set after ElasticSearch indexing
                 ).model_dump()
-                await db.thesaurus_major.insert_one(update_data)
+                # await db.thesaurus_major.insert_one(update_data)
 
-                await task_processor.submit_thesaurus_major_vectorization_task(thesaurus_id=update_thesaurus_id,
-                                                                               kb_id=f"major_{thesaurus_id}")
+                # await task_processor.submit_thesaurus_major_vectorization_task(thesaurus_id=update_thesaurus_id,
+                #                                                                kb_id=f"major_{thesaurus_id}")
         except Exception as e:
             logger.error(f"_execute_add_major failed: thesaurus_id={thesaurus_id} error={str(e)}", exc_info=True)

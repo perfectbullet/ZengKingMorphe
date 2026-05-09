@@ -31,7 +31,9 @@ class ConversationModel(BaseModel):
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: Optional[datetime] = None
     context: Dict[str, Any] = Field(default_factory=dict)
-
+    # 
+    user_name: str
+    head_url: str
 
 class SessionModel(BaseModel):
     """Session model."""
@@ -98,7 +100,6 @@ class DocumentModel(BaseModel):
     doc_id: str
     filename: str
     kb_id: str
-    enhance: int = 1  # 0=不增强，1=增强
     category: Optional[str] = None
     size: int = 0
     format: str  # PDF/DOCX/TXT/MD/HTML/MP4
@@ -113,7 +114,18 @@ class DocumentModel(BaseModel):
 
 
 class DocumentChunkModel(BaseModel):
-    """Document chunk model."""
+    """
+    Document chunk model.
+
+    NOTE: 此集合现在仅用于查询功能（如 GET /{doc_id}/chunks API）。
+    RAG 检索的核心功能已迁移到 llama-rag-sdk：
+    - 向量存储: ChromaDB (collection_name="rag_documents")
+    - 文档存储: SDK DocStore (collection="docstore")
+
+    保留此集合用于：
+    1. 文档分块列表查询 (documents.py)
+    2. 知识库详情展示 (knowledge_base_kb.py)
+    """
     chunk_id: str
     doc_id: str
     kb_id: str
@@ -125,7 +137,7 @@ class DocumentChunkModel(BaseModel):
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: Optional[datetime] = None
 
-    # MinerU结构化字段（新增）
+    # MinerU结构化字段
     page_idx: Optional[int] = None                      # 起始页码
     page_indices: List[int] = Field(default_factory=list)  # 包含的所有页码
     block_types: List[str] = Field(default_factory=list)   # 包含的块类型 ['text', 'title']
@@ -133,6 +145,9 @@ class DocumentChunkModel(BaseModel):
     image_captions: List[str] = Field(default_factory=list)    # 图片描述列表
     title_path: List[str] = Field(default_factory=list)  # 标题路径（面包屑）
     structure_level: int = 0            # 在文档结构中的层级
+
+    # 语音播报字段（数学教材）
+    teaching_script_tts: Optional[str] = None  # 预生成的语音播报文本
 
 
 class IntentLogModel(BaseModel):
@@ -203,6 +218,20 @@ class StreamChunkModel(BaseModel):
     created_at: datetime = Field(default_factory=datetime.now)
 
 
+class RawTokenModel(BaseModel):
+    """Raw streaming token for per-token persistence."""
+    token_id: str           # "{chat_id}_raw_{token_index}"
+    chat_id: str
+    session_id: str
+    user_id: str
+    employee_id: str
+    conversation_id: Optional[str] = None
+    token_text: str
+    token_index: int        # 单调递增序列号
+    streaming_source: str   # "raganything" | "phi4_math" | "langchain_llm" | "rag_fallback"
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
 class FAQModel(BaseModel):
     """FAQ model for vector and keyword retrieval."""
     faq_id: str  # FAQ问答唯一id: faq_{employee_id}_{external_faq_id}
@@ -225,115 +254,80 @@ class FAQModel(BaseModel):
     synced_at: datetime = Field(default_factory=datetime.now)
 
 
-class EmployeeSettingKnowledge(BaseModel):
-    kb_ids: List[str] = Field(default_factory=list, description="知识库id列表")
-    faq_ids: List[str] = Field(default_factory=list, description="FAQ问答id列表")
-    video_ids: List[str] = Field(default_factory=list, description="视频资源id列表")
-
-
-class EmployeeSettingPrologue(BaseModel):
-    prologue: Optional[str] = Field(None, description="开场白内容")
-    is_opening_questions: bool = Field(False, description="是否开启开场热门问题")
-    prologue_question_type: int = Field(1, description="热门问题类型: 1-自动推荐 2-FAQ 3-自定义")
-    prologue_faqs: Optional[List[str]] = Field(default_factory=list, description="开场热门问题关联FAQ列表")
-    hot_questions: Optional[List[str]] = Field(default_factory=list, description="开场热门问题自定义列表")
-
-
-class EmployeeSettingChatRule(BaseModel):
-    is_multimodal: bool = Field(False, description="是否支持多模态")
-    fixed_answer: Optional[str] = Field(None, description="关闭图片理解后返回的固定回复话术")
-    faq_sim_threshold: Optional[float] = Field(0.0, description="FAQ相似度阈值")
-    faq_top_k: Optional[int] = Field(1, description="FAQ最多推荐数量")
-
-
-class EmployeeSettingUnusualRule(BaseModel):
-    exception_reply: Optional[str] = Field(None, description="系统异常时的回复话术")
-    not_match_reply_type: Optional[int] = Field(None, description="未匹配时的回复类型：0：固定话术，1：模型闲聊回复")
-    fixed_replys: Optional[List[str]] = Field(default_factory=list, description="not_match_reply_type=0时的固定回复列表")
-    is_web_search: bool = Field(False, description="not_match_reply_type=1时的模型闲聊回复：是否联网搜索")
-    is_show_sign: bool = Field(False, description="not_match_reply_type=1时的模型闲聊回复：是否显示标识")
-    is_my_prompt: bool = Field(False, description="not_match_reply_type=1时的模型闲聊回复：是否启用自定义提示词")
-    my_prompt: Optional[str] = Field(None, description="not_match_reply_type=1时的模型闲聊回复：自定义提示词内容")
-
-
-class ThesaurusWord(BaseModel):
-    word_id: int = Field(..., description="词条id")
-    word_name: str = Field(..., description="词条名称")
-    similar_words: List[str] = Field(default_factory=list, description="相似词条名称列表")
-
-
-class EmployeeSettingSafeRule(BaseModel):
-    is_reject_answer: bool = Field(False, description="命中敏感词时是否拒绝回答")
-    reject_answer: Optional[str] = Field(None, description="拒绝回答时的回复内容")
-    sensitive_ids: List[str] = Field(default_factory=list, description="敏感词库的词条id列表：sensitive_41_67_118")
-
-
-class EmployeeSettingRole(BaseModel):
-    persona: Optional[str] = Field(None, description="人设")
-    style: Optional[str] = Field(None, description="风格名称")
-    style_desc: Optional[str] = Field(None, description="风格描述")
-
-
-class EmployeeSettingPlugin(BaseModel):
-    plugin_id: int = Field(..., description="插件id")
-    plugin_name: str = Field(None, description="插件名称")
-    plugin_code: Optional[str] = Field(None, description="插件编码")
-    plugin_intro: Optional[str] = Field(None, description="插件简介")
-    plugin_icon: Optional[str] = Field(None, description="插件图标")
-    plugin_params: Optional[str] = Field(None, description="插件参数")
-
-
-class EmployeeSettingThesaurusMajor(BaseModel):
-    is_synonym_rewrite: bool = Field(False, description="是否同义词重写")
-    major_ids: List[str] = Field(default_factory=list, description="专业词库的词条id列表：major_41_67_118")
-
-
 class DigitalEmployeeConfigModel(BaseModel):
-    """ MongoDB数字员工 """
-    # 基本信息
-    employee_id: str = Field(..., description="数字员工id")
-    external_employee_id: str = Field(..., description="数字员工id（mysql库）")
-    team_id: int = Field(..., description="团队id")
+    """员工核心信息 - 来自 Java API 的 employee 对象
+
+    存储: digital_employee_configs 集合
+    """
+    employee_id: str = Field(..., description="主键，来自 Java API 的 id（转为字符串）")
+    team_id: int = Field(0, description="团队id")
     name: str = Field(..., description="员工姓名")
-    position: str = Field(..., description="职位")
-    employee_type: str = Field(..., description="数字员工类型: AVATAR=头像, HALF=半身, FULL=全身")
-    tone: str = Field(..., description="音色")
-    language: str = Field(..., description="语言")
-    gender: int = Field(..., description="数字员工性别: 1-男 2-女, 0-未知")
+    position: Optional[str] = Field(None, description="职位")
+    employee_type: str = Field("FULL", description="数字员工类型: AVATAR=头像, HALF=半身, FULL=全身")
+    tone: str = Field("elegant", description="音色")
+    language: str = Field("mandarin", description="语言")
+    gender: int = Field(0, description="数字员工性别: 1-男 2-女, 0-未知")
     intro: Optional[str] = Field(None, description="数字员工简介")
     portrait: Optional[str] = Field(None, description="头像地址")
     model_image: Optional[str] = Field(None, description="模型图片或模型地址")
     digital_code: Optional[str] = Field(None, description="数字人在AI平台的唯一编码")
-    onduty_status: int = Field(None, description="值班状态: 0-休息中，1-值班中")
-    create_time: str = Field(None, description="创建时间（mysql库）")
-    update_time: str = Field(None, description="更新时间（mysql库）")
-    created_at: datetime = Field(default_factory=datetime.now, description="创建时间")
-    updated_at: datetime = Field(default_factory=datetime.now, description="更新时间")
+    onduty_status: int = Field(0, description="值班状态: 0-休息中，1-值班中")
+    create_time: str = Field("", description="创建时间（Java API）")
+    update_time: str = Field("", description="更新时间（Java API）")
+    created_at: datetime = Field(default_factory=datetime.now, description="本地创建时间")
+    updated_at: datetime = Field(default_factory=datetime.now, description="本地更新时间")
     synced_at: datetime = Field(default_factory=datetime.now, description="同步时间")
-    knowledge: EmployeeSettingKnowledge = Field(None, description="对话准备--知识库配置")
-    prologue: EmployeeSettingPrologue = Field(None, description="对话开始--开场白、开场热门问题")
-    chat_rule: EmployeeSettingChatRule = Field(None, description="对话中--对话规则")
-    unusual_rule: EmployeeSettingUnusualRule = Field(None, description="对话中--异常或未匹配规则")
-    safe_rule: EmployeeSettingSafeRule = Field(None, description="对话中--安全规则配置")
-    role: EmployeeSettingRole = Field(None, description="角色--人设")
-    plugins: List[EmployeeSettingPlugin] = Field(default_factory=list, description="高级设置--插件")
-    thesaurus_major: EmployeeSettingThesaurusMajor = Field(None, description="高级设置--专业词库配置")
-    metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
 class DigitalEmployeeConfigSettingModel(BaseModel):
-    """ MongoDB数字员工对话设定 """
-    employee_id: str = Field(..., description="数字员工id")
-    update_time: str = Field(None, description="更新时间（mysql库）")
-    knowledge: EmployeeSettingKnowledge = Field(None, description="对话准备--知识库配置")
-    prologue: EmployeeSettingPrologue = Field(None, description="对话开始--开场白、开场热门问题")
-    chat_rule: EmployeeSettingChatRule = Field(None, description="对话中--对话规则")
-    unusual_rule: EmployeeSettingUnusualRule = Field(None, description="对话中--异常或未匹配规则")
-    safe_rule: EmployeeSettingSafeRule = Field(None, description="对话中--安全规则配置")
-    role: EmployeeSettingRole = Field(..., description="角色--人设")
-    plugins: List[EmployeeSettingPlugin] = Field(default_factory=list, description="高级设置--插件")
-    thesaurus_major: EmployeeSettingThesaurusMajor = Field(None, description="高级设置--专业词库配置")
-    updated_at: datetime = Field(default_factory=datetime.now)
+    """员工配置信息 - 来自 Java API 的 setting 对象
+
+    存储: digital_employee_settings 集合
+    """
+    employee_id: str = Field(..., description="主键，关联 DigitalEmployeeConfigModel")
+    update_time: str = Field("", description="更新时间（Java API）")
+
+    # Knowledge 配置
+    knowledge_kb_ids: List[str] = Field(default_factory=list, description="知识库ID列表")
+
+    # Prologue 配置
+    prologue_prologue: Optional[str] = Field(None, description="开场白内容")
+    prologue_is_opening_questions: bool = Field(False, description="是否开启开场热门问题")
+    prologue_question_type: int = Field(1, description="热门问题类型: 1-自动推荐 2-FAQ 3-自定义")
+    prologue_faqs: List[str] = Field(default_factory=list, description="开场热门问题关联FAQ ID列表")
+    prologue_hot_questions: List[str] = Field(default_factory=list, description="开场热门问题自定义列表")
+
+    # Chat rules
+    chat_rule_is_multimodal: bool = Field(False, description="是否支持多模态")
+    chat_rule_fixed_answer: Optional[str] = Field(None, description="关闭图片理解后返回的固定回复话术")
+    chat_rule_faq_sim_threshold: float = Field(0.0, description="FAQ相似度阈值")
+    chat_rule_faq_top_k: int = Field(1, description="FAQ最多推荐数量")
+
+    # Unusual rules
+    unusual_rule_exception_reply: Optional[str] = Field(None, description="系统异常时的回复话术")
+    unusual_rule_not_match_reply_type: Optional[int] = Field(None, description="未匹配时的回复类型：0：固定话术，1：模型闲聊回复")
+    unusual_rule_fixed_replys: List[str] = Field(default_factory=list, description="not_match_reply_type=0时的固定回复列表")
+    unusual_rule_is_web_search: bool = Field(False, description="not_match_reply_type=1时的模型闲聊回复：是否联网搜索")
+    unusual_rule_is_show_sign: bool = Field(False, description="not_match_reply_type=1时的模型闲聊回复：是否显示标识")
+    unusual_rule_is_my_prompt: bool = Field(False, description="not_match_reply_type=1时的模型闲聊回复：是否启用自定义提示词")
+    unusual_rule_my_prompt: Optional[str] = Field(None, description="not_match_reply_type=1时的模型闲聊回复：自定义提示词内容")
+
+    # Safe rules
+    safe_rule_is_reject_answer: bool = Field(False, description="命中敏感词时是否拒绝回答")
+    safe_rule_reject_answer: Optional[str] = Field(None, description="拒绝回答时的回复内容")
+
+    # Role 配置
+    role_persona: Optional[str] = Field(None, description="人设")
+    role_style: Optional[str] = Field(None, description="风格名称")
+    role_style_desc: Optional[str] = Field(None, description="风格描述")
+
+    # Plugins
+    plugins: List[Dict[str, Any]] = Field(default_factory=list, description="高级设置--插件")
+
+    # Major word banks (专业词库)
+    major_bank_ids: List[str] = Field(default_factory=list, description="专业词库ID列表")
+
+    updated_at: datetime = Field(default_factory=datetime.now, description="本地更新时间")
 
 
 class MinerUImageCaptionModel(BaseModel):

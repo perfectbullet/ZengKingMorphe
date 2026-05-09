@@ -1,6 +1,7 @@
 """
 MongoDB database connection and operations.
 """
+import asyncio
 from typing import Optional
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from pymongo import IndexModel, ASCENDING, DESCENDING
@@ -10,53 +11,79 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 
 
+# 最大重试次数
+MAX_CONNECT_RETRIES = 3
+# 重试延迟（秒）
+RETRY_DELAY_SECONDS = 2
+
+
 class MongoDB:
     """MongoDB connection manager."""
-    
+
     def __init__(self):
         self.client: Optional[AsyncIOMotorClient] = None
         self.db: Optional[AsyncIOMotorDatabase] = None
-    
+
     async def connect(self) -> None:
-        """Connect to MongoDB."""
-        try:
-            self.client = AsyncIOMotorClient(
-                settings.mongodb_url,
-                maxPoolSize=settings.mongodb_max_pool_size,
-                minPoolSize=settings.mongodb_min_pool_size,
-            )
-            self.db = self.client[settings.mongodb_db_name]
-            
-            # Test connection
-            await self.client.admin.command('ping')
-            logger.info(f"Connected to MongoDB: database={settings.mongodb_db_name}")
-            
-            # Create indexes
-            await self._create_indexes()
-            
-        except Exception as e:
-            # Log detailed connection info for debugging (mask password)
-            masked_url = settings.mongodb_url
-            if '@' in masked_url and '://' in masked_url:
-                # Mask password in URL: mongodb://user:password@host -> mongodb://user:***@host
-                parts = masked_url.split('://')
-                if len(parts) == 2 and '@' in parts[1]:
-                    auth_and_host = parts[1].split('@')
-                    if ':' in auth_and_host[0]:
-                        user = auth_and_host[0].split(':')[0]
-                        masked_url = f"{parts[0]}://{user}:***@{auth_and_host[1]}"
-            
-            logger.error(
-                "Failed to connect to MongoDB",
-                error=str(e),
-                mongodb_url=masked_url,
-                database=settings.mongodb_db_name,
-                max_pool_size=settings.mongodb_max_pool_size,
-                min_pool_size=settings.mongodb_min_pool_size,
-                exc_info=True
-            )
-            raise
-    
+        """
+        Connect to MongoDB with retry logic.
+
+        最多重试 3 次，每次失败后等待 2 秒再重试。
+        """
+        masked_url = settings.mongodb_url
+        if '@' in masked_url and '://' in masked_url:
+            # Mask password in URL: mongodb://user:password@host -> mongodb://user:***@host
+            parts = masked_url.split('://')
+            if len(parts) == 2 and '@' in parts[1]:
+                auth_and_host = parts[1].split('@')
+                if ':' in auth_and_host[0]:
+                    user = auth_and_host[0].split(':')[0]
+                    masked_url = f"{parts[0]}://{user}:***@{auth_and_host[1]}"
+
+        for attempt in range(1, MAX_CONNECT_RETRIES + 1):
+            try:
+                self.client = AsyncIOMotorClient(
+                    settings.mongodb_url,
+                    maxPoolSize=settings.mongodb_max_pool_size,
+                    minPoolSize=settings.mongodb_min_pool_size,
+                    serverSelectionTimeoutMS=5000,  # 5秒超时
+                )
+                self.db = self.client[settings.mongodb_db_name]
+
+                # Test connection
+                await self.client.admin.command('ping')
+                logger.info(
+                    f"Connected to MongoDB: database={settings.mongodb_db_name}, "
+                    f"at {masked_url}, attempt={attempt}/{MAX_CONNECT_RETRIES}"
+                )
+
+                # Create indexes
+                await self._create_indexes()
+
+                return  # 连接成功，退出
+
+            except Exception as e:
+                if attempt < MAX_CONNECT_RETRIES:
+                    logger.warning(
+                        f"MongoDB connection failed (attempt {attempt}/{MAX_CONNECT_RETRIES}), "
+                        f"retrying in {RETRY_DELAY_SECONDS}s... | error={str(e)}",
+                        mongodb_url=masked_url,
+                        database=settings.mongodb_db_name,
+                    )
+                    await asyncio.sleep(RETRY_DELAY_SECONDS)
+                else:
+                    # 最后一次尝试也失败了
+                    logger.error(
+                        f"MongoDB connection failed after {MAX_CONNECT_RETRIES} attempts | "
+                        f"error={str(e)}",
+                        mongodb_url=masked_url,
+                        database=settings.mongodb_db_name,
+                        max_pool_size=settings.mongodb_max_pool_size,
+                        min_pool_size=settings.mongodb_min_pool_size,
+                        exc_info=True
+                    )
+                    raise
+
     async def disconnect(self) -> None:
         """Disconnect from MongoDB."""
         if self.client:
@@ -101,14 +128,7 @@ class MongoDB:
                 IndexModel([("kb_id", ASCENDING), ("status", ASCENDING)]),
                 IndexModel([("uploaded_at", DESCENDING)]),
             ])
-            
-            # Document chunks collection indexes
-            await self.db.document_chunks.create_indexes([
-                IndexModel([("chunk_id", ASCENDING)], unique=True),
-                IndexModel([("doc_id", ASCENDING), ("chunk_index", ASCENDING)]),
-                IndexModel([("kb_id", ASCENDING)]),
-            ])
-            
+
             # Intent logs collection indexes
             await self.db.intent_logs.create_indexes([
                 IndexModel([("conversation_id", ASCENDING)]),
@@ -139,6 +159,15 @@ class MongoDB:
                 IndexModel([("user_id", ASCENDING), ("created_at", DESCENDING)]),
                 IndexModel([("employee_id", ASCENDING), ("created_at", DESCENDING)]),
                 IndexModel([("chat_id", ASCENDING), ("sequence", ASCENDING)]),
+                IndexModel([("created_at", DESCENDING)]),
+            ])
+
+            # Raw stream tokens collection indexes
+            await self.db.raw_stream_tokens.create_indexes([
+                IndexModel([("token_id", ASCENDING)], unique=True),
+                IndexModel([("chat_id", ASCENDING), ("token_index", ASCENDING)]),
+                IndexModel([("session_id", ASCENDING), ("created_at", DESCENDING)]),
+                IndexModel([("streaming_source", ASCENDING)]),
                 IndexModel([("created_at", DESCENDING)]),
             ])
             
@@ -207,10 +236,13 @@ mongodb = MongoDB()
 async def get_database() -> AsyncIOMotorDatabase:
     """
     Get database instance.
-    
+
+    如果数据库未连接，自动尝试连接。
+
     Returns:
         Database instance
     """
     if mongodb.db is None:
-        raise RuntimeError("Database not connected")
+        logger.info("Database not connected, attempting to connect...")
+        await mongodb.connect()
     return mongodb.db

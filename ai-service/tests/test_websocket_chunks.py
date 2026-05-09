@@ -26,7 +26,7 @@ async def test_websocket_chunks(
     user_id: str = "3",
     employee_id: str = "29",
     session_id: str = "sess_4_3_29",
-    host: str = "192.168.8.233",
+    host: str = "localhost",
     port: int = 8100,
 ):
     """
@@ -132,7 +132,7 @@ def main():
     parser.add_argument(
         "--host",
         default="192.168.8.233",
-        help="WebSocket server host (default: 192.168.8.233)"
+        help="WebSocket server host (default: localhost)"
     )
     parser.add_argument(
         "--port",

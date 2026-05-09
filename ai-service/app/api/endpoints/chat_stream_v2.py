@@ -18,8 +18,8 @@ from app.models.database import StreamChunkModel
 from app.core.logging import get_logger
 from app.core.database import get_database
 from app.services.conversation_service import conversation_workflow
+from app.utils.sentence_buffer import SentenceBuffer
 from langchain_openai import ChatOpenAI
-from langchain_community.chat_models import ChatOllama
 
 logger = get_logger(__name__)
 
@@ -107,19 +107,22 @@ def _get_revise_llm():
             streaming=True,
         )
     else:
-        # Use Ollama
+        # Use Ollama via OpenAI-style API
         ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
         ollama_model = os.getenv("OLLAMA_REVISE_MODEL",
                                  os.getenv("OLLAMA_MODEL", "qwen2.5:7b"))
 
-        logger.info(f"[Revise LLM] Ollama | BASE_URL={ollama_base_url} | MODEL={ollama_model}")
+        # Add /v1 suffix if not present
+        if not ollama_base_url.endswith("/v1"):
+            ollama_base_url = f"{ollama_base_url.rstrip('/')}/v1"
 
-        return ChatOllama(
+        logger.info(f"[Revise LLM] Ollama (via OpenAI API) | BASE_URL={ollama_base_url} | MODEL={ollama_model}")
+
+        return ChatOpenAI(
             base_url=ollama_base_url,
             model=ollama_model,
-            temperature=0.7,
+            temperature=0.1,
             streaming=True,
-            keep_alive=-1
         )
 
 def format_sources(
@@ -265,6 +268,8 @@ async def generate_openai_stream_v2(
             "messages": [],
             "user_query": user_query,
             "user_id": request.user_id,
+            "user_name": request.user_name,
+            "head_url": request.head_url,
             "session_id": session_id,
             "employee_id": request.employee_id,
             "employee_config": {},
@@ -287,6 +292,7 @@ async def generate_openai_stream_v2(
             "web_search_error": None,
             "conversation_id": "",
             "response_time_ms": 0,
+            "sources": [],  # Initialize sources list for workflow nodes
             # Performance monitoring
             "workflow_start_time": time.time(),
             "node_timings": {},
@@ -303,6 +309,12 @@ async def generate_openai_stream_v2(
             # Additional context
             "channel_name": request.channel_name,
             "team_id": request.team_id,
+            # LLM-based classification (from QueryClassifier)
+            "classification_label": None,
+            "classification_confidence": None,
+            "classification_reason": None,
+            # Answer mode（由 classify_query_type 写入；下游统一按此分发生成路径）
+            "answer_mode": None,
         }
 
         # Save user query chunk to DB
@@ -419,6 +431,26 @@ async def generate_openai_stream_v2(
             if state_update:
                 current_state.update(state_update)
 
+            # 检测敏感词并提前终止
+            if node_name == "input_validation" and state_update.get("has_sensitive"):
+                # 发送拒绝消息
+                reject_message = "抱歉，您的问题包含敏感内容，请规范用语后再试。"
+                reject_chunk_data = {
+                    "id": chat_id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": "status",
+                    "choices": [{"index": 0, "delta": {"content": reject_message}, "finish_reason": "sensitive"}],
+                }
+                chunk_sequence += 1
+                await save_stream_chunk(
+                    db, chat_id, chunk_sequence, session_id, request.user_id,
+                    request.employee_id, "done", reject_chunk_data, ""
+                )
+                yield json.dumps(reject_chunk_data)
+                logger.info(f"Sensitive word detected | reject_message sent | breaking workflow")
+                break  # 跳出循环，终止后续处理
+
             # 检测 knowledge_retrieval 节点并发送状态提示
             if node_name == "knowledge_retrieval":
                 status_token = random.choice(STATUS_TOKENS)
@@ -459,11 +491,18 @@ async def generate_openai_stream_v2(
             if should_generate and final_state:
                 should_generate = False
 
-                # 检查是否已有预生成的答案（仅数学教材知识库的 direct match）
+                # 检查是否已有预生成的答案
+                # 包括：数学教材知识库的 direct match，或者 noise 输入的预设响应
                 existing_answer = final_state.get("final_answer", "")
                 direct_match = final_state.get("direct_match")
+                streaming_type = final_state.get("streaming_type")
 
-                if existing_answer and direct_match and not final_state.get("faq_matched"):
+                # 数学教材直接匹配 或 噪声输入预设响应
+                if (existing_answer and direct_match and not final_state.get("faq_matched")) or streaming_type == "text":
+                    # 规范化 LaTeX 公式：定界符、空格清理、反斜杠转义
+                    from app.utils.latex import normalize_latex_formulas
+                    existing_answer = normalize_latex_formulas(existing_answer)
+
                     # 直接流式返回预生成的答案，跳过 LLM 生成
                     ttfb_ms = int((time.time() - initial_state["workflow_start_time"]) * 1000)
                     final_state["ttfb_ms"] = ttfb_ms
@@ -474,8 +513,9 @@ async def generate_openai_stream_v2(
                         f"rerank_score={direct_match.get('rerank_score')} | "
                         f"length={len(existing_answer)} | ttfb_ms={ttfb_ms}"
                     )
-                    # 按中文标点符号切分流式返回答案
-                    segments = re.split(r'([。！？\n])', existing_answer)
+                    # 按中文标点符号切分流式返回答案，然后合并单独的标点 segment
+                    raw_segments = re.split(r'([。！？\n])', existing_answer)
+                    segments = SentenceBuffer._merge_punctuation_segments(raw_segments)
                     for segment in segments:
                         token_chunk_data = {
                             "id": chat_id,
@@ -508,27 +548,14 @@ async def generate_openai_stream_v2(
                     await conversation_workflow.save_conversation(final_state)
 
                     # 这里的输出会发生给语音合成服务
-                    # 优先使用 teaching_script_tts，如果为空或查询不到则走 LLM 转换逻辑
-                    chunk_id = direct_match.get("chunk_id")
-                    teaching_script_tts = None
-                    # 从 MongoDB 查询 teaching_script_tts
-                    if chunk_id:
-                        try:
-                            tts_chunk = await db.document_chunks.find_one(
-                                {"chunk_id": chunk_id},
-                                {"teaching_script_tts": 1}
-                            )
-                            if tts_chunk:
-                                teaching_script_tts = tts_chunk.get("teaching_script_tts")
-                                logger.info(f"Found teaching_script_tts for chunk_id={chunk_id}, length={len(teaching_script_tts) if teaching_script_tts else 0}")
-                                logger.info(f"teaching_script_tts content: {teaching_script_tts}")
-                        except Exception as e:
-                            logger.warning(f"Failed to query teaching_script_tts: {e}")
+                    # 优先使用 teaching_script_tts，如果为空则走 LLM 转换逻辑
+                    teaching_script_tts = direct_match.get("teaching_script_tts")
                     # 如果 teaching_script_tts 存在且非空，直接流式输出；否则走 LLM 转换
                     if teaching_script_tts and teaching_script_tts.strip():
-                        # 直接输出 teaching_script_tts
+                        # 直接输出 teaching_script_tts，合并单独的标点 segment
                         logger.info(f"Using teaching_script_tts directly, length={len(teaching_script_tts)}")
-                        tst_ls = re.split(r'([。！？\n])', teaching_script_tts)
+                        raw_segments = re.split(r'([。！？\n])', teaching_script_tts)
+                        tst_ls = SentenceBuffer._merge_punctuation_segments(raw_segments)
                         for tst_token in tst_ls:
                             token_chunk_data = {
                                 "id": chat_id,
