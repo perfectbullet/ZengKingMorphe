@@ -31,6 +31,8 @@ from app.utils.sentence_buffer import SentenceBuffer, has_latex_formula
 from app.utils.think_tag_buffer import ThinkTagBuffer
 from app.utils.tts_formatter import strip_markdown_for_tts
 from app.utils.text_mapping import map_english_to_chinese
+from app.services.math_intent_heuristic import heuristic_math_problem
+from app.services.word2latex_service import word_to_latex
 from app.utils.common import sanitize_filename, detect_dominant_language
 from app.services.raganything_wrapper import get_raganything_stream
 logger = get_logger(__name__)
@@ -662,6 +664,25 @@ async def generate_openai_stream_v1(
 
     user_query = _clean_user_query(_extract_user_query(request.messages))
     prefer_zh_output = _prefer_zh_output(user_query)
+
+    # ── ASR → LaTeX 转换（仅数学问题） ──
+    if heuristic_math_problem(user_query):
+        t0 = time.time()
+        converted = await word_to_latex(user_query)
+        duration = time.time() - t0
+        if converted:
+            logger.info(
+                f"ASR→LaTeX: duration={duration:.2f}s, "
+                f"before={user_query[:80]!r}, after={converted[:80]!r}"
+            )
+            user_query = converted
+            # 同步更新 request.messages 中最后一条 user message
+            for msg in reversed(request.messages):
+                if msg.role == "user":
+                    msg.content = converted
+                    break
+        else:
+            logger.info(f"ASR→LaTeX skipped (no result): duration={duration:.2f}s, query={user_query[:80]!r}")
 
     initial_state = _build_initial_state(request, session_id, user_query)
     # 工作流全局输出语言偏好

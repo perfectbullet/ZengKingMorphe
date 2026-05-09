@@ -1,0 +1,61 @@
+"""
+ASR 结果转 LaTeX 公式服务。
+
+调用外部 word2latex 服务将自然语言数学描述（ASR 语音识别结果）
+转换为包含 LaTeX 公式的文本，供前端展示和 LLM 处理。
+"""
+import os
+import time
+
+import httpx
+
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
+
+WORD2LATEX_BASE_URL = os.getenv("WORD2LATEX_BASE_URL", "http://192.168.8.222:8080")
+WORD2LATEX_TIMEOUT = float(os.getenv("WORD2LATEX_TIMEOUT", "5"))
+
+
+async def word_to_latex(text: str) -> str | None:
+    """
+    调用 word2latex 服务将自然语言数学描述转换为 LaTeX 公式。
+
+    API 响应格式: {"input": "...", "output": "...", "success": true, "time": 0.001}
+
+    Args:
+        text: 原始自然语言数学描述
+
+    Returns:
+        转换后的文本（含 LaTeX 公式），失败返回 None
+    """
+    if not text or not text.strip():
+        return None
+    try:
+        start = time.time()
+        async with httpx.AsyncClient(timeout=WORD2LATEX_TIMEOUT) as client:
+            resp = await client.post(
+                f"{WORD2LATEX_BASE_URL}/word2latex",
+                json={"text": text, "max_tokens": 250, "temperature": 0},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        duration = time.time() - start
+
+        if not data.get("success"):
+            logger.warning(f"word2latex not success: duration={duration:.2f}s, data={data}")
+            return None
+
+        result = data.get("output", "").strip()
+        if result:
+            logger.info(
+                f"word2latex converted: duration={duration:.2f}s, "
+                f"original={text[:80]!r}, converted={result[:80]!r}"
+            )
+            return result
+
+        logger.warning(f"word2latex empty result: duration={duration:.2f}s, text={text[:60]!r}")
+        return None
+    except Exception as e:
+        logger.warning(f"word2latex failed: error={e}, text={text[:60]!r}")
+        return None
