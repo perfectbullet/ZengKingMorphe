@@ -116,6 +116,21 @@ class Settings(BaseSettings):
     realtime_query_llm_fallback_enabled: bool = Field(default=True)
     realtime_query_search_rewrite_enabled: bool = Field(default=True)
     realtime_traffic_min_web_score: float = Field(default=0.5, ge=0.0, le=1.0)
+    # A股复盘关键词，提升行情页命中率
+    web_search_market_anchor_hint_zh: str = Field(
+        default=" 上证指数收盘 深证成指收盘 创业板指收盘点位 涨跌幅",
+        description="Merged into Tavily anchored query text when realtime_category=market",
+    )
+    # 二次检索语句，空则关闭
+    web_search_market_secondary_query_zh: str = Field(
+        default="{date_iso} A股上证指数收盘 深证成指收盘 创业板指涨跌 复盘",
+        description="Optional second Tavily query for market realtime; empty disables",
+    )
+    # 使用Tavily高级检索（付费）
+    web_search_market_tavily_advanced: bool = Field(
+        default=True,
+        description="Use Tavily search_depth=advanced when realtime_category=market",
+    )
 
     # MongoDB Configuration
     mongodb_uri: str = Field(default="mongodb://localhost:27017/digital_employee")
