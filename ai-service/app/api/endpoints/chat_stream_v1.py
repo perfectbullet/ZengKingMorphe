@@ -459,6 +459,8 @@ def _build_initial_state(request: OpenAIChatRequest, session_id: str, user_query
         "classification_label": None,
         "classification_confidence": None,
         "classification_reason": None,
+        # Answer mode（由 classify_query_type 写入；下游统一按此分发生成路径）
+        "answer_mode": None,
         "target_year": None,
         # 动态上下文记忆：classify_query_type 节点会改写为 "related"/"unrelated"
         "context_dependence": None,
@@ -860,6 +862,14 @@ async def generate_openai_stream_v1(
 
                 mode = current_state.get("raganything_mode", "hybrid")
                 logger.info(f"Using RAGAnything stream | query={query[:50]} | mode={mode}")
+                # RAG 召回 / 错误状态跟踪：
+                # - rag_retrieval_empty：sources_info 显示 entities/chunks 都为 0 时置真，
+                #   作为 "RAG 没有结果" → 通用 LLM 兜底的"召回侧"判据；
+                # - rag_stream_error：RAGAnything 内部抛错时置真，避免空回答给到用户。
+                # 任何一者命中 + full_answer 为空 → 后续走通用 LLM 重答（保留 RAG 结果不影响显示，
+                # 因为 full_answer 本身就是空的，不会出现"两段答案叠加"的诡异体验）。
+                rag_retrieval_empty = False
+                rag_stream_error = False
                 async for chunk in get_raganything_stream(query, mode=mode, prefer_zh_output=prefer_zh_output):
                     chunk_type = chunk.get("type")
                     content = chunk.get("content")
@@ -884,6 +894,18 @@ async def generate_openai_stream_v1(
                         logger.info(f"📊 检索到: {content['entities_count']} 个实体, "
                            f"{content['relationships_count']} 个关系, "
                            f"{content['chunks_count']} 个文档块")
+                        # 召回完全为空时记录"RAG 无召回"标记；不立刻打断流，
+                        # 让 RAGAnything 走完它自己的输出，最后再统一判断是否需要兜底。
+                        if (
+                            int(content.get("entities_count", 0) or 0) == 0
+                            and int(content.get("chunks_count", 0) or 0) == 0
+                            and int(content.get("relationships_count", 0) or 0) == 0
+                        ):
+                            rag_retrieval_empty = True
+                            logger.info(
+                                "RAG retrieval empty (entities=0/chunks=0/relations=0); "
+                                "will fallback to general LLM if no answer text emitted"
+                            )
                     elif chunk_type == "sources":
                         # 捕获 RAGAnything 返回的 sources
                         sources = content
@@ -920,6 +942,7 @@ async def generate_openai_stream_v1(
                             logger.info(f"RAGAnything chunks | count={len(chunks)} | 添加到 state['sources']")
                     elif chunk_type == "error":
                         logger.error(f"RAGAnything error | {chunk['content']}")
+                        rag_stream_error = True
 
                 # 刷新 buffer 中剩余内容
                 final_segment = await sentence_buffer.flush(is_final=True)
@@ -933,6 +956,83 @@ async def generate_openai_stream_v1(
                         log_prefix="RAGAnything FinalSegment"
                     )
                     yield json.dumps(chunk_data)
+
+                # === RAG → 通用 LLM 兜底（运行期）===
+                # 触发条件（任一）：
+                #   1) RAG 报错（rag_stream_error=True）
+                #   2) RAG 召回完全为空（rag_retrieval_empty=True）
+                #   3) RAG 输出被裁后实际为空（full_answer.strip() == ""）
+                # 满足兜底条件时，立刻用 LangChain 通用 LLM 再生成一遍，把答案补给用户。
+                # 设计要点：
+                #   - 不丢弃 RAG 已 yield 的内容（这些内容本身就是空 / 错误提示，
+                #     不会出现"两段答案叠加"的视觉异常）；
+                #   - 复用 build_generation_messages 与 get_streaming_llm，避免重复实现；
+                #   - 失败保守：兜底 LLM 自身异常时只记日志，不再二次抛出，
+                #     保留原 RAG 路径的最终态。
+                stripped_answer = (full_answer or "").strip()
+                need_general_fallback = (
+                    rag_stream_error
+                    or rag_retrieval_empty
+                    or not stripped_answer
+                )
+                if need_general_fallback:
+                    logger.info(
+                        "RAG → general_llm fallback triggered | "
+                        f"rag_stream_error={rag_stream_error}, "
+                        f"rag_retrieval_empty={rag_retrieval_empty}, "
+                        f"answer_length={len(stripped_answer)}"
+                    )
+                    try:
+                        from app.services.conversation.conversation_helpers import (
+                            build_generation_messages as _build_general_messages,
+                        )
+                        fallback_messages = _build_general_messages(current_state)
+                        fallback_llm, fallback_model = (
+                            conversation_workflow.get_streaming_llm(current_state)
+                        )
+                        async for fb_chunk in fallback_llm.astream(fallback_messages):
+                            fb_token = (
+                                fb_chunk.content
+                                if hasattr(fb_chunk, "content")
+                                else str(fb_chunk)
+                            )
+                            if not fb_token:
+                                continue
+                            full_answer += fb_token
+                            fb_segment = sentence_buffer.add(fb_token)
+                            if fb_segment:
+                                chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
+                                    fb_segment, revise_llm, chat_id, created, request.model,
+                                    db, chunk_sequence, session_id, request.user_id,
+                                    request.employee_id, current_state.get("conversation_id"),
+                                    prefer_zh_output=prefer_zh_output,
+                                    enable_math_sentence_conversion=enable_math_sentence_conversion,
+                                    log_prefix="RAG-Fallback-LLM"
+                                )
+                                yield json.dumps(chunk_data)
+                        fb_final = await sentence_buffer.flush(is_final=True)
+                        if fb_final:
+                            chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
+                                fb_final.content, revise_llm, chat_id, created, request.model,
+                                db, chunk_sequence, session_id, request.user_id,
+                                request.employee_id, current_state.get("conversation_id"),
+                                prefer_zh_output=prefer_zh_output,
+                                enable_math_sentence_conversion=enable_math_sentence_conversion,
+                                log_prefix="RAG-Fallback-FinalSegment"
+                            )
+                            yield json.dumps(chunk_data)
+                        # 标记当次实际生成模型，便于 metadata 与日志统计
+                        model_name = fallback_model
+                        current_state["streaming_type"] = "langchain_llm_fallback"
+                        logger.info(
+                            f"RAG fallback completed | model={fallback_model} | "
+                            f"output_chars={len(full_answer)}"
+                        )
+                    except Exception as fallback_exc:
+                        logger.error(
+                            f"RAG → general_llm fallback failed | error={fallback_exc}",
+                            exc_info=True,
+                        )
 
                 final_state = current_state
                 final_state["final_answer"] = full_answer
