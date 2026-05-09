@@ -126,3 +126,23 @@ def filter_and_sort_by_recency(
     scored.sort(key=lambda x: x[0], reverse=True)
     return [r for _, __, r in scored]
 
+
+def merge_tavily_result_lists(
+    primary: list[dict] | None,
+    secondary: list[dict] | None,
+) -> list[dict]:
+    """合并两轮Tavily结果，去重并优先保留primary顺序。"""
+    out: list[dict] = []
+    seen: set[str] = set()
+    for batch in (primary or [], secondary or []):
+        for x in batch:
+            if not isinstance(x, dict):
+                continue
+            u = str(x.get("url") or "").strip()
+            key = u if u else f"__nourl_{len(seen)}"
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(x)
+    return out
+

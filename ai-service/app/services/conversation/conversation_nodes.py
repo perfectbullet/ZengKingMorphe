@@ -71,8 +71,10 @@ from app.services.conversation.intent_routing import (
 from app.services.calendar_time_resolver import calendar_direct_text_answer
 from app.services.web_search_recency import (
     DEFAULT_POLICIES,
+    RecencyPolicy,
     build_time_anchored_query,
     filter_and_sort_by_recency,
+    merge_tavily_result_lists,
 )
 from app.services.wall_clock_authority import (
     authoritative_wall_clock_search_record,
@@ -1454,6 +1456,14 @@ class ConversationNodes:
                 now = datetime.now()
                 realtime_category = state.get("realtime_category", "") or "general"
                 policy = DEFAULT_POLICIES.get(realtime_category, DEFAULT_POLICIES["general"])
+                if realtime_category == "market":
+                    _mh = (getattr(settings, "web_search_market_anchor_hint_zh", None) or "").strip()
+                    if _mh:
+                        policy = RecencyPolicy(
+                            max_age_days=policy.max_age_days,
+                            prefer_today=policy.prefer_today,
+                            query_hint=_mh,
+                        )
                 anchored_query = query
                 used_duck_fallback = False
 
@@ -1485,10 +1495,16 @@ class ConversationNodes:
                 if state.get("is_realtime_query"):
                     anchored_query = build_time_anchored_query(query, now, policy)
 
-                # 执行联网搜索
+                # 行情类：advanced 检索更容易带回含「收盘」「收报」数字的正文片段（可配置关闭）。
+                _tavily_depth = (
+                    "advanced"
+                    if realtime_category == "market"
+                    and getattr(settings, "web_search_market_tavily_advanced", True)
+                    else "basic"
+                )
                 web_search_tool = TavilySearchResults(
                     max_results=10,  # 返回结果数量，默认 5
-                    search_depth="basic", # 搜索深度："basic" (免费) 或 "advanced" (付费)
+                    search_depth=_tavily_depth,
                     tavily_api_key=settings.tavily_api_key,
                 )
                 search_results = await web_search_tool.ainvoke({"query": anchored_query})
@@ -1519,6 +1535,34 @@ class ConversationNodes:
                     logger.info("Web search fallback retry with DuckDuckGo for traffic")
                     search_results = await _duckduckgo_traffic_fallback(query)
                     used_duck_fallback = bool(search_results)
+
+                if realtime_category == "market":
+                    _mtpl = (
+                        getattr(settings, "web_search_market_secondary_query_zh", None) or ""
+                    ).strip()
+                    if _mtpl:
+                        try:
+                            q_mk = _mtpl.format(
+                                date_iso=now.strftime("%Y-%m-%d"),
+                                date_cn=f"{now.month}月{now.day}日",
+                            )
+                        except Exception:
+                            logger.warning(
+                                "web_search_market_secondary_query_zh has invalid placeholders, "
+                                "using template as literal"
+                            )
+                            q_mk = _mtpl
+                        try:
+                            extra_mk = await web_search_tool.ainvoke({"query": q_mk})
+                            primary_mk = (
+                                search_results if isinstance(search_results, list) else []
+                            )
+                            search_results = merge_tavily_result_lists(
+                                primary_mk,
+                                extra_mk if isinstance(extra_mk, list) else [],
+                            )
+                        except Exception as e:
+                            logger.warning(f"Market secondary Tavily skipped: {e}")
 
                 # Format results
                 formatted_results = []

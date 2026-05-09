@@ -750,12 +750,13 @@ User question:
             requirements = f"""**重要提示**：用户询问的是价格/市场信息，系统已通过网络搜索获取了最新数据。
 
 回答要求：
-1. **必须基于下方提供的网络资料回答**
-2. 字数严格限制在 50 字以内
-3. 格式：直接报数字，不用列表、减号、复杂格式
-4. 保持{tone_desc}的语气风格
-5. **禁止：信息来源、网站链接、"信息来源"字样**
-6. 简单直接地提供价格信息。
+1. **摘录可核对的数字**：上证指数、深证成指、创业板指等主要指数的**收盘点位**，仅当下方摘录对**同一指数**有**明确文字**写出（如出现「上证综指收盘××××点」「收报××××点」且与指数名称对应）才可引用该数字。**禁止**从表格碎片、无关列（如百分比、市盈率、排名）、或摘录中未写明的数字推理、拼凑、编造收盘点位。
+2. **强约束**：若你无法在摘录中为「某个指数」划出**同一短短语**内同时出现的**指数指称**与**「收报/收盘/收于」+ 具体数字 + `点`」**，则该轮回答**整段不得出现**任何「××××.xx点」类收盘数字（含整数或小数）；不得用记忆或站外常识补数。
+3. 若摘录**没有**清楚给出用户所指指数的收盘点数：不得输出具体点位；用一两句话概括摘录中的**涨跌态势、成交额/量能描述、领涨领跌板块**（摘录有写才写）；可一句提示用户在本机行情软件查看最新收盘。
+4. 字数控制在约 90 字以内。
+5. 保持{tone_desc}的语气风格。
+6. **禁止**：外链、「依据」「来源于」及任一网站名称；**禁止**出现「实时行情数据」式来源套话；摘录未出现时不得写出看似精确的指数收盘数字。
+
 上下文信息{source_indicator}：
 {context_text}
 
@@ -767,11 +768,12 @@ User question:
                 requirements = f"""IMPORTANT: The user asks about prices/market. The system has retrieved up-to-date web results.
 
 Requirements:
-1. Answer strictly based on the web context below
-2. Keep it under ~50 words
-3. Prefer directly stating numbers
-4. Keep a {tone_desc} tone
-5. Do NOT include sources, links, or the words "source" / "references"
+1. **Quotable numbers only**: For major index closing levels (Shanghai SZSE Chinext etc.), cite a numeric close **only** if the excerpt explicitly states it for **that same index** (e.g. clear \"closed at #### points\" paired with the index name). Do **not** invent or stitch digits from unrelated table columns or ratios.
+2. **Hard rule**: If you cannot point to a single short phrase in the excerpts where the **index name** and **closing level** (with the word for \"points\" in the target language) clearly co-occur, you must **not** output any fabricated \"####.## points\" figures.
+3. If excerpts lack an explicit closing level for the asked index: do **not** output a fabricated point level; summarize direction/moves and sectors **only from excerpts**, and optionally suggest checking a live quotes app for the exact close.
+4. Keep it roughly under ~90 words.
+5. Keep a {tone_desc} tone.
+6. Do NOT name sources/sites, use \"according to …\", or stock phrases like \"real-time market data\"; never output a precise close not present verbatim in context.
 
 Context {source_indicator}:
 {context_text}
