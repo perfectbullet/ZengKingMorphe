@@ -127,18 +127,23 @@ def normalize_calendar_user_query(text: str) -> str:
 
 
 _CALENDAR_INTENT_ZH = re.compile(
-    r"(几月几号|几月几日|哪天|哪一日|日期|星期几|周几|礼拜几|号\?|号？)"
+    r"(几月几号|几月几日|哪天|哪一日|日期|星期几|周几|礼拜几|几号|几日|号\?|号？)"
 )
 _CALENDAR_INTENT_EN = re.compile(
+    r"(?:"
     r"\b("
-    r"(what(?:'s|\s+is)?\s+the\s+date)"  # what's the date / what is the date
-    r"|what\s+date"  # what date (e.g., what date is it)
-    r"|which\s+day"  # which day (is it)
-    r"|day\s+of\s+the\s+week"  # day of the week
-    r"|month\s+and\s+day"  # month and day
-    r"|today'?s\s+date"  # today's date / todays date
-    r"|the\s+date\s+today"  # the date today
-    r")\b",
+    r"(what(?:'s|\s+is)?\s+the\s+date)"
+    r"|what\s+date"
+    r"|which\s+day"
+    r"|day\s+of\s+the\s+week"
+    r"|month\s+and\s+day"
+    r"|today'?s\s+date"
+    r"|the\s+date\s+today"
+    r"|(?:what\s+was|what\s+is)\s+the\s+date"
+    r"|what\s+day(?:\s+is\s+it)?"
+    r")\b"
+    r"|'s\s+date\b"
+    r")",
     re.IGNORECASE,
 )
 
@@ -612,8 +617,9 @@ def should_attempt_calendar_resolution(user_query: str) -> bool:
         s = sq.strip().lower()
         if not s:
             continue
-        # 相对日追问：允许较长自然表达（如 "yesterday's date?"）
-        if _relative_calendar_day_offset(s) is not None:
+        # 相对日：**仅含有「今天/明天」等词不足以启动日历**，须剥掉首个相对日短语后，
+        # 残余为空（或仅存标点语气）或为显式历法问法——否则多半是「today + 实质主题」（行情、日程等）。
+        if _relative_day_qualifies_calendar(s):
             return True
     return False
 
@@ -645,6 +651,47 @@ def _relative_calendar_day_offset(q_lower: str) -> int | None:
         if phrase in q_lower:
             return off
     return None
+
+
+def _trim_calendar_followup(rem: str) -> str:
+    t = normalize_calendar_user_query(rem).strip().lower()
+    t = re.sub(
+        r"^[`'\"“”，,。.．:：;；、!！…~\s_-]+|[`'\"“”，,。.．:：;；、!！…~\s_-]+$",
+        "",
+        t,
+    )
+    return t.strip()
+
+
+def _relative_day_qualifies_calendar(sq_lower: str) -> bool:
+    if _relative_calendar_day_offset(sq_lower) is None:
+        return False
+    remn_with_space = normalize_calendar_user_query(sq_lower).strip().lower()
+    stripped = False
+    for phrase, _ in _RELATIVE_DAY_OFFSET_ZH_BY_LEN:
+        if phrase in remn_with_space:
+            remn_with_space = normalize_calendar_user_query(
+                remn_with_space.replace(phrase, " ", 1)
+            ).strip().lower()
+            stripped = True
+            break
+    if not stripped:
+        for phrase, _ in _RELATIVE_DAY_OFFSET_EN_BY_LEN:
+            m_en = re.search(r"\b" + re.escape(phrase) + r"\b", sq_lower)
+            if m_en:
+                remn_with_space = normalize_calendar_user_query(
+                    sq_lower[: m_en.start()] + " " + sq_lower[m_en.end() :]
+                ).strip().lower()
+                stripped = True
+                break
+    if not stripped:
+        return False
+    rem = _trim_calendar_followup(remn_with_space)
+    if not rem:
+        return True
+    if _CALENDAR_INTENT_ZH.search(rem) or _CALENDAR_INTENT_EN.search(rem):
+        return True
+    return False
 
 
 def _parse_weekday_date_cn(q_lower: str, now: datetime) -> tuple[str, datetime] | None:
