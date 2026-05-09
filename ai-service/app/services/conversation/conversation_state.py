@@ -5,6 +5,7 @@ This module defines:
 - ConversationState: TypedDict that flows through workflow nodes
 - GREETING_KEYWORDS: Keyword patterns for greeting detection
 """
+import re
 from pathlib import Path
 from typing import TypedDict, Annotated, List, Dict, Any, Optional, Set
 from operator import add
@@ -76,6 +77,22 @@ def _load_default_sensitive_words() -> Set[str]:
 DEFAULT_SENSITIVE_WORDS = frozenset(_load_default_sensitive_words())
 DEFAULT_SENSITIVE_WORDS_LOWER = frozenset(w.lower() for w in DEFAULT_SENSITIVE_WORDS)
 
+
+def sensitive_term_matches_query(query_lower: str, term_lower: str) -> bool:
+    """
+    敏感词匹配：对纯英文/数字敏感词使用整词匹配，避免误杀；
+    对含中文/符号的敏感词使用子串匹配，保证拦截效果。
+    """
+    if not term_lower:
+        return False
+    if not query_lower:
+        return False
+    ascii_alnum = frozenset("abcdefghijklmnopqrstuvwxyz0123456789")
+    # 非纯英文数字 → 子串匹配
+    if not term_lower.isascii() or not all(c in ascii_alnum for c in term_lower):
+        return term_lower in query_lower
+    # 纯英文数字 → 整词匹配
+    return re.search(r"\b" + re.escape(term_lower) + r"\b", query_lower) is not None
 
 # =============================================================================
 # Noise Preset Response Text
