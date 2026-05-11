@@ -87,6 +87,22 @@ _APPLICATION_PATTERN = re.compile(
     re.DOTALL,
 )
 
+# ---------------------------------------------------------------------------
+# 数列 / 递推题型
+#
+# ASR 转写后的数列题常出现"下标""满足""等于"等口语化表述，
+# 缺少传统数学动词（求/解/计算）和几何属性（面积/体积/棱长…），
+# 导致模式 A（应用题+几何对象+几何属性）和模式 B（数学动词+对象/属性）均无法命中。
+#
+# 典型 ASR 例句：
+#   "已知数列A下标N，满足A下标N加一等于二乘以A的下标N加一，
+#    A的下标一等于一的A下标四的值为多少"
+# ---------------------------------------------------------------------------
+_SEQUENCE_KEYWORD = re.compile(
+    r"(下标|通项(?:公式)?|递推(?:关系|公式)?|公比|公差|"
+    r"等差|等比|前\s*[nN]\s*项)"
+)
+
 
 def heuristic_math_problem(query: str) -> bool:
     """
@@ -98,6 +114,9 @@ def heuristic_math_problem(query: str) -> bool:
     2. **数学动词 + 数学对象**：包含 ``求/解/计算/证明/推导`` 等动词，
        同时出现 ``函数/方程/不等式/数列/...`` 之一。
        例："求不等式 x²-5x+6<0"，"证明：若 a>b>0，则 1/a < 1/b"。
+    3. **数列递推 / 求值题**：``已知…为多少`` 应用题句式 + 数列关键词
+       （``下标/通项/递推/公比/公差/等差/等比/前n项``）。
+       例："已知数列A下标N，满足A下标N加一等于…，A下标四的值为多少"
 
     互斥规则（命中以下任一即返回 False，避免与 concept_explain 冲突）：
     - 命中 ``_CONCEPT_INDICATOR``：``请讲解 / 是什么 / 推导方法 / 比较异同`` 等。
@@ -124,6 +143,10 @@ def heuristic_math_problem(query: str) -> bool:
 
     # 模式 B：数学动词 + 数学对象 / 属性
     if _MATH_VERB.search(q) and (_GEOMETRY_OBJECT.search(q) or _GEOMETRY_PROP.search(q)):
+        return True
+
+    # 模式 C：数列递推 / 求值题（ASR 转写后常见）
+    if _APPLICATION_PATTERN.search(q) and _SEQUENCE_KEYWORD.search(q):
         return True
 
     return False
