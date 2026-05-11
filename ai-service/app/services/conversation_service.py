@@ -257,7 +257,7 @@ class ConversationWorkflow:
         model_id = get_vllm_first_model(base_url)
         # temperature = float(os.getenv("PHI4_TEMPERATURE", "0.0"))
         # max_tokens = int(os.getenv("PHI4_MAX_TOKENS", "16384"))
-        max_tokens = 1024 * 3
+        max_tokens = 1024 * 6
         temperature = 0.6
 
         # 动态创建 ChatOpenAI 实例
