@@ -77,28 +77,15 @@ _MATH_KEYWORD = re.compile(
 )
 
 
-def heuristic_math_problem(query: str) -> bool:
+def is_math_problem(query: str) -> bool:
     """
-    判断 query 是否包含数学关键词，应视为数学计算题。
+    判断 query 是否包含数学关键词。
 
-    逻辑：
-    1. 命中 _CONCEPT_INDICATOR（请讲解 / 是什么 / 推导方法 / 异同等）→ False
-       此类 query 是"请求解释"，不是"请求计算"。
-    2. 命中 _MATH_KEYWORD（任一数学术语 / 问法）→ True
-    3. 其他 → False
-
-    Returns:
-        True  → 强烈建议升级为 ``math_problem``（走 Phi-4）
-        False → 不构成数学题强信号，由调用方决定保持原标签或继续后续启发式
+    命中 _MATH_KEYWORD（任一数学术语 / 问法 / 动词）即返回 True。
     """
     q = (query or "").strip()
     if not q:
         return False
-
-    # 概念解释题排除：明确"请求解释"而非"请求计算"
-    if _CONCEPT_INDICATOR.search(q):
-        return False
-
     return bool(_MATH_KEYWORD.search(q))
 
 

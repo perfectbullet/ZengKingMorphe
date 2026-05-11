@@ -47,7 +47,7 @@ from app.services.realtime_intent_heuristic import heuristic_realtime_category
 from app.services.math_intent_heuristic import (
     HEURISTIC_PROMOTABLE_LABELS,
     heuristic_concept_explain,
-    heuristic_math_problem,
+    is_math_problem,
 )
 from app.services.conversation.conversation_helpers import (
     time_node,
@@ -976,7 +976,7 @@ class ConversationNodes:
             # - 启发式自身彼此互斥（math 启发式内部已经把 ``请讲解 / 推导方法 / 异同``
             #   这类元语言信号当作排除项），不会把 Q4 类教材题误升为数学题。
             if result.label in HEURISTIC_PROMOTABLE_LABELS:
-                if heuristic_math_problem(resolved):
+                if is_math_problem(resolved):
                     logger.info(
                         "Math heuristic promoted to math_problem: "
                         f"prev_label={result.label}, prev_confidence={result.confidence}, "

@@ -1,4 +1,4 @@
-"""独立测试 heuristic_math_problem 函数的脚本。
+"""独立测试 is_math_problem 函数的脚本。
 
 用法:
     conda activate morphe
@@ -12,7 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.services.math_intent_heuristic import (
-    heuristic_math_problem,
+    is_math_problem,
     heuristic_concept_explain,
 )
 
@@ -59,7 +59,7 @@ def main():
     failed = 0
 
     for query, expected, desc in CASES:
-        result = heuristic_math_problem(query)
+        result = is_math_problem(query)
         ok = result is expected
 
         if not ok:
@@ -92,9 +92,9 @@ def main():
         if not query:
             continue
 
-        is_math = heuristic_math_problem(query)
+        is_math = is_math_problem(query)
         is_concept = heuristic_concept_explain(query)
-        print(f"  heuristic_math_problem   → {is_math}")
+        print(f"  is_math_problem           → {is_math}")
         print(f"  heuristic_concept_explain → {is_concept}")
         print()
 
