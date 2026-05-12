@@ -232,36 +232,40 @@ class ConversationWorkflow:
 
     def get_phi4_streaming_llm(self, state: ConversationState):
         """
-        动态创建 Phi-4 流式 LLM（不存储为实例变量）。
+        动态创建数学流式 LLM（不存储为实例变量）。
 
-        根据环境配置创建 Phi-4 LLM 实例用于数学问题解答。
+        根据 settings.math_model_provider 选择后端:
+        - "phi4": 通过 vLLM 自动发现模型名称 (原有行为)
+        - "qwen_math": 使用 Qwen2.5-Math 固定端点
 
         Args:
             state: Current conversation state
 
         Returns:
-            Tuple of (llm, model_name) for Phi-4 streaming
-
-        Notes:
-            - 读取环境变量而非从 state
-            - vLLM 不需要真实 API key
+            Tuple of (llm, model_name) for math streaming
         """
-        # 检查是否启用
+        # 检查是否启用（兼容旧 PHI4_ENABLED 环境变量）
         enabled = os.getenv("PHI4_ENABLED", "true").lower() == "true"
         if not enabled:
-            logger.info("Phi-4 disabled, falling back to default LLM")
+            logger.info("Math model disabled (PHI4_ENABLED=false), falling back to default LLM")
             return self.get_streaming_llm(state)
 
-        # 读取配置
-        base_url = os.getenv("PHI4_BASE_URL", "http://192.168.8.235:8000/v1")
-        model_id = get_vllm_first_model(base_url)
-        # temperature = float(os.getenv("PHI4_TEMPERATURE", "0.0"))
-        # max_tokens = int(os.getenv("PHI4_MAX_TOKENS", "16384"))
-        max_tokens = 1024 * 6
+        provider = getattr(settings, 'math_model_provider', 'phi4').lower()
+
+        if provider == "qwen_math":
+            # Qwen2.5-Math: 使用显式配置的端点和模型名
+            base_url = getattr(settings, 'math_model_base_url', "http://192.168.100.230:8011/v1")
+            model_id = getattr(settings, 'math_model_name', "/data/models/Qwen2.5-Math-1.5B-Instruct")
+        else:
+            # phi4: 原有逻辑 — 通过 vLLM 自动发现模型
+            base_url = os.getenv("PHI4_BASE_URL", "http://192.168.8.235:8000/v1")
+            model_id = get_vllm_first_model(base_url)
+
         temperature = 0.6
+        max_tokens = 1024 * 6
 
         # 动态创建 ChatOpenAI 实例
-        phi4_llm = ChatOpenAI(
+        math_llm = ChatOpenAI(
             base_url=base_url,
             api_key="dummy-key",  # vLLM 不需要真实 key
             model=model_id,
@@ -272,11 +276,11 @@ class ConversationWorkflow:
         )
 
         logger.info(
-            f"Phi-4 LLM created | model={model_id} | base_url={base_url} | "
-            f"temperature={temperature} | max_tokens={max_tokens}"
+            f"Math LLM created | provider={provider} | model={model_id} | "
+            f"base_url={base_url} | temperature={temperature} | max_tokens={max_tokens}"
         )
 
-        return phi4_llm, model_id
+        return math_llm, model_id
 
     async def save_conversation(self, state: ConversationState):
         """

@@ -121,7 +121,7 @@ class OpenAIChatRequest(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "model": "qwen2.5:7b",
+                "model": "qwen2.5:147b",
                 "messages": [
                     {"role": "system", "content": "你是一个专业的客服助手。"},
                     {"role": "user", "content": "胡桃是谁？"}

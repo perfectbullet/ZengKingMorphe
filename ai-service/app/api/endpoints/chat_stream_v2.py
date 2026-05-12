@@ -110,7 +110,7 @@ def _get_revise_llm():
         # Use Ollama via OpenAI-style API
         ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
         ollama_model = os.getenv("OLLAMA_REVISE_MODEL",
-                                 os.getenv("OLLAMA_MODEL", "qwen2.5:7b"))
+                                 os.getenv("OLLAMA_MODEL", "qwen2.5:14b"))
 
         # Add /v1 suffix if not present
         if not ollama_base_url.endswith("/v1"):

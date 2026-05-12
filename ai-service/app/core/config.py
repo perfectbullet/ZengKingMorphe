@@ -67,6 +67,21 @@ class Settings(BaseSettings):
     openai_temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     openai_max_tokens: int = Field(default=2000, ge=1)
 
+    # Math Model Configuration (数学模型可切换配置)
+    # provider=phi4 时通过 vLLM 自动发现模型；provider=qwen_math 时使用固定端点
+    math_model_provider: str = Field(
+        default="phi4",
+        description="Math model provider: phi4 (vLLM auto-discover) or qwen_math (fixed endpoint)"
+    )
+    math_model_base_url: str = Field(
+        default="http://192.168.100.230:8011/v1",
+        description="Math model base URL (used when provider=qwen_math)"
+    )
+    math_model_name: str = Field(
+        default="/data/models/Qwen2.5-Math-1.5B-Instruct",
+        description="Math model name (used when provider=qwen_math)"
+    )
+
     # 混合模式复杂度阈值配置 (hybrid 模式下生效)
     # 复杂度评估使用本地 LLM 快速判断问题复杂度 (0-10分)
     # 0-6分: 使用本地 Ollama (简单到中等复杂)
@@ -138,10 +153,6 @@ class Settings(BaseSettings):
     mongodb_max_pool_size: int = Field(default=100, ge=1)
     mongodb_min_pool_size: int = Field(default=10, ge=1)
 
-    # Chroma Configuration
-    chroma_host: str = Field(default="localhost")
-    chroma_port: int = Field(default=8001)
-    chroma_persist_dir: str = Field(default="./chroma_db")
 
     # ElasticSearch Configuration
     es_host: str = Field(default="localhost")

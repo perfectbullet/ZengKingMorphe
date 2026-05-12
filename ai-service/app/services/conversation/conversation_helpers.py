@@ -1129,43 +1129,59 @@ User question:
     return messages
 
 
+# Qwen Math 模型专用提示词（简洁 CoT 风格，参考 Qwen2.5-Math 官方评估脚本）
+QWEN_MATH_SYSTEM_PROMPT = (
+    "请一步一步推理，并将最终答案放在 $\\boxed{}$ 中。"
+)
+# 等价于: "请一步一步推理，并将最终答案放在 \\boxed{} 中。"
+# 等价于英文: Please reason step by step, and put your final answer within \boxed{}.
+
 def build_math_generation_messages(state: ConversationState) -> List:
     """
-    构建数学问题的 Phi-4 模型消息。
+    构建数学问题的模型消息。
 
-    多轮上下文支持
-    ==============
-    历史上 Phi-4 路径只塞了 ``SystemPrompt + 当前 query``，没有任何历史，
-    导致"对于 f(x)=2^x 和 g(x)=log₂x …" → 追问"判断它们是否互为反函数"时
-    模型看到的是孤立一句话，"它们"无所指，回答"题目中没有给出具体的两个函数"。
-
-    现在与 ``build_generation_messages`` 对齐：
-
-    1. **优先使用 ``rewritten_query``**（``_select_llm_facing_query`` 已做过
-       消歧改写 + 语言一致性兜底），这样即便上游历史被动态上下文记忆判定为
-       "unrelated"，单句问句本身也是可独立理解的；
-    2. **注入最近对话历史**（``_build_conversation_history``）：当
-       ``context_dependence == "unrelated"`` 时返回空列表，与普通 LLM 路径
-       完全一致，不破坏"动态上下文记忆"的语义；
-    3. **简单计算题路径不动**：``_is_simple_math_query`` 命中的"3+5=?"这种
-       单步运算与历史无关，保持原"零历史 + 极简 prompt"以维持低延迟和
-       PHI4_SIMPLE_SYSTEM_PROMPT 的简洁输出格式。
+    根据 settings.math_model_provider 选择提示词:
+    - "qwen_math": 使用简洁 CoT 提示词（QWEN_MATH_SYSTEM_PROMPT）
+    - "phi4" (默认): 使用 6 步解题流程 + 公式库
 
     Args:
         state: Current conversation state
 
     Returns:
-        List of Message objects for Phi-4 LLM
+        List of Message objects for math LLM
     """
+    provider = getattr(settings, 'math_model_provider', 'phi4').lower()
+    is_qwen_math = provider == "qwen_math"
+
     raw_query = (state.get("user_query") or "").strip()
     normalized_query = _normalize_math_query(raw_query)
+
+    if is_qwen_math:
+        # Qwen Math: 统一使用简洁 CoT 提示词，不区分简单/复杂题
+        messages = [SystemMessage(content=QWEN_MATH_SYSTEM_PROMPT)]
+
+        history_msgs = _build_conversation_history(state, max_messages=12)
+        messages.extend(history_msgs)
+
+        effective_query = _select_llm_facing_query(state)
+        effective_normalized = _normalize_math_query(effective_query)
+        messages.append(HumanMessage(content=effective_normalized))
+
+        logger.info(
+            "build_math_generation_messages [qwen_math]: "
+            f"history_msgs={len(history_msgs)}, "
+            f"effective_query={effective_normalized[:80]!r}"
+        )
+        return messages
+
+    # --- phi4 路径（原有逻辑）---
     if _is_simple_math_query(normalized_query):
         # 简单计算题：保持极简输出（不注入历史，避免噪声拉高首字延迟）
         messages = [SystemMessage(content=PHI4_SIMPLE_SYSTEM_PROMPT)]
         messages.append(HumanMessage(content=normalized_query))
         return messages
 
-    # 非简单题：统一使用“解题行为流程”+“公式库”，不再针对具体题目写死分支
+    # 非简单题：统一使用"解题行为流程"+"公式库"，不再针对具体题目写死分支
     sys_prompt = MATH_SYSTEM_PROMPT + "\n\n" + GEOMETRY_FORMULA_BOOK
     messages: List = [SystemMessage(content=sys_prompt)]
 
@@ -1182,7 +1198,7 @@ def build_math_generation_messages(state: ConversationState) -> List:
     messages.append(HumanMessage(content=effective_normalized))
 
     logger.info(
-        "build_math_generation_messages: "
+        "build_math_generation_messages [phi4]: "
         f"history_msgs={len(history_msgs)}, "
         f"context_dependence={state.get('context_dependence')!r}, "
         f"query_rewritten={state.get('query_rewritten', False)}, "
