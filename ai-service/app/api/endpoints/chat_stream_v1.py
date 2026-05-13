@@ -806,26 +806,33 @@ async def generate_openai_stream_v1(
                 current_state["ttfb_ms"] = ttfb_ms
                 logger.info(f"Using preset answer | length={len(existing_answer)} | ttfb_ms={ttfb_ms}")
 
-                # 流式返回预设答案
+                # 流式返回预设答案（通过 sentence_buffer 分段处理）
+                enable_math_sentence_conversion = bool(current_state.get("is_math_problem", False))
                 for char in existing_answer:
-                    token_chunk_data = {
-                        "id": chat_id,
-                        "object": "chat.completion.chunk",
-                        "created": created,
-                        "model": request.model,
-                        "choices": [{
-                            "index": 0,
-                            "delta": {"content": char},
-                            "finish_reason": None,
-                        }],
-                    }
-                    chunk_sequence += 1
-                    await save_stream_chunk(
-                        db, chat_id, chunk_sequence, session_id, request.user_id,
-                        request.employee_id, "token", token_chunk_data,
-                        current_state.get("conversation_id")
+                    segment = sentence_buffer.add(char)
+                    if segment:
+                        chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
+                            segment, revise_llm, chat_id, created, request.model,
+                            db, chunk_sequence, session_id, request.user_id,
+                            request.employee_id, current_state.get("conversation_id"),
+                            prefer_zh_output=prefer_zh_output,
+                            enable_math_sentence_conversion=enable_math_sentence_conversion,
+                            log_prefix="PresetText"
+                        )
+                        yield json.dumps(chunk_data)
+
+                # 刷新 buffer 中剩余内容
+                final_segment = await sentence_buffer.flush(is_final=True)
+                if final_segment:
+                    chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
+                        final_segment.content, revise_llm, chat_id, created, request.model,
+                        db, chunk_sequence, session_id, request.user_id,
+                        request.employee_id, current_state.get("conversation_id"),
+                        prefer_zh_output=prefer_zh_output,
+                        enable_math_sentence_conversion=enable_math_sentence_conversion,
+                        log_prefix="PresetText-FinalSegment"
                     )
-                    yield json.dumps(token_chunk_data)
+                    yield json.dumps(chunk_data)
 
                 # 发送结束标记
                 chunk_sequence += 1
