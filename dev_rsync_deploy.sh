@@ -5,7 +5,7 @@
 # =============================================
 
 # 配置变量
-REMOTE_HOST="192.168.8.234"
+REMOTE_HOST="192.168.8.233"
 REMOTE_USER="zenking"
 
 # 自动适配不同用户的路径
@@ -65,7 +65,6 @@ rsync ${RSYNC_OPTS} -e "ssh -i ${SSH_KEY}" \
     --include="Dockerfile" \
     --include="requirements.txt" \
     --include=".dockerignore" \
-    --include=".env" \
     --include="DEFAULT_SENSITIVE_WORDS.txt" \
     --exclude="*" \
     "${LOCAL_DIR}/ai-service/" \

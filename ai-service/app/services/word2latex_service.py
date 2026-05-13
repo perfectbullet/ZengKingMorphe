@@ -4,6 +4,7 @@ ASR 结果转 LaTeX 公式服务。
 调用外部 word2latex 服务将自然语言数学描述（ASR 语音识别结果）
 转换为包含 LaTeX 公式的文本，供前端展示和 LLM 处理。
 """
+
 import os
 import time
 
@@ -29,6 +30,8 @@ async def word_to_latex(text: str) -> str | None:
     Returns:
         转换后的文本（含 LaTeX 公式），失败返回 None
     """
+    logger.info(f"word2latex converted WORD2LATEX_BASE_URL={WORD2LATEX_BASE_URL}s, ")
+
     if not text or not text.strip():
         return None
     try:
@@ -43,7 +46,9 @@ async def word_to_latex(text: str) -> str | None:
         duration = time.time() - start
 
         if not data.get("success"):
-            logger.warning(f"word2latex not success: duration={duration:.2f}s, data={data}")
+            logger.warning(
+                f"word2latex not success: duration={duration:.2f}s, data={data}"
+            )
             return None
 
         result = data.get("output", "").strip()
@@ -53,8 +58,9 @@ async def word_to_latex(text: str) -> str | None:
                 f"original={text[:80]!r}, converted={result[:80]!r}"
             )
             return result
-
-        logger.warning(f"word2latex empty result: duration={duration:.2f}s, text={text[:60]!r}")
+        logger.error("口语转公式报错了\n" * 10)
+        logger.error(f"word2latex get error result: result={result}")
+        
         return None
     except Exception as e:
         logger.warning(f"word2latex failed: error={e}, text={text[:60]!r}")

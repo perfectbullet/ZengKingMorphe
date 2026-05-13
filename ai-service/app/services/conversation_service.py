@@ -277,7 +277,7 @@ class ConversationWorkflow:
 
         logger.info(
             f"Math LLM created | provider={provider} | model={model_id} | "
-            f"base_url={base_url} | temperature={temperature} | max_tokens={max_tokens}"
+            f"math_model_base_url={base_url} | temperature={temperature} | max_tokens={max_tokens}"
         )
 
         return math_llm, model_id
