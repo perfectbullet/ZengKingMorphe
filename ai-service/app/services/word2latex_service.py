@@ -30,7 +30,7 @@ async def word_to_latex(text: str) -> str | None:
     Returns:
         转换后的文本（含 LaTeX 公式），失败返回 None
     """
-    logger.info(f"word2latex converted WORD2LATEX_BASE_URL={WORD2LATEX_BASE_URL}s, ")
+    logger.info(f"word2latex converted WORD2LATEX_BASE_URL={WORD2LATEX_BASE_URL}, ")
 
     if not text or not text.strip():
         return None
