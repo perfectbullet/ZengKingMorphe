@@ -32,15 +32,13 @@ def get_vllm_first_model(base_url: str) -> str:
         # 返回第一个模型 ID
         return response.data[0].id
 
-    except ValueError:
-        raise  # 重新抛出 ValueError
     except Exception as e:
-        raise Exception(f"获取 vLLM 模型列表失败: {e}") from e
+        raise Exception(f"获取 vLLM 模型列表失败: {e}\n\nbase_url={base_url}") from e
 
 
 if __name__ == "__main__":
     try:
-        first_model = get_vllm_first_model("http://192.168.8.235:8000/v1")
+        first_model = get_vllm_first_model("http://192.168.100.230:8000/v1")
         print(f"✓ 第一个模型 ID: {first_model}")
     except Exception as e:
         print(f"✗ 错误: {e}")

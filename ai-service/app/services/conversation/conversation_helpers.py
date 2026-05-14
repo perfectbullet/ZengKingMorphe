@@ -1203,6 +1203,7 @@ def build_math_generation_messages(state: ConversationState) -> List:
         f"context_dependence={state.get('context_dependence')!r}, "
         f"query_rewritten={state.get('query_rewritten', False)}, "
         f"effective_query={effective_normalized[:80]!r}"
+        f"sys_prompt={sys_prompt}"
     )
 
     return messages

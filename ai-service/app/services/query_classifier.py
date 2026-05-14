@@ -415,8 +415,7 @@ class QueryClassifier:
             # 安全校验并返回
             return sanitize_resolved_query(latest_query, first_line)[:2000]
         except Exception as e:
-            logger.warning(f"aresolve_standalone_query failed: {e}", exc_info=True)
-            return latest_query
+            raise e
 
     def _parse_llm_response(self, content: str) -> ClassificationResult:
         """
@@ -444,7 +443,7 @@ class QueryClassifier:
                 reason=data.get("reason", ""),
             )
         except json.JSONDecodeError as e:
-            logger.warning(f"Failed to parse LLM response as JSON: {e}, content={text[:100]}")
+            logger.warning(f"Failed to parse LLM response as JSON: {type(e).__name__}, content={text[:100]}")
             return ClassificationResult(
                 label="other",
                 confidence="low",
@@ -511,7 +510,7 @@ class QueryClassifier:
             )
             return decision
         except Exception as e:
-            logger.warning(f"aneed_realtime failed: {e}", exc_info=True)
+            logger.warning("aneed_realtime failed: {}", e, exc_info=True)
             return False
 
     # 动态上下文相关性判定提示词：仅做 yes/no 二元判定，不做改写也不作答。
@@ -658,7 +657,7 @@ class QueryClassifier:
             )
             return decision, ("llm_yes" if decision else "llm_no")
         except Exception as e:
-            logger.warning(f"aclassify_context_dependence failed: {e}", exc_info=True)
+            logger.warning("aclassify_context_dependence failed: {}", e, exc_info=True)
             # LLM 异常：回退到"无关"，等价于"无历史"行为，保持稳定且不会引入污染。
             return False, "fallback"
 
@@ -734,7 +733,7 @@ class QueryClassifier:
             )
             return text
         except Exception as e:
-            logger.warning(f"agen_search_query failed: {e}", exc_info=True)
+            logger.warning("agen_search_query failed: {}", e, exc_info=True)
             return None
 
     async def aclassify(self, query: str, context_query: str | None = None) -> ClassificationResult:
@@ -776,7 +775,7 @@ class QueryClassifier:
             )
             return result
         except Exception as e:
-            logger.error(f"LLM classification failed: {e}", exc_info=True)
+            logger.error("LLM classification failed: {}", e, exc_info=True)
             return ClassificationResult(
                 label="other",
                 confidence="low",
@@ -814,7 +813,7 @@ class QueryClassifier:
             )
             return result
         except Exception as e:
-            logger.error(f"LLM classification failed: {e}", exc_info=True)
+            logger.error("LLM classification failed: {}", e, exc_info=True)
             return ClassificationResult(
                 label="other",
                 confidence="low",
@@ -857,6 +856,6 @@ def get_query_classifier() -> QueryClassifier:
             max_tokens=128,
         )
         _query_classifier = QueryClassifier(llm)
-        logger.info("QueryClassifier singleton initialized")
+        logger.info(f"QueryClassifier singleton initialized， base_url={base_url}")
 
     return _query_classifier
