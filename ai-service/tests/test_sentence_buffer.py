@@ -1,165 +1,173 @@
 """
-Test SentenceBuffer timing behavior to verify single-char segment fix.
-"""
-import time
-import sys
-import os
+Test SentenceBuffer with real streaming data from MongoDB.
 
-# Add parent directory to path for imports
+Data source: MongoDB (funasr.raw_stream_tokens)
+- Each document: chat_id, token_text, token_index, session_id, created_at
+- Grouped by chat_id into independent streaming sessions
+
+Output JSONL format (one JSON object per line):
+    {"chat_id": "...", "token_count": 100, "char_count": 500,
+     "full_text": "...", "sentences": ["...", "..."]}
+
+Usage:
+    # Process last 3 chats (default)
+    python tests/test_sentence_buffer.py --last 3
+
+    # Process last 10 chats, output to custom file
+    python tests/test_sentence_buffer.py --last 10 --output results.jsonl
+
+    # Process specific chat(s) by ID
+    python tests/test_sentence_buffer.py --chat-id chatcmpl-2c4842d0c562
+    python tests/test_sentence_buffer.py --chat-id chatcmpl-aaa,chatcmpl-bbb
+"""
+
+import asyncio
+import json
+import os
+import sys
+from datetime import datetime
+
+import motor.motor_asyncio
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from loguru import logger
+logger.remove()
+logger.add(sys.stderr, level="INFO")
 
 from app.utils.sentence_buffer import SentenceBuffer
 
-def test_first_token_resets_timer():
-    """
-    Test that the first token resets the timer, preventing immediate timeout flush.
+MONGODB_URI = os.getenv(
+    "MONGODB_URI",
+    "mongodb://funasr:funasr2026@192.168.8.233:27017/funasr?authSource=admin",
+)
+MONGODB_DB_NAME = os.getenv("MONGODB_DB_NAME", "funasr")
+COLLECTION_NAME = "raw_stream_tokens"
 
-    This simulates the scenario where:
-    1. SentenceBuffer is created (last_flush_time = T0)
-    2. Delay occurs (workflow processing)
-    3. First token arrives after > max_wait_seconds
-    4. Should NOT immediately flush due to timeout
-    """
-    buffer = SentenceBuffer(max_wait_seconds=0.5)
+TOKEN_DELAY = float(os.getenv("TOKEN_DELAY", "0.01"))  # 100 tokens/s
 
-    # Simulate workflow delay - buffer is created but no tokens yet
-    time.sleep(0.6)  # Exceeds max_wait_seconds
 
-    # First token arrives - should reset timer, not immediately flush
-    result = buffer.add("奇")
+async def _load_chats(client, chat_ids):
+    """Load token data for given chat_ids."""
+    collection = client[MONGODB_DB_NAME][COLLECTION_NAME]
+    result = []
+    for cid in chat_ids:
+        docs = []
+        async for doc in collection.find(
+            {"chat_id": cid}, {"token_text": 1, "token_index": 1}
+        ).sort("token_index", 1):
+            docs.append(doc)
+        if docs:
+            result.append((cid, [doc["token_text"] for doc in docs]))
+    return result
 
-    # Should NOT flush immediately even though time elapsed since creation
-    # The timer was reset when the first token arrived
-    assert result is None, "First token should not cause immediate flush despite workflow delay"
-    assert buffer.get_buffer_length() == 1
-    assert buffer.buffer == "奇"
 
-def test_still_respects_timeout_after_tokens():
-    """
-    Test that timeout still works after tokens have been accumulated.
-    """
-    buffer = SentenceBuffer(max_wait_seconds=0.3, max_chars=100)
+async def load_chats_from_mongo(n):
+    """Load last n distinct chats from MongoDB, ordered by created_at desc."""
+    client = motor.motor_asyncio.AsyncIOMotorClient(MONGODB_URI)
+    collection = client[MONGODB_DB_NAME][COLLECTION_NAME]
 
-    # Add some tokens
-    buffer.add("测试")
-    time.sleep(0.4)  # Exceeds max_wait_seconds
+    pipeline = [
+        {"$sort": {"created_at": -1}},
+        {"$group": {"_id": "$chat_id", "latest": {"$first": "$created_at"}}},
+        {"$sort": {"latest": -1}},
+        {"$limit": n},
+    ]
+    chat_ids = [doc["_id"] async for doc in collection.aggregate(pipeline)]
+    result = await _load_chats(client, chat_ids)
+    print(result)
+    client.close()
+    return result
 
-    # Should flush due to timeout
-    result = buffer.add("文本")
-    assert result == "测试文本", "Should flush after timeout when tokens exist"
 
-def test_normal_sentence_splitting_still_works():
-    """
-    Test that normal sentence splitting logic is not affected.
-    """
-    buffer = SentenceBuffer(max_chars=100)
+async def load_chats_by_ids(chat_ids):
+    """Load specific chats by chat_id list."""
+    client = motor.motor_asyncio.AsyncIOMotorClient(MONGODB_URI)
+    result = await _load_chats(client, chat_ids)
+    client.close()
+    return result
 
-    result = buffer.add("这是第一句话。")
-    assert result == "这是第一句话。", "Should split at sentence end"
 
-    result = buffer.add("这是第二句话，")
-    assert result is None, "Should not split at comma when below threshold"
+async def split_with_sentence_buffer(token_texts):
+    """Feed tokens into SentenceBuffer with simulated delay, collect segments."""
+    buffer = SentenceBuffer(max_chars=200, max_wait_seconds=1, comma_split_threshold=200)
+    sentences = []
+    for token in token_texts:
+        await asyncio.sleep(TOKEN_DELAY)
+        segment = buffer.add(token)
+        if segment:
+            sentences.append(segment)
 
-    result = buffer.add("继续一些文本。")
-    assert "继续一些文本。" in result, "Should split at sentence end"
+    remaining = await buffer.flush(is_final=True)
+    if remaining:
+        sentences.append(remaining.content)
+    return sentences
 
-def test_empty_buffer_condition():
-    """
-    Test that timer resets only when buffer is truly empty.
-    """
-    buffer = SentenceBuffer(max_wait_seconds=0.5)
 
-    # First token - buffer was empty
-    buffer.add("测")
-    time.sleep(0.6)
+async def main(chat_ids, n, output_path):
+    if chat_ids:
+        print(f"Loading {len(chat_ids)} chat(s) by ID...", flush=True)
+        chats = await load_chats_by_ids(chat_ids)
+    else:
+        print(f"Loading last {n} chats from MongoDB...", flush=True)
+        chats = await load_chats_from_mongo(n)
 
-    # Add more - buffer was NOT empty, so timer wasn't reset
-    # Since time elapsed, should flush
-    result = buffer.add("试")
-    assert result is not None, "Should flush after timeout when buffer wasn't empty"
+    if not chats:
+        print("No chats found in MongoDB")
+        return
 
-def test_display_formula_not_split():
-    """
-    Test that complete display formulas ($$...$$) spanning max_chars are not split.
+    total_tokens = sum(len(t) for _, t in chats)
+    print(f"Found {len(chats)} chats ({total_tokens} tokens), processing...\n", flush=True)
 
-    This ensures that formulas with newlines and long content are kept together.
-    """
-    import asyncio
+    with open(output_path, "w", encoding="utf-8") as f:
+        for idx, (cid, token_texts) in enumerate(chats, 1):
+            full_text = "".join(token_texts)
+            t0 = asyncio.get_event_loop().time()
+            sentences = await split_with_sentence_buffer(token_texts)
+            elapsed = asyncio.get_event_loop().time() - t0
 
-    buffer = SentenceBuffer(max_chars=100, max_wait_seconds=0.5)
+            record = {
+                "chat_id": cid,
+                "token_count": len(token_texts),
+                "char_count": len(full_text),
+                "full_text": full_text,
+                "sentences": sentences,
+            }
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
-    # A long display formula with newlines (107 chars)
-    formula = r'$$\n(x + y)^3 = \binom{3}{0} x^3 y^0 + \binom{3}{1} x^2 y^1 + \binom{3}{2} x^1 y^2 + \binom{3}{3} x^0 y^3\n$$'
+            print(
+                f"[{idx}/{len(chats)}] {cid} | {len(token_texts)}tok {len(full_text)}char | {len(sentences)}sent | {elapsed:.1f}s",
+                flush=True,
+            )
+            for i, s in enumerate(sentences):
+                display = s.replace("\n", "\\n")
+                if len(display) > 120:
+                    display = display[:120] + "..."
+                print(f"  [{i}] {display}", flush=True)
+            print(flush=True)
 
-    # Add characters one by one
-    for char in formula:
-        result = buffer.add(char)
-        # Should not split in the middle of the formula
-        if result:
-            assert result.startswith("$$") and result.endswith("$$"), \
-                f"Formula was split incorrectly: {repr(result[:30])}..."
+    print(f"Results written to {output_path}", flush=True)
 
-    # Flush to get the complete formula
-    async def get_final():
-        final = await buffer.flush(is_final=True)
-        return final
-
-    final = asyncio.run(get_final())
-    assert final is not None, "Should have content after flush"
-    assert final.content == formula, "Formula should be complete"
-    assert final.has_formula, "Should detect formula"
-
-def test_display_formula_with_double_newline_not_split():
-    """
-    Test that display formulas with double newline before closing $$ are not split.
-
-    This is the actual case from the logs where $$\n\n...$$ was being split.
-    """
-    import asyncio
-
-    buffer = SentenceBuffer(max_chars=100, max_wait_seconds=0.5)
-
-    # Formula with double newline before closing $$ (109 chars)
-    formula = r'$$\n(x + y)^3 = \binom{3}{0} x^3 y^0 + \binom{3}{1} x^2 y^1 + \binom{3}{2} x^1 y^2 + \binom{3}{3} x^0\n y^3\n\n$$'
-
-    # Add characters one by one
-    segments = []
-    for char in formula:
-        result = buffer.add(char)
-        if result:
-            segments.append(result)
-
-    # Should not have split the formula in the middle
-    for seg in segments:
-        if seg.startswith("$$") and not seg.endswith("$$"):
-            assert False, f"Formula was split in the middle: {repr(seg[:50])}..."
-
-    # Flush to get the complete formula
-    async def get_final():
-        final = await buffer.flush(is_final=True)
-        return final
-
-    final = asyncio.run(get_final())
-    assert final is not None, "Should have content after flush"
-    assert final.content == formula, "Formula should be complete"
 
 if __name__ == "__main__":
-    print("Running SentenceBuffer timing tests...")
+    import argparse
 
-    print("\n1. Testing first token resets timer...")
-    test_first_token_resets_timer()
-    print("   PASSED: First token correctly resets timer")
+    parser = argparse.ArgumentParser(description="SentenceBuffer test with MongoDB streaming data")
+    parser.add_argument("--last", type=int, default=3, help="Number of recent chats to process")
+    parser.add_argument(
+        "--chat-id",
+        dest="chat_ids",
+        type=lambda s: s.split(","),
+        help="Comma-separated chat_id(s) to process",
+    )
+    parser.add_argument("--output", type=str, default=None, help="Output JSONL file path")
+    args = parser.parse_args()
 
-    print("\n2. Testing timeout still works after tokens...")
-    test_still_respects_timeout_after_tokens()
-    print("   PASSED: Timeout still works correctly")
+    results_dir = os.path.join(os.path.dirname(__file__), "sentence_buffer_results")
+    os.makedirs(results_dir, exist_ok=True)
+    output_path = args.output or os.path.join(
+        results_dir,
+        f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl",
+    )
 
-    print("\n3. Testing normal sentence splitting...")
-    test_normal_sentence_splitting_still_works()
-    print("   PASSED: Normal splitting works")
-
-    print("\n4. Testing empty buffer condition...")
-    test_empty_buffer_condition()
-    print("   PASSED: Empty buffer condition works")
-
-    print("\n✅ All tests passed!")
+    asyncio.run(main(args.chat_ids, args.last, output_path))

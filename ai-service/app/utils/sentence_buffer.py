@@ -309,15 +309,7 @@ class SentenceBuffer:
                 f"has_complete={has_complete}, extended_limit={extended_limit}"
             )
 
-        if unclosed_delimiter:
-            closing_pos, reason = self._find_latex_closing_delimiter(text, unclosed_delimiter)
-            if closing_pos > 0:
-                return closing_pos, reason
-
-            if len(text) < extended_limit:
-                return -1, "unclosed_formula"
-
-        # Try sentence end punctuation
+        # Try sentence end punctuation — highest priority
         for match in reversed(list(self.SENTENCE_END_PATTERN.finditer(text))):
             pos = match.end()
             matched_char = match.group(1)
@@ -350,6 +342,9 @@ class SentenceBuffer:
                     return -1, "waiting_for_complete_formula"
 
             if unclosed_delimiter:
+                closing_pos, reason = self._find_latex_closing_delimiter(text, unclosed_delimiter)
+                if closing_pos > 0:
+                    return closing_pos, reason
                 pos, reason = self._find_formula_boundary_split(text, unclosed_delimiter)
                 if pos > 0:
                     return pos, reason
@@ -362,12 +357,14 @@ class SentenceBuffer:
 
             return min(extended_limit, len(text)), "char_limit_forced"
 
+        # Buffer not full — if unclosed formula, wait for more tokens
         if unclosed_delimiter:
             logger.debug(
                 f"[SentenceBuffer] Not splitting due to unclosed formula: "
                 f"delimiter={unclosed_delimiter!r}, buffer_len={len(text)}, "
                 f"buffer_end={repr(text[-50:] if len(text) > 50 else text)}"
             )
+            return -1, "unclosed_formula"
 
         return -1, "no_split"
 
