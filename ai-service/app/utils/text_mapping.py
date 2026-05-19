@@ -3,7 +3,10 @@
 
 处理 RAGAnything LLM 可能返回的英文拒绝/错误消息，映射为中文。
 """
+import re
+
 from app.core.logging import get_logger
+from app.utils.sentence_buffer import has_latex_formula
 
 logger = get_logger(__name__)
 
@@ -59,4 +62,29 @@ def map_english_to_chinese(text: str) -> str:
             logger.info(f"[英文映射] 后缀匹配 | 原文={repr(text[:50])} | 映射={repr(mapped[:50])}")
             return mapped
 
+    return text
+
+
+# =============================================================================
+# 中文句子中英文数学动作词替换
+# =============================================================================
+
+MATH_VERB_ZH_MAP = {
+    "discard": "舍去",
+    "obtain": "得到",
+    "substitute": "代入",
+    "assume": "假设",
+    "conclude": "得出",
+    "simplify": "化简",
+}
+
+
+def replace_en_math_verbs(text: str) -> str:
+    """将含公式的中文句子中的英文数学动作词替换为中文。"""
+    if not re.search(r"[一-鿿]", text):
+        return text
+    if not has_latex_formula(text):
+        return text
+    for en, zh in MATH_VERB_ZH_MAP.items():
+        text = re.sub(rf"\b{en}\b", zh, text, flags=re.IGNORECASE)
     return text

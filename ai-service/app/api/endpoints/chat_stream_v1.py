@@ -30,7 +30,7 @@ from app.utils.latex import normalize_latex_formulas
 from app.utils.sentence_buffer import SentenceBuffer, has_latex_formula
 from app.utils.think_tag_buffer import ThinkTagBuffer
 from app.utils.tts_formatter import strip_markdown_for_tts
-from app.utils.text_mapping import map_english_to_chinese
+from app.utils.text_mapping import map_english_to_chinese, replace_en_math_verbs
 from app.services.math_intent_heuristic import is_math_problem
 from app.services.word2latex_service import word_to_latex
 from app.utils.common import sanitize_filename, detect_dominant_language
@@ -287,18 +287,19 @@ async def _process_segment_for_output(
     Returns:
         Tuple of (display_content, voice_content)
     """
-    if '$$' in segment:
-        logger.warning(
-            f"[{_process_segment_for_output.__name__}] Received segment with formula: "
-            f"len={len(segment)}, starts_with_$$={segment.startswith('$$')}, ends_with_$$={segment.endswith('$$')}, "
-            f"preview={repr(segment[:50])}...{repr(segment[-10:])}"
-        )
+    # if '$$' in segment:
+    #     logger.warning(
+    #         f"[{_process_segment_for_output.__name__}] Received segment with formula: "
+    #         f"len={len(segment)}, starts_with_$$={segment.startswith('$$')}, ends_with_$$={segment.endswith('$$')}, "
+    #         f"preview={repr(segment[:50])}...{repr(segment[-10:])}"
+    #     )
 
     display_content = normalize_latex_formulas(segment)
-
+    
     # 中文提问时，英文结果转中文（避免“英文问中文答”）
     if prefer_zh_output:
         display_content = map_english_to_chinese(display_content)
+        display_content = replace_en_math_verbs(display_content)
 
     if has_latex_formula(display_content):
         logger.info(f"[{log_prefix} 公式转换] 转换前长度={len(display_content)}, 转换前={repr(display_content)}")
@@ -664,6 +665,7 @@ async def generate_openai_stream_v1(
 
     user_query = _clean_user_query(_extract_user_query(request.messages))
     prefer_zh_output = _prefer_zh_output(user_query)
+    logger.info(f"Request params | max_tokens={request.max_tokens} | model={request.model} | temperature={request.temperature} | top_p={request.top_p}")
 
     # ── ASR → LaTeX 转换（仅数学问题） ──
     if is_math_problem(user_query):
@@ -1249,7 +1251,7 @@ async def generate_openai_stream_v1(
                         token_len = len(token)
                         buffer_len = sentence_buffer.get_buffer_length()
                         if segment or ('$$' in token[:10]):
-                            logger.warning(
+                            logger.info(
                                 f"[STREAMING] token_len={token_len}, buffer_len={buffer_len}, "
                                 f"has_segment={bool(segment)}, token_preview={repr(token[:50])}, "
                                 f"buffer_start={repr(sentence_buffer.buffer[:30])}, buffer_end={repr(sentence_buffer.buffer[-30:])}"
