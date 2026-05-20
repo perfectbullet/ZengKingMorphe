@@ -287,24 +287,15 @@ async def _process_segment_for_output(
     Returns:
         Tuple of (display_content, voice_content)
     """
-    # if '$$' in segment:
-    #     logger.warning(
-    #         f"[{_process_segment_for_output.__name__}] Received segment with formula: "
-    #         f"len={len(segment)}, starts_with_$$={segment.startswith('$$')}, ends_with_$$={segment.endswith('$$')}, "
-    #         f"preview={repr(segment[:50])}...{repr(segment[-10:])}"
-    #     )
-
     display_content = normalize_latex_formulas(segment)
-    
     # 中文提问时，英文结果转中文（避免“英文问中文答”）
     if prefer_zh_output:
         display_content = map_english_to_chinese(display_content)
         display_content = replace_en_math_verbs(display_content)
-
     if has_latex_formula(display_content):
-        logger.info(f"[{log_prefix} formula_to_voice] 转换前长度={len(display_content)}, 转换前={repr(display_content)}")
+        logger.info(f"[{log_prefix} 公式转换] 转换前长度={len(display_content)}, 转换前={repr(display_content)}")
         voice_content = await convert_formula_to_voice(display_content, revise_llm)
-        logger.info(f"[{log_prefix} formula_to_voice] 转换后长度={len(voice_content)}, 转换后={repr(voice_content)}")
+        logger.info(f"[{log_prefix} 公式转换] 转换后长度={len(voice_content)}, 转换后={repr(voice_content)}")
     elif enable_math_sentence_conversion and _has_math_symbols_simple(display_content):
         logger.info(f"[{log_prefix} 数学句子转换] 转换前长度={len(display_content)}, 转换前={repr(display_content)}")
         voice_content = await convert_math_sentence_to_voice(display_content, revise_llm)
@@ -312,7 +303,6 @@ async def _process_segment_for_output(
     else:
         logger.info(f"{log_prefix}没有公式: {display_content}")
         voice_content = display_content
-
     # Strip markdown formatting from voice_content for TTS
     # (display_content retains original markdown formatting for display)
     logger.info(f"[{log_prefix} 语音voice_content markdown清理前: {repr(voice_content)}")
