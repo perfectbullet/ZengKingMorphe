@@ -30,7 +30,6 @@ from pathlib import Path
 
 from langgraph.graph import StateGraph, END
 from langchain_openai import ChatOpenAI
-from langchain_community.chat_models import ChatOllama
 
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -65,17 +64,16 @@ class ConversationWorkflow:
     def __init__(self):
         """Initialize workflow with dual LLM instances for hybrid routing."""
         # Initialize local LLM (Ollama) - for fast, simple responses
-        self.local_llm = ChatOllama(
+        self.local_llm = ChatOpenAI(
             base_url=settings.ollama_base_url,
             model=settings.ollama_model,
-            temperature=0,
+            temperature=0.6,
             streaming=True,
-            keep_alive=-1
         )
         # 打印 local_llm 配置
         logger.info(
-            f"Local LLM configured | base_url={self.local_llm.base_url} | model={self.local_llm.model} | "
-            f"temperature={self.local_llm.temperature} | keep_alive={self.local_llm.keep_alive}"
+            f"Local LLM configured | base_url={self.local_llm.openai_api_base} | "
+            f"temperature={self.local_llm.temperature}"
         )
 
         # Initialize remote LLM (OpenAI-style API) - for complex, accurate responses
@@ -156,6 +154,18 @@ class ConversationWorkflow:
         top_p = state.get("llm_top_p")
         max_tokens = state.get("llm_max_tokens")
 
+        # 钳制 max_tokens：max_tokens 是输出上限，必须 < 模型总上下文 - 输入 token 数。
+        # 默认 2048，给系统提示+用户输入留足余量（典型模型上下文 4096~128k）。
+        # 通过 LLM_MAX_TOKENS_CAP 环境变量可按部署调整。
+        max_tokens_cap = int(os.getenv("LLM_MAX_TOKENS_CAP", "3072"))
+        if max_tokens is not None and max_tokens > max_tokens_cap:
+            original = max_tokens
+            max_tokens = max_tokens_cap
+            logger.warning(
+                f"max_tokens clamped: {original} → {max_tokens_cap} "
+                f"(LLM_MAX_TOKENS_CAP)"
+            )
+
         # 「现任 X 职务是谁」类事实查询的"确定性兜底"。
         # 复用 select_llm 已有的 _needs_big_world_knowledge 启发式，避免在两处分别
         # 维护词表；命中后强制压低采样随机性，确保 DeepSeek 等大模型给出稳定答案。
@@ -171,46 +181,23 @@ class ConversationWorkflow:
 
         # If custom parameters are provided, create a new LLM instance with them
         if temperature is not None or top_p is not None or max_tokens is not None:
-            # Import LLM classes
-            from langchain_community.chat_models import ChatOllama
-            from langchain_openai import ChatOpenAI
-
-            # Determine which LLM type to use based on the current llm instance
-            if isinstance(llm, ChatOllama):
-                # Create new Ollama LLM with custom parameters
-                base_url = getattr(llm, 'base_url', 'http://localhost:11434')
-                model_name = getattr(llm, 'model_name', None) or getattr(llm, 'model', '')
-                llm = ChatOllama(
-                    base_url=base_url,
-                    model=model_name,
-                    temperature=temperature if temperature is not None else getattr(llm, 'temperature', 0.7),
-                    top_p=top_p if top_p is not None else getattr(llm, 'top_p', None),
-                    num_predict=max_tokens if max_tokens is not None else getattr(llm, 'num_predict', None),
-                )
-                logger.info(
-                    "Created custom Ollama LLM for streaming",
-                    temperature=temperature,
-                    top_p=top_p,
-                    max_tokens=max_tokens
-                )
-            elif isinstance(llm, ChatOpenAI):
-                # Create new OpenAI LLM with custom parameters
-                # ChatOpenAI uses openai_api_base for base URL in some versions
-                base_url = getattr(llm, 'openai_api_base', 'https://api.openai.com/v1') or getattr(llm, 'base_url', 'https://api.openai.com/v1')
-                api_key = getattr(llm, 'openai_api_key', '') or getattr(llm, 'api_key', '')
-                model_name = getattr(llm, 'model_name', None) or getattr(llm, 'model', '')
-                llm = ChatOpenAI(
-                    base_url=base_url,
-                    api_key=api_key,
-                    model=model_name,
-                    temperature=temperature if temperature is not None else getattr(llm, 'temperature', 0.7),
-                    max_tokens=max_tokens if max_tokens is not None else getattr(llm, 'max_tokens', None),
-                )
-                logger.info(
-                    "Created custom OpenAI LLM for streaming",
-                    temperature=temperature,
-                    max_tokens=max_tokens
-                )
+            # Create new OpenAI LLM with custom parameters
+            # ChatOpenAI uses openai_api_base for base URL in some versions
+            base_url = getattr(llm, 'openai_api_base', 'https://api.openai.com/v1') or getattr(llm, 'base_url', 'https://api.openai.com/v1')
+            api_key = getattr(llm, 'openai_api_key', '') or getattr(llm, 'api_key', '')
+            model_name = getattr(llm, 'model_name', None) or getattr(llm, 'model', '')
+            llm = ChatOpenAI(
+                base_url=base_url,
+                api_key=api_key,
+                model=model_name,
+                temperature=temperature if temperature is not None else getattr(llm, 'temperature', 0.7),
+                max_tokens=max_tokens if max_tokens is not None else getattr(llm, 'max_tokens', None),
+            )
+            logger.info(
+                "Created custom OpenAI LLM for streaming",
+                temperature=temperature,
+                max_tokens=max_tokens
+            )
 
         return llm, model_name
 

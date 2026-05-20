@@ -359,11 +359,11 @@ class SentenceBuffer:
 
         # Buffer not full — if unclosed formula, wait for more tokens
         if unclosed_delimiter:
-            logger.debug(
-                f"[SentenceBuffer] Not splitting due to unclosed formula: "
-                f"delimiter={unclosed_delimiter!r}, buffer_len={len(text)}, "
-                f"buffer_end={repr(text[-50:] if len(text) > 50 else text)}"
-            )
+            # logger.debug(
+            #     f"[SentenceBuffer] Not splitting due to unclosed formula: "
+            #     f"delimiter={unclosed_delimiter!r}, buffer_len={len(text)}, "
+            #     f"buffer_end={repr(text[-50:] if len(text) > 50 else text)}"
+            # )
             return -1, "unclosed_formula"
 
         return -1, "no_split"

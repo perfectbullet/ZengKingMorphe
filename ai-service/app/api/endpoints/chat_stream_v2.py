@@ -20,6 +20,9 @@ from app.core.database import get_database
 from app.services.conversation_service import conversation_workflow
 from app.utils.sentence_buffer import SentenceBuffer
 from langchain_openai import ChatOpenAI
+from app.services.revise_llm import (
+    get_revise_llm
+)
 
 logger = get_logger(__name__)
 
@@ -67,63 +70,6 @@ def _load_revise_prompt() -> str:
     except FileNotFoundError:
         logger.warning(f"Prompt file not found: {prompt_path}, using default prompt")
         return "你是一个数学公式口语化讲解专家。请将用户输入的数学公式和概念，用纯粹、流畅、易于理解的自然语言解释，完全不含任何数学符号或特殊格式，专为语音播报场景设计。"
-
-
-def _get_revise_llm():
-    """
-    Get LLM instance for text revision (voice-friendly output).
-
-    Supports:
-    - siliconflow: SiliconFlow API (recommended)
-    - ollama: Local Ollama
-
-    Environment Variables:
-    - REVISE_PROVIDER: Provider type (siliconflow or ollama), default siliconflow
-    - OPENAI_API_KEY: SiliconFlow API key
-    - OPENAI_API_BASE: SiliconFlow API base URL
-    - OPENAI_REVISE_MODEL: SiliconFlow model name (default: deepseek-ai/DeepSeek-V3)
-    - OLLAMA_BASE_URL: Ollama base URL (default: http://localhost:11434)
-    - OLLAMA_REVISE_MODEL: Ollama model name (default: qwen2.5:7b)
-    """
-    # Get provider from env, default siliconflow
-    provider = os.getenv("REVISE_PROVIDER", "siliconflow").lower()
-
-    if provider == "siliconflow":
-        api_key = os.getenv("OPENAI_API_KEY")
-        api_base = os.getenv("OPENAI_API_BASE", "https://api.siliconflow.cn/v1")
-        model = os.getenv("OPENAI_REVISE_MODEL",
-                         os.getenv("OPENAI_MODEL", "deepseek-ai/DeepSeek-V3"))
-
-        if not api_key:
-            logger.warning("OPENAI_API_KEY not set for SiliconFlow")
-
-        logger.info(f"[Revise LLM] SiliconFlow | API_BASE={api_base} | MODEL={model}")
-
-        return ChatOpenAI(
-            base_url=api_base,
-            api_key=api_key or "",  # Allow empty, let API handle error
-            model=model,
-            temperature=0.7,
-            streaming=True,
-        )
-    else:
-        # Use Ollama via OpenAI-style API
-        ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-        ollama_model = os.getenv("OLLAMA_REVISE_MODEL",
-                                 os.getenv("OLLAMA_MODEL", "qwen2.5:14b"))
-
-        # Add /v1 suffix if not present
-        if not ollama_base_url.endswith("/v1"):
-            ollama_base_url = f"{ollama_base_url.rstrip('/')}/v1"
-
-        logger.info(f"[Revise LLM] Ollama (via OpenAI API) | BASE_URL={ollama_base_url} | MODEL={ollama_model}")
-
-        return ChatOpenAI(
-            base_url=ollama_base_url,
-            model=ollama_model,
-            temperature=0.1,
-            streaming=True,
-        )
 
 def format_sources(
     retrieved_docs: list, web_search_results: list, max_content_length: int = 200
@@ -575,7 +521,7 @@ async def generate_openai_stream_v2(
                         # teaching_script_tts 为空或查询不到，走 LLM 转换逻辑
                         logger.info("teaching_script_tts not found, using LLM to revise for voice output")
                         system_prompt = _load_revise_prompt()
-                        revise_llm = _get_revise_llm()
+                        revise_llm = get_revise_llm()
                         revise_messages = [
                             {"role": "system", "content": system_prompt},
                             {"role": "user", "content": existing_answer}

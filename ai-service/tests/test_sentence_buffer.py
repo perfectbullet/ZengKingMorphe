@@ -47,6 +47,29 @@ COLLECTION_NAME = "raw_stream_tokens"
 TOKEN_DELAY = float(os.getenv("TOKEN_DELAY", "0.01"))  # 100 tokens/s
 
 
+def _write_preview_html(html_path: str, segments: list[str]):
+    """Generate an HTML preview file from segments, based on latex_v2.html template."""
+    template_path = os.path.join(os.path.dirname(__file__), "latex_v2.html")
+    with open(template_path, "r", encoding="utf-8") as f:
+        template = f.read()
+
+    # 构建 textarea 内容：每段一行
+    content = "\n".join(segments).strip()
+    # 转义 HTML 特殊字符
+    content = content.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    # 替换 textarea 中的内容
+    start_marker = '<textarea id="input">\n'
+    end_marker = '</textarea>'
+    start_idx = template.index(start_marker) + len(start_marker)
+    end_idx = template.index(end_marker)
+    html = template[:start_idx] + content + template[end_idx:]
+
+    with open(html_path, "w", encoding="utf-8") as f:
+        f.write(html)
+    print(f"HTML preview written to {html_path}", flush=True)
+
+
 async def _load_chats(client, chat_ids):
     """Load token data for given chat_ids."""
     collection = client[MONGODB_DB_NAME][COLLECTION_NAME]
@@ -73,9 +96,10 @@ async def load_chats_from_mongo(n):
         {"$sort": {"latest": -1}},
         {"$limit": n},
     ]
-    chat_ids = [doc["_id"] async for doc in collection.aggregate(pipeline)]
+    chat_ids = [doc["_id"] async for doc in collection.aggregate(pipeline) if doc["_id"] not in {"chatcmpl-0a7427d46c3c"}]
+    
     result = await _load_chats(client, chat_ids)
-    print(result)
+    # print(result)
     client.close()
     return result
 
@@ -119,6 +143,9 @@ async def main(chat_ids, n, output_path):
     total_tokens = sum(len(t) for _, t in chats)
     print(f"Found {len(chats)} chats ({total_tokens} tokens), processing...\n", flush=True)
 
+    # 收集所有 chat 的断句文本，用于生成 HTML
+    all_segments = []
+
     with open(output_path, "w", encoding="utf-8") as f:
         for idx, (cid, token_texts) in enumerate(chats, 1):
             full_text = "".join(token_texts)
@@ -140,11 +167,18 @@ async def main(chat_ids, n, output_path):
                 flush=True,
             )
             for i, s in enumerate(sentences):
-                display = s.replace("\n", "\\n")
+                display = s
                 if len(display) > 120:
                     display = display[:120] + "..."
-                print(f"  [{i}] {display}", flush=True)
+                print(display, flush=True)
             print(flush=True)
+
+            all_segments.extend(sentences)
+            all_segments.append("")  # chat 之间空行分隔
+
+    # 写入 HTML 渲染文件
+    html_path = os.path.join(results_dir, "latex_preview.html")
+    _write_preview_html(html_path, all_segments)
 
     print(f"Results written to {output_path}", flush=True)
 

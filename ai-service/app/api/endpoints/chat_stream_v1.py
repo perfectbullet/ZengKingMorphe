@@ -302,9 +302,9 @@ async def _process_segment_for_output(
         display_content = replace_en_math_verbs(display_content)
 
     if has_latex_formula(display_content):
-        logger.info(f"[{log_prefix} 公式转换] 转换前长度={len(display_content)}, 转换前={repr(display_content)}")
+        logger.info(f"[{log_prefix} formula_to_voice] 转换前长度={len(display_content)}, 转换前={repr(display_content)}")
         voice_content = await convert_formula_to_voice(display_content, revise_llm)
-        logger.info(f"[{log_prefix} 公式转换] 转换后长度={len(voice_content)}, 转换后={repr(voice_content)}")
+        logger.info(f"[{log_prefix} formula_to_voice] 转换后长度={len(voice_content)}, 转换后={repr(voice_content)}")
     elif enable_math_sentence_conversion and _has_math_symbols_simple(display_content):
         logger.info(f"[{log_prefix} 数学句子转换] 转换前长度={len(display_content)}, 转换前={repr(display_content)}")
         voice_content = await convert_math_sentence_to_voice(display_content, revise_llm)
