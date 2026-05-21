@@ -20,7 +20,7 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.services.conversation.conversation_state import ConversationState
 from app.utils.common import detect_dominant_language
-from prompts.prompts import GEOMETRY_FORMULA_BOOK, MATH_SYSTEM_PROMPT, PHI4_SIMPLE_SYSTEM_PROMPT
+from prompts.prompts import GEOMETRY_FORMULA_BOOK, MATH_SYSTEM_PROMPT, PHI4_SIMPLE_SYSTEM_PROMPT, QWEN_MATH_SYSTEM_PROMPT
 logger = get_logger(__name__)
 
 
@@ -1129,12 +1129,6 @@ User question:
     return messages
 
 
-# Qwen Math 模型专用提示词（简洁 CoT 风格，参考 Qwen2.5-Math 官方评估脚本）
-QWEN_MATH_SYSTEM_PROMPT = (
-    "请一步一步推理，并将最终答案放在 $\\boxed{}$ 中。"
-)
-# 等价于: "请一步一步推理，并将最终答案放在 \\boxed{} 中。"
-# 等价于英文: Please reason step by step, and put your final answer within \boxed{}.
 
 def build_math_generation_messages(state: ConversationState) -> List:
     """

@@ -98,3 +98,6 @@ ai-service/scripts/exports/
 ai-service/json格式数据/
 ai-service/tests/sentence_buffer_results/
 
+ai-service/tests/*.html
+
+problems.json

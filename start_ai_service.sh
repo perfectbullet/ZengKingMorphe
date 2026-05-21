@@ -40,6 +40,20 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+# 检查 TCP 端口是否可达（超时 3 秒）
+check_port() {
+    local host="$1"
+    local port="$2"
+    local name="$3"
+    if timeout 3 bash -c "echo > /dev/tcp/$host/$port" 2>/dev/null; then
+        log_info "  ✅ $name ($host:$port) 可达"
+        return 0
+    else
+        log_error "  ❌ $name ($host:$port) 不可达"
+        return 1
+    fi
+}
+
 # 检查进程是否运行（通过 PID 文件）
 is_running() {
     if [ -f "$PID_FILE" ]; then
@@ -123,6 +137,25 @@ start_service() {
     fi
 
     log_info "启动 ai-service..."
+
+    # ── 依赖服务健康检查 ──
+    log_info "检查依赖服务..."
+    local failed=0
+    check_port 192.168.8.233 27017 "MongoDB"       || failed=$((failed+1))
+    check_port 192.168.8.233 9200  "ElasticSearch" || failed=$((failed+1))
+    check_port 192.168.8.233 19530 "Milvus"        || failed=$((failed+1))
+    check_port 192.168.8.233 7687  "Neo4j"         || failed=$((failed+1))
+    check_port 192.168.8.231 11434 "Ollama"        || failed=$((failed+1))
+
+    if [ $failed -gt 0 ]; then
+        log_error "$failed 个依赖服务不可达，是否继续启动？(y/N)"
+        read -r -t 10 answer
+        if [ "$answer" != "y" ] && [ "$answer" != "Y" ]; then
+            log_error "启动已取消"
+            return 1
+        fi
+        log_warn "跳过检查，继续启动..."
+    fi
 
     # 检查目录是否存在
     if [ ! -d "$SERVICE_DIR" ]; then

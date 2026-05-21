@@ -43,6 +43,7 @@ MONGODB_URI = os.getenv(
 )
 MONGODB_DB_NAME = os.getenv("MONGODB_DB_NAME", "funasr")
 COLLECTION_NAME = "raw_stream_tokens"
+STREAM_CHUNKS_COLLECTION = "stream_chunks"
 
 TOKEN_DELAY = float(os.getenv("TOKEN_DELAY", "0.01"))  # 100 tokens/s
 
@@ -70,9 +71,26 @@ def _write_preview_html(html_path: str, segments: list[str]):
     print(f"HTML preview written to {html_path}", flush=True)
 
 
+async def _load_user_messages(client, chat_ids):
+    """Load user_message for each chat_id from stream_chunks collection."""
+    chunks_col = client[MONGODB_DB_NAME][STREAM_CHUNKS_COLLECTION]
+    messages = {}
+    for cid in chat_ids:
+        doc = await chunks_col.find_one(
+            {"chat_id": cid, "sequence": 1},
+            {"chunk_data.user_message": 1},
+        )
+        if doc and doc.get("chunk_data", {}).get("user_message"):
+            messages[cid] = doc["chunk_data"]["user_message"]
+        else:
+            messages[cid] = "user_message 没找到"
+    return messages
+
+
 async def _load_chats(client, chat_ids):
-    """Load token data for given chat_ids."""
+    """Load token data and user_message for given chat_ids."""
     collection = client[MONGODB_DB_NAME][COLLECTION_NAME]
+    user_messages = await _load_user_messages(client, chat_ids)
     result = []
     for cid in chat_ids:
         docs = []
@@ -81,7 +99,7 @@ async def _load_chats(client, chat_ids):
         ).sort("token_index", 1):
             docs.append(doc)
         if docs:
-            result.append((cid, [doc["token_text"] for doc in docs]))
+            result.append((cid, user_messages.get(cid, "user_message 没找到"), [doc["token_text"] for doc in docs]))
     return result
 
 
@@ -140,14 +158,14 @@ async def main(chat_ids, n, output_path):
         print("No chats found in MongoDB")
         return
 
-    total_tokens = sum(len(t) for _, t in chats)
+    total_tokens = sum(len(t) for _, _, t in chats)
     print(f"Found {len(chats)} chats ({total_tokens} tokens), processing...\n", flush=True)
 
     # 收集所有 chat 的断句文本，用于生成 HTML
     all_segments = []
 
     with open(output_path, "w", encoding="utf-8") as f:
-        for idx, (cid, token_texts) in enumerate(chats, 1):
+        for idx, (cid, user_msg, token_texts) in enumerate(chats, 1):
             full_text = "".join(token_texts)
             t0 = asyncio.get_event_loop().time()
             sentences = await split_with_sentence_buffer(token_texts)
@@ -155,6 +173,7 @@ async def main(chat_ids, n, output_path):
 
             record = {
                 "chat_id": cid,
+                "user_message": user_msg,
                 "token_count": len(token_texts),
                 "char_count": len(full_text),
                 "full_text": full_text,
@@ -166,6 +185,7 @@ async def main(chat_ids, n, output_path):
                 f"[{idx}/{len(chats)}] {cid} | {len(token_texts)}tok {len(full_text)}char | {len(sentences)}sent | {elapsed:.1f}s",
                 flush=True,
             )
+            print(f"\n\n\n\n----------------问题: {user_msg}----------------", flush=True)
             for i, s in enumerate(sentences):
                 display = s
                 if len(display) > 120:
@@ -173,6 +193,7 @@ async def main(chat_ids, n, output_path):
                 print(display, flush=True)
             print(flush=True)
 
+            all_segments.append(f"\n\n\n\n----------------问题: {user_msg}----------------")
             all_segments.extend(sentences)
             all_segments.append("")  # chat 之间空行分隔
 
