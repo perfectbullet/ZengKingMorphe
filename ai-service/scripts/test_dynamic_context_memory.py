@@ -10,11 +10,9 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import sys
-from typing import Iterable
 
-from app.services.query_classifier import format_dialog_for_resolver, get_query_classifier
+from app.services.query_classifier import get_query_classifier
 
 
 # 测试用例：每条 (描述, dialog_text, query, expected_related)

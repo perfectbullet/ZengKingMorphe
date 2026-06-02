@@ -1150,10 +1150,10 @@ async def generate_openai_stream_v1(
                             current_state.get("conversation_id"),
                         )
                         # 过滤 think 标签
+                        # print(f'token={token!r}|', end='') # 本行日志疯狂打印，不要随意开启
                         filtered_token = think_tag_buffer.add(token)
                         if not filtered_token:
-                            # logger.info(f'跟踪但不输出: {token!r}') # 本行日志疯狂打印，不要随意开启
-                            full_answer += token  # 跟踪但不输出
+                            full_answer += token
                         else:
                             full_answer += filtered_token
                             segment = sentence_buffer.add(filtered_token)

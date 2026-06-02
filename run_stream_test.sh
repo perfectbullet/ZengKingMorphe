@@ -1,7 +1,7 @@
 #!/bin/bash
 # 批量测试 stream_client 脚本
 
-PYTHON="/home/zj/miniconda3/envs/morphe/bin/python"
+PYTHON="python"
 HOST="http://192.168.8.233:8100"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 

@@ -243,28 +243,29 @@ class ConversationWorkflow:
             # Qwen2.5-Math: 使用显式配置的端点和模型名
             base_url = getattr(settings, 'math_model_base_url', "http://192.168.100.230:8011/v1")
             model_id = getattr(settings, 'math_model_name', "/data/models/Qwen2.5-Math-1.5B-Instruct")
+            
         else:
             # phi4: 原有逻辑 — 通过 vLLM 自动发现模型
-            base_url = os.getenv("PHI4_BASE_URL", "http://192.168.8.235:8000/v1")
+            base_url = os.getenv("MATH_MODEL_BASE_URL", "http://192.168.8.235:8000/v1")
             model_id = get_vllm_first_model(base_url)
 
-        temperature = 0.6
-        max_tokens = 1024 * 6
+        math_temperature = os.getenv("MATH_TEMPERATURE", 0.6)
+        math_max_token = os.getenv("MATH_MAX_TOKEN", 10240)
 
         # 动态创建 ChatOpenAI 实例
         math_llm = ChatOpenAI(
             base_url=base_url,
             api_key="dummy-key",  # vLLM 不需要真实 key
             model=model_id,
-            temperature=temperature,
-            max_tokens=max_tokens,
+            temperature=math_temperature,
+            max_tokens=math_max_token,
             streaming=True,
             top_p=0.95,
         )
 
         logger.info(
             f"Math LLM created | provider={provider} | model={model_id} | "
-            f"math_model_base_url={base_url} | temperature={temperature} | max_tokens={max_tokens}"
+            f"math_model_base_url={base_url} | math_temperature={math_temperature} | math_max_token={math_max_token}"
         )
 
         return math_llm, model_id

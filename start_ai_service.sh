@@ -145,7 +145,7 @@ start_service() {
     check_port 192.168.8.233 9200  "ElasticSearch" || failed=$((failed+1))
     check_port 192.168.8.233 19530 "Milvus"        || failed=$((failed+1))
     check_port 192.168.8.233 7687  "Neo4j"         || failed=$((failed+1))
-    check_port 192.168.8.231 11434 "Ollama"        || failed=$((failed+1))
+    # check_port 192.168.8.231 11434 "Ollama"        || failed=$((failed+1))
 
     if [ $failed -gt 0 ]; then
         log_error "$failed 个依赖服务不可达，是否继续启动？(y/N)"

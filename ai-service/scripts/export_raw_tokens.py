@@ -26,10 +26,12 @@ import os
 import sys
 from datetime import datetime
 from pathlib import Path
+import re
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from motor.motor_asyncio import AsyncIOMotorClient
+import markdown
 
 # 加载环境变量
 _env_local = Path(__file__).parent.parent / ".env-local"
@@ -46,6 +48,25 @@ MONGO_DATABASE = os.getenv("MONGODB_DB_NAME", "digital_employee")
 RAW_TOKENS_COLLECTION = "raw_stream_tokens"
 STREAM_CHUNKS_COLLECTION = "stream_chunks"
 OUTPUT_DIR = Path(__file__).parent / "exports"
+
+
+def sanitize_filename(query: str, max_len: int = 80) -> str:
+    """将 user_query 转为安全的文件名，只保留中文/CJK、字母、数字，其余替换为下划线"""
+    if not query or not query.strip():
+        return ""
+    # 只保留中文(CJK统一表意)、字母、数字；其余全部替换为 _
+    name = re.sub(r'[^一-鿿㐀-䶿a-zA-Z0-9]', '_', query.strip())
+    name = re.sub(r'_+', '_', name)
+    name = name.strip('_')
+    if len(name) > max_len:
+        name = name[:max_len].rstrip('_')
+    return name
+
+
+def strip_think_tags(text: str) -> str:
+    """移除 <think ...>...</think?> 包裹的推理过程"""
+    cleaned = re.sub(r'<think\b[^>]*>.*?</think\s*>', '', text, flags=re.DOTALL)
+    return cleaned.strip()
 
 
 class DateTimeEncoder(json.JSONEncoder):
@@ -147,7 +168,8 @@ async def main():
 
         # 为每个分组拼接完整文本
         for group in result_list:
-            group["full_text"] = "".join(t["token_text"] for t in group["tokens"])
+            full_text = "".join(t["token_text"] for t in group["tokens"])
+            group["full_text"] = strip_think_tags(full_text)
 
         # 保存 JSON
         OUTPUT_DIR.mkdir(exist_ok=True)
@@ -164,6 +186,35 @@ async def main():
         for group in result_list:
             preview = group["full_text"][:80].replace("\n", " ")
             print(f"  [{group['chat_id']}] user_query={group['user_query'][:60]!r}  tokens={len(group['tokens'])}  text={preview!r}...")
+
+        # 按 user_query 为文件名保存 .md + .html 文件
+        _HTML_TEMPLATE = """<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>%s</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"
+  onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]})"></script>
+<style>
+body{font-family:sans-serif;padding:24px;font-size:14px;line-height:1.8;max-width:800px;margin:0 auto}
+h1{color:#333;border-bottom:2px solid #4a90d9;padding-bottom:6px;margin-top:28px}
+</style></head><body>%s</body></html>"""
+
+        for group in result_list:
+            safe_name = sanitize_filename(group["user_query"]) or group["chat_id"]
+            md_file = OUTPUT_DIR / f"{safe_name}.md"
+            if md_file.exists():
+                md_file = OUTPUT_DIR / f"{safe_name}_{group['chat_id'][-6:]}.md"
+            md_content = f"# 用户问题\n\n{group['user_query']}\n\n# 模型回答\n\n{group['full_text']}\n"
+            with open(md_file, "w", encoding="utf-8") as f:
+                f.write(md_content)
+            print(f"  .md 保存到: {md_file.name}")
+
+            # 转换为 HTML
+            html_file = md_file.with_suffix(".html")
+            html_body = markdown.markdown(md_content, extensions=["md_in_html"])
+            with open(html_file, "w", encoding="utf-8") as f:
+                f.write(_HTML_TEMPLATE % (group["user_query"][:60], html_body))
+            print(f"  .html 保存到: {html_file.name}")
 
     finally:
         client.close()

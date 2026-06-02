@@ -6,6 +6,7 @@
 
 # 配置变量
 REMOTE_HOST="192.168.8.233"
+# REMOTE_HOST="10.1.0.100"
 REMOTE_USER="zenking"
 
 # 自动适配不同用户的路径
@@ -43,6 +44,7 @@ echo "[1/2] 同步 docker-compose.yml..."
 rsync ${RSYNC_OPTS} -e "ssh -i ${SSH_KEY}" \
     --include="docker-compose.yml" \
     --include="start_ai_service.sh" \
+    --include="run_stream_test.sh" \
     --exclude="*" \
     "${LOCAL_DIR}/" \
     "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_DIR}/"
@@ -66,7 +68,8 @@ rsync ${RSYNC_OPTS} -e "ssh -i ${SSH_KEY}" \
     --include="requirements.txt" \
     --include=".dockerignore" \
     --include="DEFAULT_SENSITIVE_WORDS.txt" \
-    --include=".env" \
+    --include=".env-no" \
+    --include="run_stream_test.sh" \
     --exclude="*" \
     "${LOCAL_DIR}/ai-service/" \
     "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_DIR}/ai-service/"
