@@ -63,29 +63,34 @@ class ConversationWorkflow:
 
     def __init__(self):
         """Initialize workflow with dual LLM instances for hybrid routing."""
-        # Initialize local LLM (Ollama) - for fast, simple responses
+        # 统一 LLM 配置（单一数据源）
+        llm_base_url = os.getenv("LLM_BASE_URL") or settings.ollama_base_url
+        llm_model = os.getenv("LLM_MODEL") or settings.ollama_model
+        llm_api_key = os.getenv("LLM_API_KEY") or settings.siliconflow_api_key or "no-key"
+
+        # Initialize local LLM - for fast, simple responses
         self.local_llm = ChatOpenAI(
-            base_url=settings.ollama_base_url,
-            model=settings.ollama_model,
+            base_url=llm_base_url,
+            api_key=llm_api_key,
+            model=llm_model,
             temperature=0.6,
             streaming=True,
         )
-        # 打印 local_llm 配置
         logger.info(
             f"Local LLM configured | base_url={self.local_llm.openai_api_base} | "
-            f"temperature={self.local_llm.temperature}"
+            f"model={llm_model} | temperature={self.local_llm.temperature}"
         )
 
-        # Initialize remote LLM (OpenAI-style API) - for complex, accurate responses
+        # Initialize remote LLM - for complex, accurate responses
+        # 统一配置下与 local_llm 相同，保留双对象架构供 hybrid 路由使用
         logger.info(
-            "Initializing remote OpenAI-style LLM",
-            model=settings.openai_model,
-            base_url=settings.openai_api_base
+            f"Initializing remote LLM (unified config) | model={llm_model} | "
+            f"base_url={llm_base_url}"
         )
         self.remote_llm = ChatOpenAI(
-            base_url=settings.openai_api_base,
-            api_key=settings.siliconflow_api_key,
-            model=settings.openai_model,
+            base_url=llm_base_url,
+            api_key=llm_api_key,
+            model=llm_model,
             temperature=settings.openai_temperature,
             streaming=True,
         )

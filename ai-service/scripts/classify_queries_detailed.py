@@ -280,17 +280,17 @@ def main():
     parser.add_argument("-n", type=int, metavar="M", help="随机挑选 M 个问题进行分类")
     args = parser.parse_args()
 
-    # 从环境变量读取配置
-    api_key = os.getenv("RAG_Anything_OPENAI_API_KEY", "")
-    api_base = os.getenv("RAG_Anything_OPENAI_API_BASE", "")
-    model = os.getenv("RAG_Anything_OPENAI_MODEL", "gpt-4o-mini")
+    # 从环境变量读取配置（统一 LLM 配置优先，旧变量 fallback）
+    api_key = os.getenv("LLM_API_KEY") or os.getenv("RAG_Anything_OPENAI_API_KEY", "")
+    api_base = os.getenv("LLM_BASE_URL") or os.getenv("RAG_Anything_OPENAI_API_BASE", "")
+    model = os.getenv("LLM_MODEL") or os.getenv("RAG_Anything_OPENAI_MODEL", "gpt-4o-mini")
 
     if not api_key:
-        print("错误: 请设置 RAG_Anything_OPENAI_API_KEY 环境变量")
+        print("错误: 请设置 LLM_API_KEY 环境变量")
         sys.exit(1)
 
     if not api_base:
-        print("错误: 请设置 RAG_Anything_OPENAI_API_BASE 环境变量")
+        print("错误: 请设置 LLM_BASE_URL 环境变量")
         sys.exit(1)
 
     client = OpenAI(api_key=api_key, base_url=api_base)

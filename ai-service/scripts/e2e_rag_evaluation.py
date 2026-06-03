@@ -22,6 +22,7 @@ RAG端到端完整评估测试脚本
 import asyncio
 import aiohttp
 import json
+import os
 import time
 import sys
 import logging
@@ -529,20 +530,17 @@ class E2ERAGEvaluation:
         from langchain_openai import ChatOpenAI
         from langchain_community.chat_models import ChatOllama
 
-        # 使用Grader LLM生成问答对
-        if settings.use_ollama:
-            llm = ChatOllama(
-                base_url=settings.ollama_base_url,
-                model=settings.ollama_model,
-                temperature=0
-            )
-        else:
-            llm = ChatOpenAI(
-                base_url=settings.openai_api_base,
-                api_key=settings.siliconflow_api_key,
-                model=settings.openai_model,
-                temperature=0
-            )
+        # 使用统一 LLM 配置生成问答对
+        llm_base_url = os.getenv("LLM_BASE_URL") or settings.ollama_base_url
+        llm_model = os.getenv("LLM_MODEL") or settings.ollama_model
+        llm_api_key = os.getenv("LLM_API_KEY") or settings.siliconflow_api_key or "no-key"
+
+        llm = ChatOpenAI(
+            base_url=llm_base_url,
+            api_key=llm_api_key,
+            model=llm_model,
+            temperature=0
+        )
 
         qa_pairs = []
 
@@ -724,22 +722,18 @@ class E2ERAGEvaluation:
         from langchain_openai import ChatOpenAI
         from langchain_community.chat_models import ChatOllama
 
-        # 使用Grader LLM进行评估
-        if settings.use_ollama:
-            grader_llm = ChatOllama(
-                base_url=settings.ollama_base_url,
-                model=settings.ollama_grader_model,
-                temperature=0,
-                format="json"
-            )
-        else:
-            grader_llm = ChatOpenAI(
-                base_url=settings.openai_api_base,
-                api_key=settings.siliconflow_api_key,
-                model=settings.openai_grader_model,
-                temperature=0,
-                model_kwargs={"response_format": {"type": "json_object"}}
-            )
+        # 使用统一 LLM 配置进行评估（grader 可通过 OLLAMA_GRADER_MODEL 覆盖）
+        grader_base_url = os.getenv("LLM_BASE_URL") or settings.ollama_base_url
+        grader_model = os.getenv("OLLAMA_GRADER_MODEL") or os.getenv("LLM_MODEL") or settings.ollama_grader_model
+        grader_api_key = os.getenv("LLM_API_KEY") or settings.siliconflow_api_key or "no-key"
+
+        grader_llm = ChatOpenAI(
+            base_url=grader_base_url,
+            api_key=grader_api_key,
+            model=grader_model,
+            temperature=0,
+            model_kwargs={"response_format": {"type": "json_object"}}
+        )
 
         scores = {
             "relevance": [],

@@ -36,10 +36,7 @@ _raganything_instance = None
 # 配置验证
 # =============================================================================
 REQUIRED_ENV_VARS = {
-    # OpenAI API
-    "RAG_Anything_OPENAI_API_BASE": "OpenAI API base URL",
-    "OPENAI_API_KEY": "OpenAI API key",
-    "RAG_Anything_OPENAI_MODEL": "OpenAI model name",
+    # Vision model (独立于统一 LLM 配置)
     "VISION_MODEL": "Vision model name",
     # VLLM Embedding
     "VLLM_EMBED_URL": "VLLM embedding service URL",
@@ -77,14 +74,6 @@ def validate_required_env():
     logger.info("✅ 环境变量配置验证通过")
 
 
-def get_required_env(var_name: str) -> str:
-    """获取必需的环境变量，如果不存在则报错"""
-    value = os.getenv(var_name)
-    if value is None or value.strip() == "":
-        raise ValueError(f"缺少必需的环境变量: {var_name}")
-    return value.strip()
-
-
 # =============================================================================
 # 模型函数
 # =============================================================================
@@ -94,9 +83,10 @@ async def llm_model_func(
     history_messages: List[Dict] = None,
     **kwargs,
 ) -> str:
-    """OpenAI兼容API的LLM函数"""
-    model = get_required_env("OLLAMA_MODEL")
-    base_url = get_required_env("RAG_Anything_OLLAMA_BASE_URL")
+    """OpenAI兼容API的LLM函数，使用统一 LLM 配置"""
+    model = os.getenv("LLM_MODEL") or os.getenv("OLLAMA_MODEL", "qwen2.5:14b")
+    base_url = os.getenv("LLM_BASE_URL") or os.getenv("RAG_Anything_OLLAMA_BASE_URL", "http://localhost:11434/v1")
+    api_key = os.getenv("LLM_API_KEY") or "no-api-key"
     try:
         return await openai_complete_if_cache(
             model,
@@ -104,7 +94,7 @@ async def llm_model_func(
             system_prompt=system_prompt,
             history_messages=history_messages or [],
             base_url=base_url,
-            api_key="no-api-key",
+            api_key=api_key,
             **kwargs,
         )
     except Exception as e:
@@ -134,8 +124,8 @@ async def vision_model_func(
     2. image_data格式：图像处理（base64编码的图像数据）
     """
     model = get_required_env("VISION_MODEL")
-    base_url = get_required_env("RAG_Anything_OPENAI_API_BASE")
-    api_key = get_required_env("OPENAI_API_KEY")
+    base_url = os.getenv("LLM_BASE_URL") or os.getenv("RAG_Anything_OPENAI_API_BASE", "http://localhost:11434/v1")
+    api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY", "no-key")
 
     # 从 kwargs 中移除 image_data 和 messages，避免传递给 openai_complete_if_cache
     kwargs.pop("image_data", None)
@@ -314,10 +304,9 @@ async def check_raganything_services_health() -> Dict[str, bool]:
 
     # 各探针的 (服务名, 环境变量名, URL 拼接后缀, 缺失提示) 表，集中维护新增 / 调整。
     probes: list[tuple[str, str, str, str]] = [
-        ("ollama", "RAG_Anything_OLLAMA_BASE_URL", "/api/tags", "Ollama LLM"),
+        ("llm", "LLM_BASE_URL", "/api/tags", "LLM Server"),
         ("vllm_embed", "VLLM_EMBED_URL", "/health", "VLLM Embedding"),
         ("vllm_rerank", "VLLM_RERANK_URL", "/health", "VLLM Reranker"),
-        ("openai_api", "RAG_Anything_OPENAI_API_BASE", "/models", "OpenAI API"),
     ]
 
     async def _probe(key: str, env_var: str, suffix: str, label: str) -> tuple[str, bool]:
@@ -379,8 +368,8 @@ async def get_raganything_instance():
             f"   图存储 (Neo4j): http://{get_required_env('NEO4J_URI').replace('bolt://', '').replace(':7687', '')}:7474"
         )
         logger.info(f"   Reranker (VLLM): {get_required_env('VLLM_RERANK_URL')}")
-        logger.info(f"   OPENAI_API_BASE (VLLM): {get_required_env('OPENAI_API_BASE')}")
-        logger.info(f"   OPENAI_MODEL (VLLM): {get_required_env('OPENAI_MODEL')}")
+        logger.info(f"   LLM_BASE_URL (VLLM): {get_required_env('LLM_BASE_URL')}")
+        logger.info(f"   LLM_MODEL (VLLM): {get_required_env('LLM_MODEL')}")
 
         # 健康检查
         await check_raganything_services_health()

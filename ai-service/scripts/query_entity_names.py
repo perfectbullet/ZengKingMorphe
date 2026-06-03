@@ -28,9 +28,9 @@ MONGO_DATABASE = os.getenv("MONGO_DATABASE", "rag_db")
 COLLECTION_NAME = "entity_chunks"
 OUTPUT_FILE = Path(__file__).parent / "entity_names_result.json"
 
-LLM_BASE_URL = os.getenv("RAG_Anything_OPENAI_API_BASE")
-LLM_API_KEY = os.getenv("RAG_Anything_OPENAI_API_KEY")
-LLM_MODEL = os.getenv("RAG_Anything_OPENAI_MODEL")
+LLM_BASE_URL = os.getenv("LLM_BASE_URL") or os.getenv("RAG_Anything_OPENAI_API_BASE")
+LLM_API_KEY = os.getenv("LLM_API_KEY") or os.getenv("RAG_Anything_OPENAI_API_KEY")
+LLM_MODEL = os.getenv("LLM_MODEL") or os.getenv("RAG_Anything_OPENAI_MODEL")
 BATCH_SIZE = 50
 
 

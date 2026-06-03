@@ -147,14 +147,14 @@ class TestGetReviseLLM:
 
     @pytest.mark.asyncio
     async def test_get_ollama_llm(self, monkeypatch):
-        """Should create Ollama LLM instance."""
-        monkeypatch.setenv("REVISE_PROVIDER", "ollama")
-        monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:11434")
+        """Should create LLM instance with unified config."""
+        monkeypatch.setenv("LLM_BASE_URL", "http://localhost:11434/v1")
+        monkeypatch.setenv("LLM_MODEL", "qwen2.5:7b")
         monkeypatch.setenv("OLLAMA_REVISE_MODEL", "qwen2.5:7b")
 
         llm = await get_revise_llm()
         assert llm is not None
-        assert llm.model == "qwen2.5:7b"
+        assert llm.model_name == "qwen2.5:7b"
 
     @pytest.mark.asyncio
     async def test_get_siliconflow_llm(self, monkeypatch):

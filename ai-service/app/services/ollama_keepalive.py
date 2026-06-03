@@ -2,6 +2,7 @@
 Ollama service keep-alive mechanism.
 Prevents model from being unloaded by sending periodic requests.
 """
+import os
 import asyncio
 import httpx
 from app.core.config import settings
@@ -25,14 +26,29 @@ class OllamaKeepAlive:
         self._running = False
         self._client: httpx.AsyncClient | None = None
 
+    def _get_native_base_url(self) -> str:
+        """获取 Ollama 原生 API 的 base URL（去掉 /v1 后缀）。
+
+        LLM_BASE_URL 可能包含 /v1 后缀（OpenAI 兼容格式），
+        但 Ollama 原生 API（/api/tags, /api/generate）不需要。
+        """
+        url = os.getenv("LLM_BASE_URL") or settings.ollama_base_url
+        if url.endswith("/v1"):
+            url = url[:-3]
+        return url
+
+    def _get_model(self) -> str:
+        """获取 LLM 模型名（统一配置）。"""
+        return os.getenv("LLM_MODEL") or settings.ollama_model
+
     async def start(self):
         """Start the background keep-alive task."""
         if self._running:
             logger.warning("Ollama keep-alive already running")
             return
 
-        if not settings.use_ollama:
-            logger.info("Ollama not enabled, skipping keep-alive")
+        if not os.getenv("LLM_BASE_URL") and not settings.use_ollama:
+            logger.info("LLM_BASE_URL not configured, skipping keep-alive")
             return
 
         if self.interval <= 0:
@@ -89,7 +105,7 @@ class OllamaKeepAlive:
             if not self._client:
                 return
 
-            url = f"{settings.ollama_base_url}/api/tags"
+            url = f"{self._get_native_base_url()}/api/tags"
             response = await self._client.get(url)
 
             if response.status_code == 200:
@@ -113,14 +129,15 @@ class OllamaKeepAlive:
         Useful for cold start optimization.
         """
         try:
-            if not self._client or not settings.use_ollama:
+            if not self._client or (not os.getenv("LLM_BASE_URL") and not settings.use_ollama):
                 return
 
-            logger.info(f"Force loading Ollama model: model={settings.ollama_model}")
+            model = self._get_model()
+            logger.info(f"Force loading Ollama model: model={model}")
 
-            url = f"{settings.ollama_base_url}/api/generate"
+            url = f"{self._get_native_base_url()}/api/generate"
             payload = {
-                "model": settings.ollama_model,
+                "model": model,
                 "prompt": "hi",
                 "stream": False,
                 "keep_alive": -1  # Tell Ollama to keep model loaded indefinitely

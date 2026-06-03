@@ -8,6 +8,7 @@ This module provides:
 - Personality description helpers
 """
 
+import os
 import time
 from datetime import datetime
 import re
@@ -166,11 +167,14 @@ def select_llm(state: ConversationState, local_llm, remote_llm) -> Tuple[Any, st
     """
     routing_mode = getattr(settings, "llm_routing_mode", "local_only")
 
+    # 统一模型名解析
+    model_name = os.getenv("LLM_MODEL") or settings.ollama_model
+
     # Non-hybrid modes: return pre-configured LLM
     if routing_mode == "local_only":
-        return local_llm, settings.ollama_model
+        return local_llm, model_name
     elif routing_mode == "remote_only":
-        return remote_llm, settings.openai_model
+        return remote_llm, model_name
 
     # Hybrid mode: dynamic selection based on complexity score
     complexity_score = state.get("complexity_score", 3.0)
@@ -208,7 +212,7 @@ def select_llm(state: ConversationState, local_llm, remote_llm) -> Tuple[Any, st
         use_remote = True
         reason = ["needs_big_world_knowledge", *reason]
 
-    model_name = settings.openai_model if use_remote else settings.ollama_model
+    model_name = os.getenv("LLM_MODEL") or settings.ollama_model
     # 使用 f-string 输出选择详情，避免 Loguru 静默吞掉 keyword arg。
     logger.info(
         f"LLM selection: routing_mode=hybrid, selected={model_name}, "
@@ -218,8 +222,8 @@ def select_llm(state: ConversationState, local_llm, remote_llm) -> Tuple[Any, st
     )
 
     if use_remote:
-        return remote_llm, settings.openai_model
-    return local_llm, settings.ollama_model
+        return remote_llm, model_name
+    return local_llm, model_name
 
 
 # =============================================================================

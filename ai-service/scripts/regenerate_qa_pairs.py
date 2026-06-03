@@ -8,6 +8,7 @@
 """
 import asyncio
 import json
+import os
 import sys
 from pathlib import Path
 from datetime import datetime
@@ -26,13 +27,15 @@ class QAPairRegenerator:
     def __init__(self, base_url: str = "http://localhost:8000"):
         self.base_url = base_url
         self.test_run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # 统一 LLM 配置
+        llm_base_url = os.getenv("LLM_BASE_URL") or settings.ollama_base_url
+        llm_model = os.getenv("LLM_MODEL") or settings.ollama_model
         self.results = {
             "test_run_id": self.test_run_id,
             "timestamp": datetime.now().isoformat(),
             "config": {
-                "use_ollama": settings.use_ollama,
-                "model": settings.ollama_model if settings.use_ollama else settings.openai_model,
-                "api_base": settings.ollama_base_url if settings.use_ollama else settings.openai_api_base
+                "base_url": llm_base_url,
+                "model": llm_model,
             }
         }
 
@@ -44,8 +47,8 @@ class QAPairRegenerator:
         # 配置日志
         logger.info("初始化问答对重新生成器", test_run_id=self.test_run_id)
         logger.info("配置信息",
-                   use_ollama=settings.use_ollama,
-                   model=settings.ollama_model if settings.use_ollama else settings.openai_model)
+                   model=os.getenv("LLM_MODEL") or settings.ollama_model,
+                   base_url=os.getenv("LLM_BASE_URL") or settings.ollama_base_url)
 
     async def _request(self, method: str, endpoint: str, **kwargs):
         """发送HTTP请求"""
@@ -173,20 +176,17 @@ class QAPairRegenerator:
         from langchain_openai import ChatOpenAI
         from langchain_community.chat_models import ChatOllama
 
-        # 使用配置的LLM生成问答对
-        if settings.use_ollama:
-            llm = ChatOllama(
-                base_url=settings.ollama_base_url,
-                model=settings.ollama_model,
-                temperature=0
-            )
-        else:
-            llm = ChatOpenAI(
-                base_url=settings.openai_api_base,
-                api_key=settings.siliconflow_api_key,
-                model=settings.openai_model,
-                temperature=0
-            )
+        # 使用统一 LLM 配置生成问答对
+        llm_base_url = os.getenv("LLM_BASE_URL") or settings.ollama_base_url
+        llm_model = os.getenv("LLM_MODEL") or settings.ollama_model
+        llm_api_key = os.getenv("LLM_API_KEY") or settings.siliconflow_api_key or "no-key"
+
+        llm = ChatOpenAI(
+            base_url=llm_base_url,
+            api_key=llm_api_key,
+            model=llm_model,
+            temperature=0
+        )
 
         qa_pairs = []
         total_chunks = 0
@@ -199,7 +199,7 @@ class QAPairRegenerator:
         logger.info(f"开始生成问答对",
                    total_docs=len(job_contents),
                    total_chunks=total_chunks,
-                   model=settings.ollama_model if settings.use_ollama else settings.openai_model)
+                   model=os.getenv("LLM_MODEL") or settings.ollama_model)
 
         current_chunk = 0
 

@@ -32,17 +32,15 @@ def main():
     print(f"  SILICONFLOW_API_KEY: {'***' + settings.siliconflow_api_key[-10:] if settings.siliconflow_api_key else 'None'}")
     
     # Test LLM configuration
-    print("\n🤖 LLM 配置:")
-    print(f"  USE_OLLAMA: {settings.use_ollama}")
-    if settings.use_ollama:
-        print(f"  OLLAMA_BASE_URL: {settings.ollama_base_url}")
-        print(f"  OLLAMA_MODEL: {settings.ollama_model}")
-        print(f"  OLLAMA_GRADER_MODEL: {settings.ollama_grader_model}")
-    else:
-        print(f"  OPENAI_API_BASE: {settings.openai_api_base}")
-        print(f"  OPENAI_MODEL: {settings.openai_model}")
-        print(f"  OPENAI_GRADER_MODEL: {settings.openai_grader_model}")
-        print(f"  OPENAI_API_KEY: {'***' + settings.openai_api_key[-10:] if settings.openai_api_key else 'None'}")
+    print("\n🤖 LLM 配置（统一）:")
+    print(f"  LLM_BASE_URL: {settings.llm_base_url}")
+    print(f"  LLM_MODEL: {settings.llm_model}")
+    print(f"  LLM_API_KEY: {'***' + settings.llm_api_key[-10:] if settings.llm_api_key else 'None'}")
+    print(f"  OLLAMA_GRADER_MODEL: {settings.ollama_grader_model}")
+    print(f"  LLM_ROUTING_MODE: {settings.llm_routing_mode}")
+    # 旧配置 fallback（仅展示）
+    print(f"  [fallback] OLLAMA_BASE_URL: {settings.ollama_base_url}")
+    print(f"  [fallback] OPENAI_API_BASE: {settings.openai_api_base}")
     
     # Test web search configuration
     print("\n🌐 联网查询配置:")
@@ -91,10 +89,13 @@ def main():
         print(f"  ✓ 联网查询配置: {'启用' if settings.web_search_enabled else '禁用'}")
     
     # Check LLM
-    if not settings.use_ollama and not settings.openai_api_key:
-        issues.append("⚠️ OpenAI 模式需要设置 OPENAI_API_KEY")
+    if not settings.llm_base_url or settings.llm_base_url == "http://localhost:11434":
+        if settings.llm_base_url == "http://localhost:11434":
+            print(f"  ⚠ LLM_BASE_URL 使用默认值，请确认是否正确配置")
     else:
-        print(f"  ✓ LLM 配置: {'Ollama' if settings.use_ollama else 'OpenAI'}")
+        print(f"  ✓ LLM 配置: base_url={settings.llm_base_url}")
+    if not settings.llm_api_key:
+        print(f"  ⚠ LLM_API_KEY 未配置（本地模型可忽略）")
     
     if issues:
         print_separator()

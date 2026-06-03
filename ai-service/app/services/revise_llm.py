@@ -101,17 +101,19 @@ async def get_revise_llm() -> ChatOpenAI:
 
     Uses ChatOpenAI (compatible with Ollama OpenAI-style API).
 
-    Environment Variables:
-    - OLLAMA_BASE_URL: Ollama base URL, default http://localhost:11434
-    - OLLAMA_REVISE_MODEL: Ollama model name, default qwen2.5:14b
+    Environment Variables (统一配置，优先级从高到低):
+    - LLM_BASE_URL: 统一 LLM base URL
+    - LLM_MODEL: 统一 LLM 模型名
+    - OLLAMA_REVISE_MODEL: 可选覆盖修订模型名（优先于 LLM_MODEL）
+    - OLLAMA_BASE_URL / OLLAMA_MODEL: 旧配置 fallback
 
     Returns:
         ChatOpenAI instance configured for formula conversion
     """
-    base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+    base_url = os.getenv("LLM_BASE_URL") or os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
     model = os.getenv(
         "OLLAMA_REVISE_MODEL",
-        os.getenv("OLLAMA_MODEL", "qwen2.5:14b")
+        os.getenv("LLM_MODEL") or os.getenv("OLLAMA_MODEL", "qwen2.5:14b")
     )
 
     # Add /v1 suffix if not present
@@ -122,6 +124,7 @@ async def get_revise_llm() -> ChatOpenAI:
 
     return ChatOpenAI(
         base_url=base_url,
+        api_key=os.getenv("LLM_API_KEY") or "no-key",
         model=model,
         temperature=0.1,
         streaming=True,

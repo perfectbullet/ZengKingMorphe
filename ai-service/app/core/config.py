@@ -3,7 +3,7 @@ Configuration settings for the Digital Employee AI Service.
 """
 
 import os
-import sys
+
 from typing import List, Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
@@ -48,7 +48,23 @@ class Settings(BaseSettings):
         description="LLM routing mode: local_only, remote_only, or hybrid"
     )
 
-    # Ollama Configuration (本地模型配置 - 用于简单问题)
+    # ===== 统一 LLM 配置（单一数据源） =====
+    # 所有 LLM 调用默认使用此配置，切换模型只需改这里
+    llm_base_url: str = Field(
+        default="http://localhost:11434",
+        description="统一 LLM base URL（单一数据源）"
+    )
+    llm_model: str = Field(
+        default="qwen2.5:14b",
+        description="统一 LLM 模型名（单一数据源）"
+    )
+    llm_api_key: str = Field(
+        default="",
+        description="统一 LLM API Key（单一数据源）"
+    )
+
+    # --- 以下为旧配置，保留作为 fallback 兼容，新部署无需设置 ---
+    # Ollama Configuration (本地模型配置)
     ollama_base_url: str = Field(default="http://localhost:11434")
     ollama_model: str = Field(default="qwen2.5:7b")
     ollama_grader_model: str = Field(default="qwen2.5:7b")
@@ -57,7 +73,7 @@ class Settings(BaseSettings):
         description="Interval in seconds between Ollama keep-alive requests (0 to disable)"
     )
 
-    # OpenAI-style API Configuration (外部模型配置 - 用于复杂问题)
+    # OpenAI-style API Configuration (外部模型配置)
     openai_api_key: str = Field(
         default="", description="OpenAI-style API key (e.g., SiliconFlow)"
     )
@@ -65,7 +81,6 @@ class Settings(BaseSettings):
     openai_model: str = Field(default="deepseek-ai/DeepSeek-V3.1-Terminus")
     openai_grader_model: str = Field(default="deepseek-ai/DeepSeek-V3")
     openai_temperature: float = Field(default=0.0, ge=0.0, le=2.0)
-    openai_max_tokens: int = Field(default=2000, ge=1)
 
     # Math Model Configuration (数学模型可切换配置)
     # provider=phi4 时通过 vLLM 自动发现模型；provider=qwen_math 时使用固定端点
