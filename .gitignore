@@ -99,3 +99,4 @@ scripts/bench_results/*
 bench_results/*
 ai-service/env-files
 logs/*
+zj-aha-vllm-v100/bench_results/*

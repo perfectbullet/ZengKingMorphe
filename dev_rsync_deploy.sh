@@ -38,6 +38,7 @@ echo "=========================================="
 echo "开始同步到 ${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_DIR}"
 echo "=========================================="
 
+
 # 同步 docker-compose.yml
 echo ""
 echo "[1/2] 同步 docker-compose.yml..."
@@ -101,14 +102,13 @@ rsync ${RSYNC_OPTS} -e "ssh -i ${SSH_KEY}" \
     "${LOCAL_DIR}/ai-service/" \
     "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_DIR}/ai-service/"
 
-# 远程更新依赖
-# echo "正在远程服务器上更新依赖..."
-# ssh -i "${SSH_KEY}" "${REMOTE_USER}@${REMOTE_HOST}" "
-#     cd ${REMOTE_DIR} &&
-#     source venv/bin/activate &&
-#     pip install --upgrade pip &&
-#     pip install -r ai-service/requirements.txt
-# "
+
+echo ""
+echo "[4/4] 同步 zj-aha-vllm-v100"
+rsync ${RSYNC_OPTS} -e "ssh -i ${SSH_KEY}" \
+    "${LOCAL_DIR}/zj-aha-vllm-v100/" \
+    "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_DIR}/zj-aha-vllm-v100/"
+
 
 # 远程重启 AI 服务（仅 -r 时执行）
 if $RESTART; then
