@@ -940,7 +940,7 @@ class ConversationNodes:
             # 设计要点：
             # - 通过 settings.realtime_query_llm_fallback_enabled 开关控制（可在 .env 关闭）；
             # - _REALTIME_HEURISTIC_SKIP_LABELS 已包含 math_problem/greeting/noise/realtime_query，
-            #   数学题/问候/噪声不会被升级（保护现有路由：数学题继续走 RAG / Phi-4）；
+            #   数学题/问候/噪声不会被升级（保护现有路由：数学题继续走数学模型）；
             # - preserve_original_intent 命中时跳过，避免覆盖高置信度的非实时原意图；
             # - aneed_realtime 内部异常一律返回 False，不让兜底机制反过来引入新故障。
             if (
@@ -967,7 +967,7 @@ class ConversationNodes:
             # （"已知圆锥的底面半径为 1，高为 2，则圆锥的侧面积为多少?"），
             # 以及长篇教材式提问（"在数列的学习中…请分别说明…推导方法…比较异同"）
             # 存在系统性漏判，会落到 ``general_knowledge / chit_chat / other`` 这类兜底
-            # 标签上，导致原本应走 Phi-4 的题目被通用 LLM 接住、原本应走 RAG 的教材
+            # 标签上，导致原本应走数学模型的题目被通用 LLM 接住、原本应走 RAG 的教材
             # 题被通用 LLM 直答。
             #
             # 设计要点（与 realtime 启发式同思路）：
@@ -1052,7 +1052,7 @@ class ConversationNodes:
             #     - 下游 route_after_classification 与 generate_answer 仅依赖
             #       state["answer_mode"]，不再叠加 is_realtime / is_math_problem
             #       等一堆复合条件来决策；
-            #     - 未识别标签自动落到 GENERAL_LLM，避免进入 RAG / Phi-4 等带外
+            #     - 未识别标签自动落到 GENERAL_LLM，避免进入 RAG / 数学模型等带外
             #       依赖的路径。
             answer_mode = resolve_answer_mode(result.label)
             state["answer_mode"] = answer_mode.value
@@ -1161,7 +1161,7 @@ class ConversationNodes:
             if is_math:
                 state["sources"].append({
                     "type": "text",
-                    "from": "phi4_math",
+                    "from": "math_llm",
                     "text": query,
                     "citations": []
                 })
@@ -1229,7 +1229,7 @@ class ConversationNodes:
                - 日历问题、启发式升级、LLM 兜底都会把这个标志置真，
                  此处无需关心具体子类型。
             3. 其余情况按 ``state["answer_mode"]`` 数据驱动：
-               - PHI4_MATH        → math
+               - MATH_LLM        → math
                - RAG_WITH_FALLBACK → rag
                - GENERAL_LLM / 默认 → general
 
@@ -1874,15 +1874,15 @@ class ConversationNodes:
             else:
                 effective_mode = answer_mode
 
-            if state.get("is_math_problem", False) or effective_mode == AnswerMode.PHI4_MATH.value:
-                # 数学题：Phi-4 推理，明确不走 RAG
+            if state.get("is_math_problem", False) or effective_mode == AnswerMode.MATH_LLM.value:
+                # 数学题：数学模型推理，明确不走 RAG
                 messages = build_math_generation_messages(state)
-                streaming_llm, model_name = self.workflow.get_phi4_streaming_llm(state)
+                streaming_llm, model_name = self.workflow.get_math_streaming_llm(state)
                 state["streaming_llm"] = streaming_llm
                 state["streaming_messages"] = messages
-                state["streaming_type"] = "phi4_math"
+                state["streaming_type"] = "math_llm"
                 logger.info(
-                    f"Streaming configured: type=phi4_math, model={model_name}, "
+                    f"Streaming configured: type=math_llm, model={model_name}, "
                     f"answer_mode={answer_mode}, query={state['user_query'][:50]}..."
                 )
             elif effective_mode == AnswerMode.RAG_WITH_FALLBACK.value:

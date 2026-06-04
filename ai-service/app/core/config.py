@@ -82,20 +82,8 @@ class Settings(BaseSettings):
     openai_grader_model: str = Field(default="deepseek-ai/DeepSeek-V3")
     openai_temperature: float = Field(default=0.0, ge=0.0, le=2.0)
 
-    # Math Model Configuration (数学模型可切换配置)
-    # provider=phi4 时通过 vLLM 自动发现模型；provider=qwen_math 时使用固定端点
-    math_model_provider: str = Field(
-        default="phi4",
-        description="Math model provider: phi4 (vLLM auto-discover) or qwen_math (fixed endpoint)"
-    )
-    math_model_base_url: str = Field(
-        default="http://192.168.100.230:8011/v1",
-        description="Math model base URL (used when provider=qwen_math)"
-    )
-    math_model_name: str = Field(
-        default="/data/models/Qwen2.5-Math-1.5B-Instruct",
-        description="Math model name (used when provider=qwen_math)"
-    )
+    # Math Model Configuration 已迁移到环境变量（MATH_LLM_BASE_URL / MATH_MODEL_NAME / MATH_LLM_ENABLED），
+    # 在 conversation_service.py 的 get_math_streaming_llm() 中直接读取。
 
     # 混合模式复杂度阈值配置 (hybrid 模式下生效)
     # 复杂度评估使用本地 LLM 快速判断问题复杂度 (0-10分)

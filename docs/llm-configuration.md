@@ -25,20 +25,27 @@ OLLAMA_BASE_URL=http://192.168.8.233:11434
 OLLAMA_MODEL=qwen2.5:7b
 ```
 
-### Phi-4 Math Model (vLLM)
+### Math LLM (vLLM / Qwen / Phi)
+
+通过环境变量直接配置（在 `conversation_service.py` 的 `get_math_streaming_llm()` 中读取）：
 
 ```bash
-PHI4_ENABLED=true
-PHI4_BASE_URL=http://192.168.8.235:8000/v1
-PHI4_TEMPERATURE=0.0
-PHI4_MAX_TOKENS=16384
+MATH_LLM_ENABLED=true
+MATH_LLM_BASE_URL=http://192.168.8.235:8000/v1
+MATH_MODEL_NAME=                     # 留空则通过 vLLM 自动发现模型名
+MATH_TEMPERATURE=0.6
+MATH_MAX_TOKEN=10240
 ```
+
+**模型切换示例：**
+- vLLM 自动发现（如 Phi-3）：只设 `MATH_LLM_BASE_URL`，不设 `MATH_MODEL_NAME`
+- Qwen Math 固定端点：`MATH_LLM_BASE_URL=http://...` + `MATH_MODEL_NAME=/data/models/Qwen2.5-Math-1.5B-Instruct`
 
 ### Embedding Configuration
 
 ```bash
 EMBEDDING_TYPE=openai_style
-EMBEDDING_MODEL=BAAI/bge-large-zh-v1.5
+EMBEDDING_MODEL=BAAZ/bge-large-zh-v1.5
 EMBEDDING_BASE_URL=http://localhost:50009
 ```
 
@@ -52,7 +59,7 @@ Defined in `ai-service/app/services/conversation_service.py`:
 
 - `self.local_llm` - ChatOllama for fast, simple responses (greetings, short queries)
 - `self.remote_llm` - ChatOpenAI (SiliconFlow) for complex queries and RAG
-- `get_phi4_streaming_llm()` - Dynamic vLLM instance for math problems (configurable via `PHI4_*` env vars)
+- `get_math_streaming_llm()` - Dynamic LLM instance for math problems (configurable via `MATH_LLM_*` env vars)
 
 ## Query Routing Logic
 
@@ -64,7 +71,7 @@ The routing happens in two nodes:
    - `normal` -> check_math_problem
 
 2. **check_math_problem**:
-   - `math` -> skip complexity eval, direct to generate_answer with Phi-4 LLM
+   - `math` -> skip complexity eval, direct to generate_answer with math LLM
    - `normal` -> evaluate_complexity -> generate_answer
 
 3. **evaluate_complexity**:

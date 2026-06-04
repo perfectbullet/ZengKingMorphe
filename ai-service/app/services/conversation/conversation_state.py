@@ -198,7 +198,7 @@ class ConversationState(TypedDict):
     classification_confidence: Optional[str]  # 置信度 (high/medium/low)
     classification_reason: Optional[str]  # 分类理由
     # 回答模式（由 INTENT_TO_ANSWER_MODE 表驱动；下游统一读这一个字段决定生成路径）
-    # - "rag_with_fallback" / "general_llm" / "phi4_math" / "web_search" / "preset_response"
+    # - "rag_with_fallback" / "general_llm" / "math_llm" / "web_search" / "preset_response"
     # 设计要点：把"该走 RAG 还是 web 还是直接 LLM"的判定从 generate_answer 里抽出来，
     # 让分类节点一次定级，避免下游各处再依赖 intent / is_realtime_query / is_math_problem 复合条件。
     answer_mode: Optional[str]

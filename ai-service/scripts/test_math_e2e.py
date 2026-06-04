@@ -24,7 +24,7 @@ async def test_math_detection_and_routing():
             "name": "数学问题",
             "query": "求椭圆 x²/16 + y²/9 = 1 的焦点坐标",
             "expected_is_math": True,
-            "expected_streaming_type": "phi4_math"
+            "expected_streaming_type": "math_llm"
         },
         {
             "name": "概念性问题",
@@ -174,9 +174,9 @@ async def test_integration_with_conversation_service():
     if workflow:
         print("✓ ConversationWorkflow 初始化成功")
 
-    # 检查是否有 Phi-4 相关方法
-    if hasattr(workflow, 'get_phi4_streaming_llm'):
-        print("✓ get_phi4_streaming_llm 方法存在")
+    # 检查是否有数学模型相关方法
+    if hasattr(workflow, 'get_math_streaming_llm'):
+        print("✓ get_math_streaming_llm 方法存在")
 
     # 测试路由决策方法
     from app.services.conversation.conversation_nodes import ConversationNodes
@@ -236,8 +236,8 @@ async def main():
     if passed == total:
         print("🎉 所有端到端测试通过！数学检测功能已成功集成到系统中。")
         print("\n接下来可以:")
-        print("1. 启动 Phi-4 服务器")
-        print("2. 运行 test_phi4_llm.py 测试实际 Phi-4 调用")
+        print("1. 启动数学模型服务器")
+        print("2. 运行 test_math_llm.py 测试实际数学模型调用")
         print("3. 部署并测试完整的数学问答功能")
     else:
         print("⚠️  部分测试失败，请检查实现。")

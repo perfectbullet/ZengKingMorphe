@@ -665,7 +665,7 @@ async def generate_openai_stream_v1(
         if converted:
             logger.info(
                 f"ASR→LaTeX: duration={duration:.2f}s, "
-                f"before={user_query[:80]!r}, after={converted[:80]!r}"
+                f"before={user_query!r}, after={converted!r}"
             )
             user_query = converted
             # 同步更新 request.messages 中最后一条 user message
@@ -1125,14 +1125,15 @@ async def generate_openai_stream_v1(
                 final_state["final_answer"] = full_answer
 
 
-            elif streaming_type == "phi4_math":
-                # Phi-4 数学推理流式输出
+            elif streaming_type == "math_llm":
+                # 数学模型推理流式输出
                 streaming_llm = current_state.get("streaming_llm")
                 messages = current_state.get("streaming_messages")
                 if not streaming_llm or not messages:
-                    logger.error("streaming_llm or messages not configured for phi4_math type")
+                    logger.error("streaming_llm or messages not configured for math_llm type")
                     continue
-                logger.info(f"Using Phi-4 math stream | model={model_name}")
+                _llm_base_url = getattr(streaming_llm, 'openai_api_base', None) or getattr(streaming_llm, 'base_url', 'unknown')
+                logger.info(f"Using math LLM stream | model={model_name} | base_url={_llm_base_url}")
 
                 # 使用真正的流式输出
                 logger.info("Starting streaming response with astream")
@@ -1140,42 +1141,50 @@ async def generate_openai_stream_v1(
                 full_answer = ""
 
                 start_time = time.perf_counter()
-                async for chunk in streaming_llm.astream(messages):
-                    token = chunk.content if hasattr(chunk, 'content') else str(chunk)
-                    if token:
-                        raw_token_index += 1
-                        await save_raw_token(
-                            db, chat_id, session_id, request.user_id, request.employee_id,
-                            token, raw_token_index, "phi4_math",
-                            current_state.get("conversation_id"),
-                        )
-                        # 过滤 think 标签
-                        # print(f'token={token!r}|', end='') # 本行日志疯狂打印，不要随意开启
-                        filtered_token = think_tag_buffer.add(token)
-                        if not filtered_token:
-                            full_answer += token
-                        else:
-                            full_answer += filtered_token
-                            segment = sentence_buffer.add(filtered_token)
-                            if segment:
-                                chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
-                                    segment, revise_llm, chat_id, created, request.model,
-                                    db, chunk_sequence, session_id, request.user_id,
-                                    request.employee_id, current_state.get("conversation_id"),
-                                    prefer_zh_output=prefer_zh_output,
-                                    enable_math_sentence_conversion=True,
-                                    log_prefix="Phi-4-Math-Stream"
-                                )
-                                yield json.dumps(chunk_data)
+                try:
+                    async for chunk in streaming_llm.astream(messages):
+                        token = chunk.content if hasattr(chunk, 'content') else str(chunk)
+                        if token:
+                            raw_token_index += 1
+                            await save_raw_token(
+                                db, chat_id, session_id, request.user_id, request.employee_id,
+                                token, raw_token_index, "math_llm",
+                                current_state.get("conversation_id"),
+                            )
+                            # 过滤 think 标签
+                            # print(f'token={token!r}|', end='') # 本行日志疯狂打印，不要随意开启
+                            filtered_token = think_tag_buffer.add(token)
+                            if not filtered_token:
+                                full_answer += token
+                            else:
+                                full_answer += filtered_token
+                                segment = sentence_buffer.add(filtered_token)
+                                if segment:
+                                    chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
+                                        segment, revise_llm, chat_id, created, request.model,
+                                        db, chunk_sequence, session_id, request.user_id,
+                                        request.employee_id, current_state.get("conversation_id"),
+                                        prefer_zh_output=prefer_zh_output,
+                                        enable_math_sentence_conversion=True,
+                                        log_prefix="Math-LLM-Stream"
+                                    )
+                                    yield json.dumps(chunk_data)
 
-                                if not first_token_received:
-                                    first_token_received = True
-                                    ttfb_ms = int((time.time() - initial_state["workflow_start_time"]) * 1000)
-                                    current_state["ttfb_ms"] = ttfb_ms
-                                    logger.info(f"First token received | ttfb_ms={ttfb_ms}")
+                                    if not first_token_received:
+                                        first_token_received = True
+                                        ttfb_ms = int((time.time() - initial_state["workflow_start_time"]) * 1000)
+                                        current_state["ttfb_ms"] = ttfb_ms
+                                        logger.info(f"First token received | ttfb_ms={ttfb_ms}")
+                except Exception as e:
+                    logger.error(
+                        f"Math LLM astream failed | base_url={_llm_base_url} | model={model_name} | "
+                        f"error_type={type(e).__name__} | tokens_sent_so_far={raw_token_index}",
+                        exc_info=True,
+                    )
+                    raise
 
                 duration = int((time.perf_counter() - start_time) * 1000)
-                logger.info(f"Phi-4-Math done | duration={duration}ms | output_chars={len(full_answer)}")
+                logger.info(f"Math-LLM done | duration={duration}ms | output_chars={len(full_answer)}")
 
                 # 刷新 buffer 中剩余内容
                 final_segment = await sentence_buffer.flush(is_final=True)
@@ -1186,7 +1195,7 @@ async def generate_openai_stream_v1(
                         request.employee_id, current_state.get("conversation_id"),
                         prefer_zh_output=prefer_zh_output,
                         enable_math_sentence_conversion=True,
-                        log_prefix="Phi-4-Math FinalSegment"
+                        log_prefix="Math-LLM FinalSegment"
                     )
                     yield json.dumps(chunk_data)
 
@@ -1200,13 +1209,21 @@ async def generate_openai_stream_v1(
                 if not streaming_llm or not messages:
                     logger.error("streaming_llm or messages not configured for langchain_llm type")
                     continue
-                logger.info(f"Using LangChain LLM stream | model={model_name}")
+                _llm_base_url = getattr(streaming_llm, 'openai_api_base', None) or getattr(streaming_llm, 'base_url', 'unknown')
+                logger.info(f"Using LangChain LLM stream | model={model_name} | base_url={_llm_base_url}")
 
                 # 实时查询+年份锚点：先生成再清洗，避免回答出现冲突年份
                 target_year = current_state.get("target_year")
                 if current_state.get("is_realtime_query") and target_year is not None:
                     # 非流式生成完整回答
-                    resp = await streaming_llm.ainvoke(messages)
+                    try:
+                        resp = await streaming_llm.ainvoke(messages)
+                    except Exception as e:
+                        logger.error(
+                            f"LLM ainvoke failed | base_url={_llm_base_url} | model={model_name} | error_type={type(e).__name__}",
+                            exc_info=True,
+                        )
+                        raise
                     text = resp.content if hasattr(resp, "content") else str(resp)
                     # 年份一致性清洗
                     text = _enforce_target_year_consistency(text, target_year)
@@ -1227,35 +1244,43 @@ async def generate_openai_stream_v1(
                     final_state["final_answer"] = full_answer
                     continue
 
-                async for chunk in streaming_llm.astream(messages):
-                    token = chunk.content
-                    if token:
-                        full_answer += token
-                        raw_token_index += 1
-                        await save_raw_token(
-                            db, chat_id, session_id, request.user_id, request.employee_id,
-                            token, raw_token_index, "langchain_llm",
-                            current_state.get("conversation_id"),
-                        )
-                        segment = sentence_buffer.add(token)
-                        token_len = len(token)
-                        buffer_len = sentence_buffer.get_buffer_length()
-                        if segment or ('$$' in token[:10]):
-                            logger.info(
-                                f"[STREAMING] token_len={token_len}, buffer_len={buffer_len}, "
-                                f"has_segment={bool(segment)}, token_preview={repr(token[:50])}, "
-                                f"buffer_start={repr(sentence_buffer.buffer[:30])}, buffer_end={repr(sentence_buffer.buffer[-30:])}"
+                try:
+                    async for chunk in streaming_llm.astream(messages):
+                        token = chunk.content
+                        if token:
+                            full_answer += token
+                            raw_token_index += 1
+                            await save_raw_token(
+                                db, chat_id, session_id, request.user_id, request.employee_id,
+                                token, raw_token_index, "langchain_llm",
+                                current_state.get("conversation_id"),
                             )
-                        if segment:
-                            chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
-                                segment, revise_llm, chat_id, created, request.model,
-                                db, chunk_sequence, session_id, request.user_id,
-                                request.employee_id, current_state.get("conversation_id"),
-                                prefer_zh_output=prefer_zh_output,
-                                enable_math_sentence_conversion=enable_math_sentence_conversion,
-                                log_prefix=""
-                            )
-                            yield json.dumps(chunk_data)
+                            segment = sentence_buffer.add(token)
+                            token_len = len(token)
+                            buffer_len = sentence_buffer.get_buffer_length()
+                            if segment or ('$$' in token[:10]):
+                                logger.info(
+                                    f"[STREAMING] token_len={token_len}, buffer_len={buffer_len}, "
+                                    f"has_segment={bool(segment)}, token_preview={repr(token[:50])}, "
+                                    f"buffer_start={repr(sentence_buffer.buffer[:30])}, buffer_end={repr(sentence_buffer.buffer[-30:])}"
+                                )
+                            if segment:
+                                chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
+                                    segment, revise_llm, chat_id, created, request.model,
+                                    db, chunk_sequence, session_id, request.user_id,
+                                    request.employee_id, current_state.get("conversation_id"),
+                                    prefer_zh_output=prefer_zh_output,
+                                    enable_math_sentence_conversion=enable_math_sentence_conversion,
+                                    log_prefix=""
+                                )
+                                yield json.dumps(chunk_data)
+                except Exception as e:
+                    logger.error(
+                        f"LLM astream failed | base_url={_llm_base_url} | model={model_name} | "
+                        f"error_type={type(e).__name__} | tokens_sent_so_far={raw_token_index}",
+                        exc_info=True,
+                    )
+                    raise
                 final_segment = await sentence_buffer.flush(is_final=True)
                 if final_segment:
                     chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(

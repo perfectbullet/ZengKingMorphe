@@ -12,7 +12,7 @@ Workflow Graph (8 nodes):
         → classify_query_type
         → [conditional: greeting/noise?]   → generate_answer
         → [conditional: realtime?]          → web_search → generate_answer
-        → [conditional: math?]              → generate_answer (Phi-4)
+        → [conditional: math?]              → generate_answer (数学模型)
         → [conditional: rag (concept)?]     → evaluate_complexity → generate_answer (RAGAnything)
         → [conditional: general?]           → generate_answer (通用 LLM，不走 RAG)
         → save_conversation → END
@@ -73,7 +73,6 @@ class ConversationWorkflow:
             base_url=llm_base_url,
             api_key=llm_api_key,
             model=llm_model,
-            temperature=0.6,
             streaming=True,
         )
         logger.info(
@@ -222,13 +221,14 @@ class ConversationWorkflow:
         from app.services.conversation.conversation_helpers import build_generation_messages
         return build_generation_messages(state)
 
-    def get_phi4_streaming_llm(self, state: ConversationState):
+    def get_math_streaming_llm(self, state: ConversationState):
         """
         动态创建数学流式 LLM（不存储为实例变量）。
 
-        根据 settings.math_model_provider 选择后端:
-        - "phi4": 通过 vLLM 自动发现模型名称 (原有行为)
-        - "qwen_math": 使用 Qwen2.5-Math 固定端点
+        通过环境变量配置：
+        - MATH_LLM_ENABLED: 是否启用（默认 true）
+        - MATH_LLM_BASE_URL: API 地址
+        - MATH_MODEL_NAME: 模型名（不设则通过 vLLM 自动发现）
 
         Args:
             state: Current conversation state
@@ -236,22 +236,17 @@ class ConversationWorkflow:
         Returns:
             Tuple of (llm, model_name) for math streaming
         """
-        # 检查是否启用（兼容旧 PHI4_ENABLED 环境变量）
-        enabled = os.getenv("PHI4_ENABLED", "true").lower() == "true"
+        # 检查是否启用
+        enabled = os.getenv("MATH_LLM_ENABLED", "true").lower() == "true"
         if not enabled:
-            logger.info("Math model disabled (PHI4_ENABLED=false), falling back to default LLM")
+            logger.info("Math LLM disabled (MATH_LLM_ENABLED=false), falling back to default LLM")
             return self.get_streaming_llm(state)
 
-        provider = getattr(settings, 'math_model_provider', 'phi4').lower()
+        base_url = os.getenv("MATH_MODEL_BASE_URL")
+        model_id = os.getenv("MATH_MODEL_NAME")
 
-        if provider == "qwen_math":
-            # Qwen2.5-Math: 使用显式配置的端点和模型名
-            base_url = getattr(settings, 'math_model_base_url', "http://192.168.100.230:8011/v1")
-            model_id = getattr(settings, 'math_model_name', "/data/models/Qwen2.5-Math-1.5B-Instruct")
-            
-        else:
-            # phi4: 原有逻辑 — 通过 vLLM 自动发现模型
-            base_url = os.getenv("MATH_MODEL_BASE_URL", "http://192.168.8.235:8000/v1")
+        # 未指定模型名时通过 vLLM 自动发现
+        if not model_id:
             model_id = get_vllm_first_model(base_url)
 
         math_temperature = os.getenv("MATH_TEMPERATURE", 0.6)
@@ -269,8 +264,8 @@ class ConversationWorkflow:
         )
 
         logger.info(
-            f"Math LLM created | provider={provider} | model={model_id} | "
-            f"math_model_base_url={base_url} | math_temperature={math_temperature} | math_max_token={math_max_token}"
+            f"Math LLM created | model={model_id} | "
+            f"base_url={base_url} | math_temperature={math_temperature} | math_max_token={math_max_token}"
         )
 
         return math_llm, model_id
@@ -340,7 +335,7 @@ class ConversationWorkflow:
             {
                 ROUTE_BRANCH_GREETING: "generate_answer",   # Greeting / noise → 直接回答
                 ROUTE_BRANCH_REALTIME: "web_search",        # 实时类 → 联网检索
-                ROUTE_BRANCH_MATH: "generate_answer",       # 数学题 → Phi-4 直接回答
+                ROUTE_BRANCH_MATH: "generate_answer",       # 数学题 → 数学模型直接回答
                 ROUTE_BRANCH_RAG: "evaluate_complexity",    # 概念/教材类 → 复杂度评估 → RAG
                 ROUTE_BRANCH_GENERAL: "generate_answer",    # 通用 LLM（英语/常识/闲聊）→ 直接回答
             }

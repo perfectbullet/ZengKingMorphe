@@ -21,7 +21,13 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.services.conversation.conversation_state import ConversationState
 from app.utils.common import detect_dominant_language
-from prompts.prompts import GEOMETRY_FORMULA_BOOK, MATH_SYSTEM_PROMPT, PHI4_SIMPLE_SYSTEM_PROMPT, QWEN_MATH_SYSTEM_PROMPT
+from prompts.prompts import (
+    GEOMETRY_FORMULA_BOOK,
+    MATH_SYSTEM_PROMPT,
+    MATH_SIMPLE_SYSTEM_PROMPT,
+    QWEN_MATH_SYSTEM_PROMPT,
+)
+
 logger = get_logger(__name__)
 
 
@@ -92,7 +98,9 @@ def _build_system_time_context(prefer_zh_output: bool) -> str:
     )
 
 
-def resolve_target_year_from_query(query: str, now: datetime | None = None) -> int | None:
+def resolve_target_year_from_query(
+    query: str, now: datetime | None = None
+) -> int | None:
     """从问题中解析目标年份：今年/明年/去年 → 对应数字年份"""
     if now is None:
         now = datetime.now()
@@ -277,7 +285,9 @@ def _i18n_lookup(
     entry = table.get(key)
     if entry is None:
         return short_default
-    return entry.get(lang) or entry.get("zh") or next(iter(entry.values()), short_default)
+    return (
+        entry.get(lang) or entry.get("zh") or next(iter(entry.values()), short_default)
+    )
 
 
 def get_personality_description(
@@ -312,10 +322,16 @@ def get_personality_description(
         _PERSONALITY_TONE_I18N, tone_key, lang, _PERSONALITY_DEFAULT_I18N["tone"][lang]
     )
     style_desc = _i18n_lookup(
-        _PERSONALITY_STYLE_I18N, style_key, lang, _PERSONALITY_DEFAULT_I18N["style"][lang]
+        _PERSONALITY_STYLE_I18N,
+        style_key,
+        lang,
+        _PERSONALITY_DEFAULT_I18N["style"][lang],
     )
     formality_desc = _i18n_lookup(
-        _PERSONALITY_FORMALITY_I18N, formality_key, lang, _PERSONALITY_DEFAULT_I18N["formality"][lang]
+        _PERSONALITY_FORMALITY_I18N,
+        formality_key,
+        lang,
+        _PERSONALITY_DEFAULT_I18N["formality"][lang],
     )
 
     return tone_desc, style_desc, formality_desc
@@ -363,7 +379,9 @@ def build_context_text(state: ConversationState) -> str:
 
     context_parts = []
     for i, doc in enumerate(state.get("retrieved_docs", [])[:3], 1):
-        context_parts.append(f"{L['kb_header'].format(i=i)}\n{doc.get('content', '')[:500]}")
+        context_parts.append(
+            f"{L['kb_header'].format(i=i)}\n{doc.get('content', '')[:500]}"
+        )
 
     web_results = state.get("web_search_results", [])
     if web_results and state.get("web_search_used", False):
@@ -427,7 +445,9 @@ def get_source_indicator(state: ConversationState) -> str:
     return ""
 
 
-def _build_conversation_history(state: ConversationState, max_messages: int = 12) -> List:
+def _build_conversation_history(
+    state: ConversationState, max_messages: int = 12
+) -> List:
     """
     Build conversation history messages from state.
 
@@ -563,7 +583,9 @@ def build_greeting_messages(
     if prefer_zh_output:
         messages.append(HumanMessage(content=state["user_query"]))
     else:
-        messages.append(HumanMessage(content=f"Please reply in English.\n\n{state['user_query']}"))
+        messages.append(
+            HumanMessage(content=f"Please reply in English.\n\n{state['user_query']}")
+        )
 
     logger.debug(
         "Greeting messages built",
@@ -798,13 +820,15 @@ User question:
                 f"\n时段先验（系统本地推算，供资料缺失时兜底使用）：\n"
                 f"- 当前时间：{_est_now}（{_est_weekday_zh}）\n"
                 f"- 时段拥堵估算：{_est_level}（{_est_reason}）\n"
-                if _est_level else ""
+                if _est_level
+                else ""
             )
             _prior_en = (
                 f"\nTime-of-day prior (locally derived; use when web context is insufficient):\n"
                 f"- Current time: {_est_now} ({_est_weekday_en})\n"
                 f"- Estimated congestion level: {_est_level} ({_est_reason})\n"
-                if _est_level else ""
+                if _est_level
+                else ""
             )
             requirements = f"""**重要提示**：用户询问的是路况/拥堵信息，系统已通过网络搜索获取了相关资料。
 {_prior_zh}
@@ -1050,17 +1074,21 @@ User question:
                         "current incumbent directly**, optionally with a short note on when "
                         "they were appointed.\n"
                         "- It is **strictly forbidden** to fall back to a former officeholder "
-                        "by citing your \"training-data cutoff\" (e.g. 2021/2023). Even if "
+                        'by citing your "training-data cutoff" (e.g. 2021/2023). Even if '
                         "you are not fully certain about the very latest changes, do NOT "
                         "name someone you know has already left office.\n"
                         "- Only if you have no relevant candidate at all in your training "
-                        "memory, reply: \"I cannot confirm the current officeholder; please "
-                        "check official sources.\"\n"
+                        'memory, reply: "I cannot confirm the current officeholder; please '
+                        'check official sources."\n'
                         "- Output exactly one definitive name; do not list multiple candidates."
                     )
         # 实时查询但未获得联网结果：仍需保持时间一致性，避免模型自行混入错误年份。
         if state.get("is_realtime_query", False):
-            requirements = requirements + "\n\n" + _build_realtime_temporal_guardrail(prefer_zh_output)
+            requirements = (
+                requirements
+                + "\n\n"
+                + _build_realtime_temporal_guardrail(prefer_zh_output)
+            )
             if prefer_zh_output:
                 requirements += "\n若当前上下文无法支撑唯一结论，请明确说明无法确认，不要补充未经证实的年份或日期。"
             else:
@@ -1133,14 +1161,13 @@ User question:
     return messages
 
 
-
 def build_math_generation_messages(state: ConversationState) -> List:
     """
     构建数学问题的模型消息。
 
-    根据 settings.math_model_provider 选择提示词:
-    - "qwen_math": 使用简洁 CoT 提示词（QWEN_MATH_SYSTEM_PROMPT）
-    - "phi4" (默认): 使用 6 步解题流程 + 公式库
+    根据 MATH_MODEL_NAME 环境变量选择提示词:
+    - 模型名含 "qwen"/"Qwen" 时: 使用简洁 CoT 提示词（QWEN_MATH_SYSTEM_PROMPT）
+    - 其他: 使用通用 6 步解题流程 + 公式库
 
     Args:
         state: Current conversation state
@@ -1148,72 +1175,63 @@ def build_math_generation_messages(state: ConversationState) -> List:
     Returns:
         List of Message objects for math LLM
     """
-    provider = getattr(settings, 'math_model_provider', 'phi4').lower()
-    is_qwen_math = provider == "qwen_math"
+    # math_model = os.getenv("MATH_MODEL_NAME", "").lower()
+    # is_qwen_math = "qwen" in math_model
 
-    raw_query = (state.get("user_query") or "").strip()
-    normalized_query = _normalize_math_query(raw_query)
+    # raw_query = (state.get("user_query") or "").strip()
 
-    if is_qwen_math:
-        # Qwen Math: 统一使用简洁 CoT 提示词，不区分简单/复杂题
-        messages = [SystemMessage(content=QWEN_MATH_SYSTEM_PROMPT)]
+    # if is_qwen_math:
+    # Qwen Math: 统一使用简洁 qwen推荐 提示词，不区分简单/复杂题
+    messages = [SystemMessage(content=QWEN_MATH_SYSTEM_PROMPT)]
 
-        history_msgs = _build_conversation_history(state, max_messages=12)
-        messages.extend(history_msgs)
-
-        effective_query = _select_llm_facing_query(state)
-        effective_normalized = _normalize_math_query(effective_query)
-        messages.append(HumanMessage(content=effective_normalized))
-
-        logger.info(
-            "build_math_generation_messages [qwen_math]: "
-            f"history_msgs={len(history_msgs)}, "
-            f"effective_query={effective_normalized[:80]!r}"
-        )
-        return messages
-
-    # --- phi4 路径（原有逻辑）---
-    if _is_simple_math_query(normalized_query):
-        # 简单计算题：保持极简输出（不注入历史，避免噪声拉高首字延迟）
-        messages = [SystemMessage(content=PHI4_SIMPLE_SYSTEM_PROMPT)]
-        messages.append(HumanMessage(content=normalized_query))
-        return messages
-
-    # 非简单题：统一使用"解题行为流程"+"公式库"，不再针对具体题目写死分支
-    sys_prompt = MATH_SYSTEM_PROMPT + "\n\n" + GEOMETRY_FORMULA_BOOK
-    messages: List = [SystemMessage(content=sys_prompt)]
-
-    # 注入最近对话历史，与 build_generation_messages 行为对齐：
-    # - 动态上下文记忆判定为 "unrelated" 时 _build_conversation_history 自动返回 []
-    # - 跨语言历史会被语言一致性过滤掉，避免污染 Phi-4 输出语言
     history_msgs = _build_conversation_history(state, max_messages=12)
     messages.extend(history_msgs)
 
-    # 优先用消歧改写后的问句（_select_llm_facing_query 内部已做语言一致性兜底）；
-    # 再做一次 π / pi / 派 归一化，避免历史 / 改写过程引入的符号写法差异。
     effective_query = _select_llm_facing_query(state)
-    effective_normalized = _normalize_math_query(effective_query)
-    messages.append(HumanMessage(content=effective_normalized))
+
+    messages.append(HumanMessage(content=effective_query))
 
     logger.info(
-        "build_math_generation_messages [phi4]: "
+        "build_math_generation_messages [qwen_math]: "
         f"history_msgs={len(history_msgs)}, "
-        f"context_dependence={state.get('context_dependence')!r}, "
-        f"query_rewritten={state.get('query_rewritten', False)}, "
-        f"effective_query={effective_normalized[:80]!r}"
-        f"sys_prompt={sys_prompt}"
+        f"effective_query={effective_query!r}"
     )
-
     return messages
 
+    # # 以下在 qwen数学模型的情况下都不生效
+    # # --- 通用数学路径 ---
+    # if _is_simple_math_query(raw_query):
+    #     # 简单计算题：保持极简输出（不注入历史，避免噪声拉高首字延迟）
+    #     messages = [SystemMessage(content=MATH_SIMPLE_SYSTEM_PROMPT)]
+    #     messages.append(HumanMessage(content=raw_query))
+    #     return messages
 
-def _normalize_math_query(query: str) -> str:
-    """轻量归一化：将“派/pi”统一为 π，减少符号漏写/误写。"""
-    q = (query or "").strip()
-    # 常见口语/拼写归一
-    q = q.replace("派", "π")
-    q = q.replace("pi", "π").replace("PI", "π").replace("Pi", "π")
-    return q
+    # # 非简单题：统一使用"解题行为流程"+"公式库"，不再针对具体题目写死分支
+    # sys_prompt = MATH_SYSTEM_PROMPT + "\n\n" + GEOMETRY_FORMULA_BOOK
+    # messages: List = [SystemMessage(content=sys_prompt)]
+
+    # # 注入最近对话历史，与 build_generation_messages 行为对齐：
+    # # - 动态上下文记忆判定为 "unrelated" 时 _build_conversation_history 自动返回 []
+    # # - 跨语言历史会被语言一致性过滤掉，避免污染输出语言
+    # history_msgs = _build_conversation_history(state, max_messages=12)
+    # messages.extend(history_msgs)
+
+    # # 优先用消歧改写后的问句（_select_llm_facing_query 内部已做语言一致性兜底）；
+    # # 再做一次 π / pi / 派 归一化，避免历史 / 改写过程引入的符号写法差异。
+    # effective_query = _select_llm_facing_query(state)
+
+    # messages.append(HumanMessage(content=effective_query))
+
+    # logger.info(
+    #     "build_math_generation_messages [math_llm]: "
+    #     f"history_msgs={len(history_msgs)}, "
+    #     f"context_dependence={state.get('context_dependence')!r}, "
+    #     f"query_rewritten={state.get('query_rewritten', False)}, "
+    #     f"effective_query={effective_query[:80]!r}"
+    #     f"sys_prompt={sys_prompt}"
+    # )
+
+    # return messages
 
 
 def _is_simple_math_query(query: str) -> bool:
@@ -1222,11 +1240,24 @@ def _is_simple_math_query(query: str) -> bool:
         return False
     if len(q) > 28:
         return False
-    complex_markers = ("证明", "推导", "分析", "为什么", "思路", "过程", "几何", "应用题", "函数", "方程组")
+    complex_markers = (
+        "证明",
+        "推导",
+        "分析",
+        "为什么",
+        "思路",
+        "过程",
+        "几何",
+        "应用题",
+        "函数",
+        "方程组",
+    )
     if any(m in q for m in complex_markers):
         return False
     has_number = bool(re.search(r"[0-9一二三四五六七八九十百千万两零]", q))
-    has_op = any(op in q for op in ("+", "-", "*", "/", "加", "减", "乘", "除", "×", "÷", "等于"))
+    has_op = any(
+        op in q for op in ("+", "-", "*", "/", "加", "减", "乘", "除", "×", "÷", "等于")
+    )
     asks_value = any(k in q for k in ("等于几", "多少", "=?", "＝", "="))
     return has_number and has_op and asks_value
 

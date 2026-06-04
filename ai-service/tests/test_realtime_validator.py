@@ -114,7 +114,7 @@ def _should_trigger_fallback(
         ("chit_chat", True),
         ("english_query", True),
         ("other", True),
-        # 不应触发：math_problem 必须保持走 RAG / Phi-4
+        # 不应触发：math_problem 必须保持走数学模型
         ("math_problem", False),
         # 不应触发：greeting / noise / realtime_query 已被早期分支处理
         ("greeting", False),

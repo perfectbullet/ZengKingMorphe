@@ -15,7 +15,7 @@
 - ``GENERAL_LLM``：直接通用 LLM 回答，**不走 RAG，不走联网检索**。
   典型场景：闲聊、问候、英语问答、常识性问题、其它非领域查询。
 
-- ``PHI4_MATH``：使用 Phi-4 数学模型推理，**不走 RAG**。
+- ``MATH_LLM``：使用数学模型推理（支持 vLLM/Qwen 等多种后端），**不走 RAG**。
   典型场景：具体数学题求解（含计算、证明、推导）。
 
 - ``WEB_SEARCH``：先联网检索 → LLM 基于检索结果回答。
@@ -30,7 +30,7 @@
 ====================================
 按用户需求映射 QueryClassifier 的 9 种标签：
 
-    数学题目（math_problem）         → PHI4_MATH
+    数学题目（math_problem）         → MATH_LLM
     数学概念 / 教材知识（concept_explain）→ RAG_WITH_FALLBACK
     问候（greeting）                  → GENERAL_LLM
     英语问答（english_query）         → GENERAL_LLM
@@ -72,7 +72,7 @@ class AnswerMode(str, Enum):
 
     RAG_WITH_FALLBACK = "rag_with_fallback"
     GENERAL_LLM = "general_llm"
-    PHI4_MATH = "phi4_math"
+    MATH_LLM = "math_llm"
     WEB_SEARCH = "web_search"
     PRESET_RESPONSE = "preset_response"
 
@@ -83,8 +83,8 @@ class AnswerMode(str, Enum):
 # - 新增标签：只在这里追加键值对；
 # - 修改路由：只改本表的 value，不改 conversation_nodes / generate_answer。
 INTENT_TO_ANSWER_MODE: Mapping[str, AnswerMode] = {
-    # 数学题目 → 数学模型（Phi-4），不走 RAG
-    "math_problem": AnswerMode.PHI4_MATH,
+    # 数学题目 → 数学模型推理，不走 RAG
+    "math_problem": AnswerMode.MATH_LLM,
     # 数学概念 / 教材知识 / 公式解释 / 知识点问答 → RAG（无召回时降级 LLM）
     "concept_explain": AnswerMode.RAG_WITH_FALLBACK,
     # 问候 / 英语 / 常识 / 闲聊 → 直接通用 LLM
@@ -135,7 +135,7 @@ def resolve_answer_mode(classification_label: str | None) -> AnswerMode:
 # 与 ``AnswerMode`` 解耦，避免图结构泄漏到 enum 层。
 ROUTE_BRANCH_GREETING = "greeting"  # 含 noise，走 generate_answer 直出
 ROUTE_BRANCH_REALTIME = "realtime"  # 走 web_search 后再 generate_answer
-ROUTE_BRANCH_MATH = "math"          # 走 generate_answer（Phi-4）
+ROUTE_BRANCH_MATH = "math"          # 走 generate_answer（数学模型）
 ROUTE_BRANCH_RAG = "rag"            # 走 generate_answer（RAGAnything）
 ROUTE_BRANCH_GENERAL = "general"    # 走 generate_answer（通用 LLM，不走 RAG）
 
@@ -146,7 +146,7 @@ ROUTE_BRANCH_GENERAL = "general"    # 走 generate_answer（通用 LLM，不走 
 ANSWER_MODE_TO_ROUTE: Mapping[AnswerMode, str] = {
     AnswerMode.RAG_WITH_FALLBACK: ROUTE_BRANCH_RAG,
     AnswerMode.GENERAL_LLM: ROUTE_BRANCH_GENERAL,
-    AnswerMode.PHI4_MATH: ROUTE_BRANCH_MATH,
+    AnswerMode.MATH_LLM: ROUTE_BRANCH_MATH,
     AnswerMode.WEB_SEARCH: ROUTE_BRANCH_REALTIME,
     AnswerMode.PRESET_RESPONSE: ROUTE_BRANCH_GREETING,
 }

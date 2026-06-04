@@ -14,7 +14,7 @@ from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
-WORD2LATEX_BASE_URL = os.getenv("WORD2LATEX_BASE_URL", "http://192.168.8.222:8080")
+WORD2LATEX_BASE_URL = os.getenv("WORD2LATEX_BASE_URL", "192.168.8.222")
 WORD2LATEX_TIMEOUT = float(os.getenv("WORD2LATEX_TIMEOUT", "5"))
 
 
@@ -55,7 +55,7 @@ async def word_to_latex(text: str) -> str | None:
         if result:
             logger.info(
                 f"word2latex converted: duration={duration:.2f}s, "
-                f"original={text[:80]!r}, converted={result[:80]!r}"
+                f"original={text!r}, converted={result!r}"
             )
             return result
         logger.error("口语转公式报错了\n" * 10)

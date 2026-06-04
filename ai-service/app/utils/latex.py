@@ -189,7 +189,7 @@ def wrap_bare_boxed(text: str) -> str:
     r"""
     Wrap bare \boxed{...} in $...$ delimiters.
 
-    Math models (e.g., Phi-4) may output \boxed{(2, 3)} without $ delimiters.
+    Math models (e.g., vLLM/Qwen) may output \boxed{(2, 3)} without $ delimiters.
     This function wraps only \boxed{...} that is not already inside $...$ or $$...$$.
 
     Examples:
