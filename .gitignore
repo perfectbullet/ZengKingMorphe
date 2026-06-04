@@ -98,3 +98,4 @@ ai-service/scripts/exports.zip
 scripts/bench_results/*
 bench_results/*
 ai-service/env-files
+logs/*
