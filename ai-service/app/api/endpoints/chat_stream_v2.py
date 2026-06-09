@@ -26,6 +26,9 @@ from app.services.revise_llm import (
 
 logger = get_logger(__name__)
 
+# 服务端实际使用的模型名（覆盖客户端传入的 SERVER_MODEL）
+SERVER_MODEL = os.getenv("LLM_MODEL", "")
+
 
 # Status message variations for better UX
 STATUS_TOKENS: list = [
@@ -260,7 +263,7 @@ async def generate_openai_stream_v2(
             "id": chat_id,
             "object": "chat.completion.chunk",
             "created": created,
-            "model": request.model,
+            "model": SERVER_MODEL,
             "user_message": user_query,
             "messages": [
                 {"role": msg.role, "content": msg.content} for msg in request.messages
@@ -276,7 +279,7 @@ async def generate_openai_stream_v2(
             "id": chat_id,
             "object": "chat.completion.chunk",
             "created": created,
-            "model": request.model,
+            "model": SERVER_MODEL,
             "choices": [
                 {
                     "index": 0,
@@ -333,14 +336,14 @@ async def generate_openai_stream_v2(
         final_state = None
         current_state = initial_state.copy()
         full_answer = ""
-        model_name = request.model
+        model_name = SERVER_MODEL
         
         # 结束 chunk data
         finish_chunk_data = {
             "id": chat_id,
             "object": "chat.completion.chunk",
             "created": created,
-            "model": request.model,
+            "model": SERVER_MODEL,
             "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
             "usage": {
                 "prompt_tokens": len(user_query),
@@ -458,7 +461,7 @@ async def generate_openai_stream_v2(
                             "id": chat_id,
                             "object": "chat.completion.chunk",
                             "created": created,
-                            "model": request.model,
+                            "model": SERVER_MODEL,
                             "choices": [{
                                 "index": 0,
                                 "delta": {"content": segment},
@@ -498,7 +501,7 @@ async def generate_openai_stream_v2(
                                 "id": chat_id,
                                 "object": "chat.completion.chunk",
                                 "created": created,
-                                "model": request.model,
+                                "model": SERVER_MODEL,
                                 "choices": [{
                                     "index": 0,
                                     "delta": {"content": tst_token},
@@ -526,7 +529,7 @@ async def generate_openai_stream_v2(
                                     "id": chat_id,
                                     "object": "chat.completion.chunk",
                                     "created": created,
-                                    "model": request.model,
+                                    "model": SERVER_MODEL,
                                     "choices": [{
                                         "index": 0,
                                         "delta": {"content": token},
@@ -571,7 +574,7 @@ async def generate_openai_stream_v2(
                             "id": chat_id,
                             "object": "chat.completion.chunk",
                             "created": created,
-                            "model": request.model,
+                            "model": SERVER_MODEL,
                             "choices": [
                                 {
                                     "index": 0,
@@ -623,7 +626,7 @@ async def generate_openai_stream_v2(
             "id": chat_id,
             "object": "chat.completion.chunk",
             "created": created,
-            "model": request.model,
+            "model": SERVER_MODEL,
             "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
             "usage": {
                 "prompt_tokens": len(user_query),

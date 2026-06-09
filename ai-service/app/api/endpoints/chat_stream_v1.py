@@ -1,7 +1,7 @@
 """
-Chat stream response generator for /v1/chat/completions endpoint.
+/v1/chat/completions 端点的聊天流式响应生成器。
 
-This version can be modified for custom behavior specific to v1 API.
+本版本可针对 v1 API 的自定义行为进行修改。
 """
 
 import os
@@ -40,8 +40,11 @@ from app.services.raganything_wrapper import get_raganything_stream
 logger = get_logger(__name__)
 
 # =============================================================================
-# Constants
+# 常量
 # =============================================================================
+
+# 服务端实际使用的模型名（覆盖客户端传入的 SERVER_MODEL）
+SERVER_MODEL = os.getenv("LLM_MODEL", "")
 
 SENTENCE_BUFFER_MAX_CHARS = 100
 SENTENCE_BUFFER_MAX_WAIT_SECONDS = 1
@@ -62,25 +65,25 @@ CHUNK_TYPE_DONE = "done"
 CHUNK_TYPE_ERROR = "error"
 
 # =============================================================================
-# Status messages for UX
+# UX 状态消息
 # =============================================================================
 
-# Note: STATUS_TOKENS removed - no longer needed with RAGAnything integration
+# 注：STATUS_TOKENS 已移除 — RAGAnything 集成后不再需要
 
 # =============================================================================
-# Utility Functions
+# 工具函数
 # =============================================================================
 
 
 def _clean_user_query(text: str) -> str:
     """
-    Clean user query by removing leading punctuation.
+    清理用户查询，移除前导标点符号。
 
     Args:
-        text: User query text
+        text: 用户查询文本
 
     Returns:
-        Cleaned text with leading punctuation removed
+        移除前导标点后的文本
     """
     text = re.sub(r"^[，。！？、；：,.?!;:\s]+", "", text)
     return text.lstrip()
@@ -207,7 +210,7 @@ def _prefer_zh_output(user_query: str) -> bool:
 
 
 # =============================================================================
-# Source Attribution
+# 来源归因
 # =============================================================================
 
 
@@ -217,15 +220,15 @@ def format_sources(
     max_content_length: int = MAX_CONTENT_LENGTH,
 ) -> dict:
     """
-    Format RAG documents and web search results for source attribution.
+    格式化 RAG 文档和联网搜索结果，用于来源归因。
 
     Args:
-        retrieved_docs: List of retrieved document chunks from RAG
-        web_search_results: List of web search results from Tavily
-        max_content_length: Maximum content snippet length
+        retrieved_docs: RAG 检索到的文档块列表
+        web_search_results: Tavily 联网搜索结果列表
+        max_content_length: 内容摘要最大长度
 
     Returns:
-        Dict with rag_sources and web_sources lists
+        包含 rag_sources 和 web_sources 列表的字典
     """
     sources = {"rag_sources": [], "web_sources": []}
 
@@ -268,19 +271,19 @@ def format_sources(
 
 
 # =============================================================================
-# Formula to Voice Conversion
+# 公式转语音
 # =============================================================================
 
 
 def _has_math_symbols_simple(text: str) -> bool:
     """
-    Check if text contains math symbols without LaTeX delimiters.
+    检查文本是否包含非 LaTeX 定界符的数学符号。
 
     Args:
-        text: Text to check
+        text: 待检查文本
 
     Returns:
-        True if text contains math symbols
+        若包含数学符号则返回 True
     """
     math_symbol_pattern = re.compile(r"[∈∉⊂⊃⊆⊇∪∩∅∨∧¬∀∃→⇒⇐⇔≡≠≤≥≈≪≫√∞²³°π∏∑∫∂∇Δ]")
     return math_symbol_pattern.search(text) is not None
@@ -294,20 +297,20 @@ async def _process_segment_for_output(
     enable_math_sentence_conversion: bool = False,
 ) -> tuple[str, str]:
     """
-    Process a text segment for output.
+    处理文本段用于输出。
 
-    This function:
-    1. Normalizes LaTeX delimiters
-    2. Converts LaTeX formulas to voice-friendly text using LLM
-    3. Converts sentences with math symbols to voice-friendly text using LLM
+    流程：
+    1. 规范化 LaTeX 定界符
+    2. 将 LaTeX 公式转换为语音友好文本（通过 LLM）
+    3. 将含数学符号的句子转换为语音友好文本（通过 LLM）
 
     Args:
-        segment: Text segment to process
-        revise_llm: LLM for formula-to-voice conversion
-        log_prefix: Prefix for log messages
+        segment: 待处理的文本段
+        revise_llm: 用于公式转语音的 LLM
+        log_prefix: 日志前缀
 
     Returns:
-        Tuple of (display_content, voice_content)
+        (display_content, voice_content) 元组
     """
     display_content = normalize_latex_formulas(segment)
     # 中文提问时，英文结果转中文（避免“英文问中文答”）
@@ -335,8 +338,8 @@ async def _process_segment_for_output(
     else:
         logger.info(f"{log_prefix}没有公式: {display_content}")
         voice_content = display_content
-    # Strip markdown formatting from voice_content for TTS
-    # (display_content retains original markdown formatting for display)
+    # 从 voice_content 中移除 markdown 格式，用于 TTS
+    # （display_content 保留原始 markdown 格式用于显示）
     logger.info(
         f"[{log_prefix} 语音voice_content markdown清理前: {repr(voice_content)}"
     )
@@ -353,7 +356,7 @@ def _build_token_chunk_data(
     model: str,
     content: str,
 ) -> dict:
-    """Build token chunk data for SSE output."""
+    """构建 SSE 输出的 token 块数据。"""
     return {
         "id": chat_id,
         "object": "chat.completion.chunk",
@@ -386,24 +389,24 @@ async def _stream_segment_with_formula_conversion(
     enable_math_sentence_conversion: bool = False,
 ) -> tuple[int, dict]:
     """
-    Process a text segment and handle streaming with formula conversion.
+    处理文本段并处理流式公式转换。
 
     Args:
-        segment: Text segment to process
-        revise_llm: LLM for formula-to-voic，e conversion
-        chat_id: Chat completion ID
-        created: Creation timestamp
-        model: Model name
-        db: Database instance
-        chunk_sequence: Current chunk sequence number
-        session_id: Session ID
-        user_id: User ID
-        employee_id: Employee ID
-        conversation_id: Optional conversation ID
-        log_prefix: Prefix for log messages
+        segment: 待处理的文本段
+        revise_llm: 用于公式转语音的 LLM
+        chat_id: 聊天完成 ID
+        created: 创建时间戳
+        model: 模型名
+        db: 数据库实例
+        chunk_sequence: 当前块序号
+        session_id: 会话 ID
+        user_id: 用户 ID
+        employee_id: 数字员工 ID
+        conversation_id: 可选的对话 ID
+        log_prefix: 日志前缀
 
     Returns:
-        Tuple of (updated_sequence, voice_chunk_data_for_yielding)
+        (updated_sequence, voice_chunk_data_for_yielding) 元组
     """
     display_content, voice_content = await _process_segment_for_output(
         segment,
@@ -441,12 +444,12 @@ async def _stream_segment_with_formula_conversion(
 
 
 # =============================================================================
-# Main Stream Generator
+# 主流式生成器
 # =============================================================================
 
 
 def _extract_user_query(messages: list) -> str:
-    """Extract the last user message from the messages list."""
+    """从消息列表中提取最后一条用户消息。"""
     for msg in reversed(messages):
         if msg.role == "user":
             return msg.content
@@ -456,7 +459,7 @@ def _extract_user_query(messages: list) -> str:
 def _build_initial_state(
     request: OpenAIChatRequest, session_id: str, user_query: str
 ) -> dict:
-    """Build the initial state for the conversation workflow."""
+    """构建对话工作流的初始状态。"""
     return {
         "messages": [],
         "user_query": user_query,
@@ -488,14 +491,14 @@ def _build_initial_state(
         "ttfb_ms": None,
         "channel_name": request.channel_name,
         "team_id": request.team_id,
-        # Streaming output configuration
+        # 流式输出配置
         "streaming_type": None,
         "streaming_llm": None,
         "streaming_messages": None,
         "raganything_query": None,
         "raganything_mode": None,
         "sources": [],
-        # LLM-based classification (from QueryClassifier)
+        # LLM 分类结果（来自 QueryClassifier）
         "classification_label": None,
         "classification_confidence": None,
         "classification_reason": None,
@@ -542,7 +545,7 @@ def _build_finish_chunk_data(
     model: str,
     user_query: str,
 ) -> dict:
-    """Build the finish chunk data template."""
+    """构建结束块数据模板。"""
     return {
         "id": chat_id,
         "object": "chat.completion.chunk",
@@ -575,7 +578,7 @@ def _update_finish_chunk_metadata(
     model_name: str,
     sources: list,
 ) -> None:
-    """Update the finish chunk data with final state information."""
+    """用最终状态信息更新结束块数据。"""
     finish_chunk_data["usage"] = {
         "prompt_tokens": len(user_query),
         "completion_tokens": len(final_state.get("final_answer", "")),
@@ -595,7 +598,7 @@ def _update_finish_chunk_metadata(
 
 
 # =============================================================================
-# MongoDB Storage
+# MongoDB 存储
 # =============================================================================
 
 
@@ -611,18 +614,18 @@ async def save_stream_chunk(
     conversation_id: Optional[str] = None,
 ) -> None:
     """
-    Save a stream chunk to MongoDB.
+    保存流式块到 MongoDB。
 
     Args:
-        db: Database instance
-        chat_id: Chat completion ID
-        chunk_sequence: Chunk sequence number
-        session_id: Session ID
-        user_id: User ID
-        employee_id: Employee ID
-        chunk_type: Type of chunk (user_query, role, token, done, error, status)
-        chunk_data: Chunk data to save
-        conversation_id: Optional conversation ID
+        db: 数据库实例
+        chat_id: 聊天完成 ID
+        chunk_sequence: 块序号
+        session_id: 会话 ID
+        user_id: 用户 ID
+        employee_id: 数字员工 ID
+        chunk_type: 块类型（user_query, role, token, done, error, status）
+        chunk_data: 待保存的块数据
+        conversation_id: 可选的对话 ID
     """
     # 打印所有参数用于调试
     chunk_data_preview = str(chunk_data)[:200] if chunk_data else None
@@ -661,7 +664,7 @@ async def save_raw_token(
     streaming_source: str,
     conversation_id: Optional[str] = None,
 ) -> None:
-    """Save a raw streaming token to MongoDB."""
+    """保存原始流式 token 到 MongoDB。"""
     try:
         record = RawTokenModel(
             token_id=f"{chat_id}_raw_{token_index}",
@@ -683,15 +686,15 @@ async def generate_openai_stream_v1(
     request: OpenAIChatRequest,
 ) -> AsyncGenerator[str, None]:
     """
-    Generate OpenAI-style streaming response for v1 API.
+    生成 OpenAI 风格的 v1 API 流式响应。
 
-    This version can be modified for custom behavior specific to v1 endpoint.
+    本版本可针对 v1 端点的自定义行为进行修改。
 
     Args:
-        request: OpenAI chat request
+        request: OpenAI 聊天请求
 
     Yields:
-        OpenAI-formatted SSE messages
+        OpenAI 格式的 SSE 消息
     """
 
     db = await get_database()
@@ -705,9 +708,6 @@ async def generate_openai_stream_v1(
 
     user_query = _clean_user_query(_extract_user_query(request.messages))
     prefer_zh_output = _prefer_zh_output(user_query)
-    logger.info(
-        f"Request params | max_tokens={request.max_tokens} | model={request.model} | temperature={request.temperature} | top_p={request.top_p}"
-    )
 
     # ── ASR → LaTeX 转换（仅数学问题） ──
     if is_math_problem(user_query):
@@ -742,7 +742,7 @@ async def generate_openai_stream_v1(
     think_tag_buffer = ThinkTagBuffer()  # 用于过滤 think 标签
 
     finish_chunk_data = _build_finish_chunk_data(
-        chat_id, created, request.model, user_query
+        chat_id, created, SERVER_MODEL, user_query
     )
 
     chunk_sequence = 0
@@ -753,7 +753,7 @@ async def generate_openai_stream_v1(
         "id": chat_id,
         "object": "chat.completion.chunk",
         "created": created,
-        "model": request.model,
+        "model": SERVER_MODEL,
         "user_message": user_query,
         "messages": [
             {"role": msg.role, "content": msg.content} for msg in request.messages
@@ -774,7 +774,7 @@ async def generate_openai_stream_v1(
         "id": chat_id,
         "object": "chat.completion.chunk",
         "created": created,
-        "model": request.model,
+        "model": SERVER_MODEL,
         "choices": [
             {
                 "index": 0,
@@ -800,7 +800,7 @@ async def generate_openai_stream_v1(
 
     final_state = None
     current_state = initial_state.copy()
-    model_name = request.model
+    model_name = SERVER_MODEL
 
     async for event in conversation_workflow.workflow.astream(
         initial_state, stream_mode="updates"
@@ -808,7 +808,7 @@ async def generate_openai_stream_v1(
         node_name = list(event.keys())[0] if event else None
         state_update = event.get(node_name, {}) if node_name else {}
 
-        # DEBUG: 打印事件结构
+        # 调试：打印事件结构
         logger.debug(
             f"Event | node={node_name} | state_update_keys={list(state_update.keys())}"
         )
@@ -860,7 +860,7 @@ async def generate_openai_stream_v1(
             streaming_type = current_state.get("streaming_type")
             revise_llm = await get_revise_llm()
 
-            # DEBUG: 打印当前状态中的关键字段
+            # 调试：打印当前状态中的关键字段
             logger.debug(
                 f"generate_answer state | streaming_type={streaming_type} | "
                 f"has_streaming_llm={current_state.get('streaming_llm') is not None} | "
@@ -903,7 +903,7 @@ async def generate_openai_stream_v1(
                             revise_llm,
                             chat_id,
                             created,
-                            request.model,
+                            SERVER_MODEL,
                             db,
                             chunk_sequence,
                             session_id,
@@ -927,7 +927,7 @@ async def generate_openai_stream_v1(
                         revise_llm,
                         chat_id,
                         created,
-                        request.model,
+                        SERVER_MODEL,
                         db,
                         chunk_sequence,
                         session_id,
@@ -997,7 +997,7 @@ async def generate_openai_stream_v1(
                 revise_llm,
                 chat_id,
                 created,
-                request.model,
+                SERVER_MODEL,
                 db,
                 chunk_sequence,
                 session_id,
@@ -1103,7 +1103,7 @@ async def generate_openai_stream_v1(
                                 revise_llm,
                                 chat_id,
                                 created,
-                                request.model,
+                                SERVER_MODEL,
                                 db,
                                 chunk_sequence,
                                 session_id,
@@ -1193,7 +1193,7 @@ async def generate_openai_stream_v1(
                         revise_llm,
                         chat_id,
                         created,
-                        request.model,
+                        SERVER_MODEL,
                         db,
                         chunk_sequence,
                         session_id,
@@ -1269,7 +1269,7 @@ async def generate_openai_stream_v1(
                                     revise_llm,
                                     chat_id,
                                     created,
-                                    request.model,
+                                    SERVER_MODEL,
                                     db,
                                     chunk_sequence,
                                     session_id,
@@ -1291,7 +1291,7 @@ async def generate_openai_stream_v1(
                                 revise_llm,
                                 chat_id,
                                 created,
-                                request.model,
+                                SERVER_MODEL,
                                 db,
                                 chunk_sequence,
                                 session_id,
@@ -1338,7 +1338,7 @@ async def generate_openai_stream_v1(
                         revise_llm,
                         chat_id,
                         created,
-                        request.model,
+                        SERVER_MODEL,
                         db,
                         chunk_sequence,
                         session_id,
@@ -1411,7 +1411,7 @@ async def generate_openai_stream_v1(
                                         revise_llm,
                                         chat_id,
                                         created,
-                                        request.model,
+                                        SERVER_MODEL,
                                         db,
                                         chunk_sequence,
                                         session_id,
@@ -1461,7 +1461,7 @@ async def generate_openai_stream_v1(
                         revise_llm,
                         chat_id,
                         created,
-                        request.model,
+                        SERVER_MODEL,
                         db,
                         chunk_sequence,
                         session_id,
@@ -1519,7 +1519,7 @@ async def generate_openai_stream_v1(
                             revise_llm,
                             chat_id,
                             created,
-                            request.model,
+                            SERVER_MODEL,
                             db,
                             chunk_sequence,
                             session_id,
@@ -1571,7 +1571,7 @@ async def generate_openai_stream_v1(
                                     revise_llm,
                                     chat_id,
                                     created,
-                                    request.model,
+                                    SERVER_MODEL,
                                     db,
                                     chunk_sequence,
                                     session_id,
@@ -1600,7 +1600,7 @@ async def generate_openai_stream_v1(
                         revise_llm,
                         chat_id,
                         created,
-                        request.model,
+                        SERVER_MODEL,
                         db,
                         chunk_sequence,
                         session_id,
