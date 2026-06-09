@@ -33,8 +33,6 @@ from app.utils.sentence_buffer import SentenceBuffer, has_latex_formula
 from app.utils.think_tag_buffer import ThinkTagBuffer
 from app.utils.tts_formatter import strip_markdown_for_tts
 from app.utils.text_mapping import map_english_to_chinese, replace_en_math_verbs
-from app.services.math_intent_heuristic import is_math_problem
-from app.services.word2latex_service import word_to_latex
 from app.utils.common import sanitize_filename, detect_dominant_language
 from app.services.raganything_wrapper import get_raganything_stream
 
@@ -65,30 +63,10 @@ CHUNK_TYPE_TOKEN = "token"
 CHUNK_TYPE_DONE = "done"
 CHUNK_TYPE_ERROR = "error"
 
-# =============================================================================
-# UX 状态消息
-# =============================================================================
-
-# 注：STATUS_TOKENS 已移除 — RAGAnything 集成后不再需要
 
 # =============================================================================
 # 工具函数
 # =============================================================================
-
-
-def _clean_user_query(text: str) -> str:
-    """
-    清理用户查询，移除前导标点符号。
-
-    Args:
-        text: 用户查询文本
-
-    Returns:
-        移除前导标点后的文本
-    """
-    text = re.sub(r"^[，。！？、；：,.?!;:\s]+", "", text)
-    return text.lstrip()
-
 
 def _build_history_prefix_for_query(
     context_messages: list,
@@ -198,22 +176,9 @@ def _build_history_prefix_for_query(
         "and your previous steps. If information is still missing, ask for the missing details.\n\n"
     )
 
-
-def _prefer_zh_output(user_query: str) -> bool:
-    """判断输出语言：含中文→中文，含英文→英文，其余默认中文"""
-    if not user_query:
-        return True
-    if re.search(r"[\u4e00-\u9fff]", user_query):
-        return True
-    if re.search(r"[A-Za-z]", user_query):
-        return False
-    return True
-
-
 # =============================================================================
 # 来源归因
 # =============================================================================
-
 
 def format_sources(
     retrieved_docs: list[dict],
@@ -733,33 +698,13 @@ async def generate_openai_stream_v1(
     chat_id = f"chatcmpl-{hashlib.md5(f'{session_id}_{time.time()}'.encode()).hexdigest()[:12]}"
     created = int(time.time())
 
-    user_query = _clean_user_query(_extract_user_query(request.messages))
-    prefer_zh_output = _prefer_zh_output(user_query)
-
-    # ── ASR → LaTeX 转换（仅数学问题） ──
-    if is_math_problem(user_query):
-        t0 = time.time()
-        converted = await word_to_latex(user_query)
-        duration = time.time() - t0
-        if converted:
-            logger.info(
-                f"ASR→LaTeX: duration={duration:.2f}s, "
-                f"before={user_query!r}, after={converted!r}"
-            )
-            user_query = converted
-            # 同步更新 request.messages 中最后一条 user message
-            for msg in reversed(request.messages):
-                if msg.role == "user":
-                    msg.content = converted
-                    break
-        else:
-            logger.info(
-                f"ASR→LaTeX skipped (no result): duration={duration:.2f}s, query={user_query!r}"
-            )
+    user_query = _extract_user_query(request.messages)
 
     initial_state = _build_initial_state(request, session_id, user_query)
-    # 工作流全局输出语言偏好
-    initial_state["prefer_zh_output"] = prefer_zh_output
+
+    # 输出语言偏好：默认中文，preprocess_query 节点会根据用户查询更新 state 中的值；
+    # 每次事件循环更新 current_state 后同步刷新此局部变量，下游统一使用。
+    prefer_zh_output = True
 
     sentence_buffer = SentenceBuffer(
         max_chars=SENTENCE_BUFFER_MAX_CHARS,
@@ -829,7 +774,9 @@ async def generate_openai_stream_v1(
     current_state = initial_state.copy()
     model_name = SERVER_MODEL
 
-    async for event in conversation_workflow.workflow.astream(initial_state, stream_mode="updates"):
+    async for event in conversation_workflow.workflow.astream(
+        initial_state, stream_mode="updates"
+    ):
         node_name = list(event.keys())[0] if event else None
         state_update = event.get(node_name, {}) if node_name else {}
 
@@ -840,6 +787,8 @@ async def generate_openai_stream_v1(
 
         if state_update:
             current_state.update(state_update)
+            # 同步输出语言偏好（preprocess_query 节点会设置此值）
+            prefer_zh_output = current_state.get("prefer_zh_output", prefer_zh_output)
 
         # 检测敏感词并提前终止
         if node_name == "input_validation" and state_update.get("has_sensitive"):
@@ -1014,8 +963,10 @@ async def generate_openai_stream_v1(
 
             # 发送统一过渡话术，按输入语言适配
             preface = TALKING_POINTS[0] + ("\n" if prefer_zh_output else "\n")
-            enable_math_sentence_conversion = current_state.get("is_math_problem", False)
-            
+            enable_math_sentence_conversion = current_state.get(
+                "is_math_problem", False
+            )
+
             chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
                 preface,
                 revise_llm,

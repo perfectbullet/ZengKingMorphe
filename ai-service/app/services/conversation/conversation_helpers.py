@@ -1,11 +1,11 @@
 """
-Helper utilities for conversation workflow.
+对话工作流辅助工具集。
 
-This module provides:
-- Node timing utilities
-- LLM selection logic for hybrid routing
-- Message building helpers
-- Personality description helpers
+本模块提供：
+- 节点计时工具
+- 混合路由 LLM 选择逻辑
+- 消息构建辅助函数
+- 人格描述辅助函数
 """
 
 import os
@@ -24,6 +24,39 @@ from app.utils.common import detect_dominant_language
 from prompts.prompts import QWEN_MATH_SYSTEM_PROMPT
 
 logger = get_logger(__name__)
+
+
+def clean_user_query(text: str) -> str:
+    """
+    清理用户查询，移除前导标点符号。
+
+    Args:
+        text: 用户查询文本
+
+    Returns:
+        移除前导标点后的文本
+    """
+    text = re.sub(r"^[，。！？、；：,.?!;:\s]+", "", text)
+    return text.lstrip()
+
+
+def prefer_zh_output(user_query: str) -> bool:
+    """
+    判断输出语言偏好：含中文→中文，含英文→英文，其余默认中文。
+
+    Args:
+        user_query: 用户查询文本
+
+    Returns:
+        True 表示偏好中文输出，False 表示偏好英文输出
+    """
+    if not user_query:
+        return True
+    if re.search(r"[一-鿿]", user_query):
+        return True
+    if re.search(r"[A-Za-z]", user_query):
+        return False
+    return True
 
 
 def resolve_prefer_zh_output(state: ConversationState) -> bool:
@@ -117,19 +150,19 @@ def resolve_target_year_from_query(
 @asynccontextmanager
 async def time_node(node_name: str, state: ConversationState, llm_instance=None):
     """
-    Async context manager for timing node execution.
+    异步上下文管理器，用于节点执行计时。
 
-    Tracks execution time for each workflow node and stores in state for analysis.
-    Timing data is logged and included in final conversation record.
+    跟踪每个工作流节点的执行时间并存入状态中供分析。
+    计时数据会写入日志并包含在最终对话记录中。
 
     Args:
-        node_name: Name of the workflow node
-        state: Conversation state object
-        llm_instance: The workflow instance (for accessing as a method if needed)
+        node_name: 工作流节点名称
+        state: 对话状态对象
+        llm_instance: 工作流实例（按需访问方法）
 
     Example:
         async with time_node("knowledge_retrieval", state):
-            # retrieval logic here
+            # 检索逻辑
     """
     start_time = time.time()
     try:
@@ -149,24 +182,24 @@ async def time_node(node_name: str, state: ConversationState, llm_instance=None)
 # =============================================================================
 def select_llm(state: ConversationState, local_llm, remote_llm) -> Tuple[Any, str]:
     """
-    Select appropriate LLM based on query context (hybrid mode only).
+    根据查询上下文选择合适的 LLM（仅混合模式）。
 
-    Selection logic (hybrid mode):
-    1. Primary: complexity_score (0-10)
-       - 0-6分: 使用本地 Ollama (简单到中等复杂)
-       - 7-10分: 使用外部 API (高复杂度)
-    2. Special cases:
-       - greeting, FAQ matched: 强制使用本地模型
-       - 「现任 X 是谁」类需要广博世界知识的问题: 强制使用远端 LLM
+    选择逻辑（混合模式）：
+    1. 主要依据：complexity_score（0-10）
+       - 0-6分：使用本地 Ollama（简单到中等复杂）
+       - 7-10分：使用外部 API（高复杂度）
+    2. 特殊情况：
+       - greeting、FAQ 命中：强制使用本地模型
+       - 「现任 X 是谁」类需要广博世界知识的问题：强制使用远端 LLM
          （本地小模型常常回避或答错）
 
     Args:
-        state: Current conversation state
-        local_llm: Local Ollama LLM instance
-        remote_llm: Remote OpenAI-style LLM instance
+        state: 当前对话状态
+        local_llm: 本地 Ollama LLM 实例
+        remote_llm: 远端 OpenAI 风格 LLM 实例
 
     Returns:
-        Tuple of (llm, model_name)
+        (llm, model_name) 元组
     """
     routing_mode = getattr(settings, "llm_routing_mode", "local_only")
 
@@ -289,15 +322,15 @@ def get_personality_description(
     personality: dict, prefer_zh_output: bool = True
 ) -> Tuple[str, str, str]:
     """
-    Get personality description for system prompt.
+    获取用于 system prompt 的人格描述。
 
     Args:
-        personality: Personality dict from employee config
+        personality: 员工配置中的人格字典
         prefer_zh_output: 输出语言偏好。``True`` 返回中文文案、``False`` 返回英文文案。
             缺省为 ``True`` 以保持对老调用方的向后兼容（默认中文）。
 
     Returns:
-        Tuple of (tone_desc, style_desc, formality_desc)，文案语言与 ``prefer_zh_output`` 一致。
+        (tone_desc, style_desc, formality_desc) 元组，文案语言与 ``prefer_zh_output`` 一致。
 
     设计说明：
         - 为何要本地化？人格描述会被拼进 system prompt。若英文 system prompt 中混入
@@ -352,18 +385,18 @@ _CONTEXT_LABELS_I18N: Dict[str, Dict[str, str]] = {
 
 def build_context_text(state: ConversationState) -> str:
     """
-    Build context text from retrieved docs and web search results.
+    从检索到的文档和网络搜索结果构建上下文文本。
 
-    Uses compressed context if available, otherwise builds from sources.
+    有压缩上下文时优先使用，否则从数据源构建。
 
-    Labels (e.g. ``[KB reference 1]`` / ``Title:``) are localized to
-    ``prefer_zh_output``，避免英文 system prompt 中混入中文标签污染输出语言。
+    标签（如 ``[知识库参考1]`` / ``标题:``）根据 ``prefer_zh_output`` 本地化，
+    避免英文 system prompt 中混入中文标签污染输出语言。
 
     Args:
-        state: Current conversation state
+        state: 当前对话状态
 
     Returns:
-        Formatted context string for LLM prompt
+        格式化后的上下文字符串，用于 LLM 提示
     """
     prefer_zh_output = resolve_prefer_zh_output(state)
     lang = "zh" if prefer_zh_output else "en"
@@ -444,11 +477,11 @@ def _build_conversation_history(
     state: ConversationState, max_messages: int = 12
 ) -> List:
     """
-    Build conversation history messages from state.
+    从状态中构建对话历史消息列表。
 
     Args:
-        state: Current conversation state
-        max_messages: Maximum number of chat messages (user+assistant) to include.
+        state: 当前对话状态
+        max_messages: 最大消息数量（user + assistant 总数）。
             默认 12 条 = 最近 6 轮（user+assistant 对），与产品要求"固定保留最近 6 轮上下文"对齐，
             既保障多轮追问的连贯性（不丢最近用户句），又限制窗口大小避免无关旧主题干扰。
 
@@ -467,7 +500,7 @@ def _build_conversation_history(
         核心落地点：与历史相关 → 注入完整历史；无关 → 完全不注入。
 
     Returns:
-        List of Message objects from conversation history
+        对话历史的 Message 对象列表
     """
     messages = []
     # 动态上下文记忆短路：本轮与历史无关 → 一律不注入历史。
@@ -508,19 +541,19 @@ def build_greeting_messages(
     state: ConversationState, employee_config: Dict[str, Any]
 ) -> List:
     """
-    Build LLM messages for greeting scenario.
+    构建问候场景下的 LLM 消息列表。
 
-    Characteristics:
-    - No RAG or web search needed
-    - Natural, friendly response based on personality
-    - Encourages further interaction
+    特点：
+    - 不需要 RAG 或联网搜索
+    - 基于人格特征的自然、友好回复
+    - 鼓励用户继续互动
 
     Args:
-        state: Current conversation state
-        employee_config: Employee configuration dict
+        state: 当前对话状态
+        employee_config: 员工配置字典
 
     Returns:
-        List of Message objects
+        Message 对象列表
     """
     personality = employee_config.get("personality", {})
     role = employee_config.get("role", "AI助手")
@@ -621,19 +654,19 @@ def _select_llm_facing_query(state: ConversationState) -> str:
 
 def build_generation_messages(state: ConversationState) -> List:
     """
-    Build LLM messages for answer generation.
+    构建用于答案生成的 LLM 消息列表。
 
-    Handles different scenarios:
-    - Interruption: Short acknowledgment response
-    - Greeting: Simple, friendly response
-    - Realtime + Web search: Emphasize network sources
-    - Regular RAG: Knowledge-based response
+    处理不同场景：
+    - 打断：简短确认回复
+    - 问候：简单、友好的回复
+    - 实时 + 联网搜索：强调网络资料来源
+    - 常规 RAG：基于知识库的回答
 
     Args:
-        state: Current conversation state
+        state: 当前对话状态
 
     Returns:
-        List of Message objects for LLM
+        LLM 消息对象列表
     """
     employee_config = state.get("employee_config", {})
     effective_query = _select_llm_facing_query(state)

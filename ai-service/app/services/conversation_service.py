@@ -267,6 +267,7 @@ class ConversationWorkflow:
         graph.add_node("load_employee_config", self.nodes.load_employee_config)
         graph.add_node("load_session_context", self.nodes.load_session_context)
         graph.add_node("input_validation", self.nodes.validate_input)
+        graph.add_node("preprocess_query", self.nodes.preprocess_query)
         graph.add_node("classify_query_type", self.nodes.classify_query_type)
         graph.add_node("evaluate_complexity", self.nodes.evaluate_complexity)
         graph.add_node("web_search", self.nodes.web_search)
@@ -279,7 +280,8 @@ class ConversationWorkflow:
         # 定义顺序边
         graph.add_edge("load_employee_config", "load_session_context")
         graph.add_edge("load_session_context", "input_validation")
-        graph.add_edge("input_validation", "classify_query_type")
+        graph.add_edge("input_validation", "preprocess_query")
+        graph.add_edge("preprocess_query", "classify_query_type")
 
         # 查询分类后的条件路由。
         # path_map 的 key 必须与 ``intent_routing.ROUTE_BRANCH_*`` 一一对应，

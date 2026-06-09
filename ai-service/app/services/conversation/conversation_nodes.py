@@ -1,24 +1,23 @@
 """
-Node implementations for LangGraph conversation workflow.
+LangGraph 对话工作流节点实现。
 
-This module contains all node functions that process the conversation state:
-- Configuration loading nodes
-- Input validation nodes
-- Query classification nodes
-- Complexity evaluation nodes
-- Web search nodes
-- Answer generation nodes
-- Conversation saving nodes
+本模块包含处理对话状态的所有节点函数：
+- 配置加载节点
+- 输入校验节点
+- 查询分类节点
+- 复杂度评估节点
+- 联网搜索节点
+- 答案生成节点
+- 对话保存节点
 
-Note: Simplified workflow using RAGAnything for RAG retrieval.
-Removed nodes: intent_recognition, knowledge_retrieval, grade_documents,
-               compress_context, match_faq, rewrite_query
+注：已使用 RAGAnything 简化 RAG 检索流程。
+已移除节点：intent_recognition, knowledge_retrieval, grade_documents,
+           compress_context, match_faq, rewrite_query
 """
 import asyncio
 import hashlib
 import time
 from datetime import datetime
-from datetime import timedelta
 import re
 
 import httpx
@@ -31,7 +30,6 @@ from app.core.logging import get_logger
 from app.models.database import ConversationModel, SessionModel
 from app.services.conversation.conversation_state import (
     ConversationState,
-    GREETING_KEYWORDS,
     DEFAULT_SENSITIVE_WORDS,
     DEFAULT_SENSITIVE_WORDS_LOWER,
     NOISE_PRESET_RESPONSE_TEXT,
@@ -56,7 +54,10 @@ from app.services.conversation.conversation_helpers import (
     build_math_generation_messages,
     resolve_prefer_zh_output,
     resolve_target_year_from_query,
+    clean_user_query,
+    prefer_zh_output,
 )
+from app.services.word2latex_service import word_to_latex
 from app.services.conversation.intent_routing import (
     AnswerMode,
     ROUTE_BRANCH_GENERAL,
@@ -558,18 +559,17 @@ def _normalize_realtime_category(reason: str | None) -> str:
 # =============================================================================
 class ConversationNodes:
     """
-    Container class for all workflow nodes.
+    工作流节点容器类。
 
-    Each node is an async method that takes a ConversationState
-    and returns an updated ConversationState.
+    每个节点是一个异步方法，接收 ConversationState 并返回更新后的 ConversationState。
     """
 
     def __init__(self, workflow_instance):
         """
-        Initialize nodes with reference to parent workflow.
+        初始化节点，持有父工作流的引用。
 
         Args:
-            workflow_instance: The ConversationWorkflow instance
+            workflow_instance: ConversationWorkflow 实例
         """
         self.workflow = workflow_instance
 
@@ -578,22 +578,22 @@ class ConversationNodes:
     # -------------------------------------------------------------------------
     async def load_employee_config(self, state: ConversationState) -> ConversationState:
         """
-        Load digital employee configuration from MongoDB.
+        从 MongoDB 加载数字员工配置。
 
-        Retrieves employee-specific settings including:
-        - Basic info (name, role, description)
-        - Personality (tone, style, formality)
-        - Capabilities (web_search_enabled, kb_ids)
-        - FAQ settings (faq_sim_threshold, faq_top_k)
+        获取员工特定设置，包括：
+        - 基本信息（名称、角色、描述）
+        - 人格特征（语气、风格、正式程度）
+        - 能力配置（web_search_enabled、kb_ids）
+        - FAQ 设置（faq_sim_threshold、faq_top_k）
 
         Args:
-            state: Current conversation state
+            state: 当前对话状态
 
         Returns:
-            Updated state with employee_config populated
+            更新后的状态（employee_config 已填充）
 
         Raises:
-            ValueError: If employee_id not found in database
+            ValueError: employee_id 在数据库中不存在
         """
         async with time_node("load_employee_config", state):
             db = await get_database()
@@ -628,18 +628,18 @@ class ConversationNodes:
 
     async def load_session_context(self, state: ConversationState) -> ConversationState:
         """
-        Load or create session context from MongoDB.
+        从 MongoDB 加载或创建会话上下文。
 
-        Handles:
-        - Loading existing session with message history
-        - Creating new session for first-time users
-        - Updating last_activity timestamp
+        处理逻辑：
+        - 加载已有会话的消息历史
+        - 为新用户创建会话
+        - 更新 last_activity 时间戳
 
         Args:
-            state: Current conversation state
+            state: 当前对话状态
 
         Returns:
-            Updated state with context populated
+            更新后的状态（context 已填充）
         """
         async with time_node("load_session_context", state):
             try:
@@ -686,17 +686,17 @@ class ConversationNodes:
     # -------------------------------------------------------------------------
     async def validate_input(self, state: ConversationState) -> ConversationState:
         """
-        Validate and sanitize user input.
+        校验和清洗用户输入。
 
-        Performs basic validation:
-        - Check for empty or malicious input
-        - Detect sensitive content using default + employee-specific words
+        基本校验：
+        - 检查空输入或恶意输入
+        - 使用默认词库 + 员工自定义词库检测敏感内容
 
         Args:
-            state: Current conversation state
+            state: 当前对话状态
 
         Returns:
-            Updated state with validation results
+            更新后的状态（校验结果已填充）
         """
         async with time_node("validate_input", state):
             query = state["user_query"].strip().lower()
@@ -747,6 +747,54 @@ class ConversationNodes:
                     f"Sensitive word detected in query, user_id={state.get('user_id')}, "
                     f"employee_id={state.get('employee_id')}, query={query[:100]}"
                 )
+        return state
+
+    # -------------------------------------------------------------------------
+    # Workflow Nodes - Query Preprocessing
+    # -------------------------------------------------------------------------
+    async def preprocess_query(self, state: ConversationState) -> ConversationState:
+        """
+        查询预处理节点 — 在分类之前完成清洗、语言偏好检测、ASR→LaTeX 转换。
+
+        将原先散落在端点层（chat_stream_v1.py）的三类预处理逻辑下沉到工作流节点：
+        1. 查询清洗：移除前导标点符号
+        2. 语言偏好：根据用户查询判断中/英文输出
+        3. 数学检测 + ASR→LaTeX：将口语数学表达式转换为 LaTeX 公式
+
+        Args:
+            state: Current conversation state
+
+        Returns:
+            更新后的状态（user_query 已清洗/转换，prefer_zh_output 已设置）
+        """
+        async with time_node("preprocess_query", state):
+            query = (state.get("user_query") or "").strip()
+
+            # 1. 查询清洗（移除前导标点）
+            cleaned = clean_user_query(query)
+            if cleaned != query:
+                logger.info(
+                    f"Query cleaned: before={query!r}, after={cleaned!r}"
+                )
+                state["user_query"] = cleaned
+                query = cleaned
+
+            # 2. 输出语言偏好
+            state["prefer_zh_output"] = prefer_zh_output(query)
+
+            # 3. 数学检测 + ASR→LaTeX 转换
+            if is_math_problem(query):
+                converted = await word_to_latex(query)
+                if converted:
+                    logger.info(
+                        f"ASR→LaTeX: before={query!r}, after={converted!r}"
+                    )
+                    state["user_query"] = converted
+                else:
+                    logger.info(
+                        f"ASR→LaTeX skipped (no result): query={query!r}"
+                    )
+
         return state
 
     # -------------------------------------------------------------------------
@@ -1121,101 +1169,6 @@ class ConversationNodes:
                 state["realtime_detect_reason"] = "local_calendar_resolver"
         return state
 
-    # -------------------------------------------------------------------------
-    # Math Problem Detection
-    # -------------------------------------------------------------------------
-    # 概念性问题排除关键词（不算数学题）
-    CONCEPT_KEYWORDS = ["是什么", "什么是", "介绍", "解释", "定义", "概念"]
-    # 数学操作关键词
-    MATH_OPERATION_KEYWORDS = ["求", "计算", "解", "证明", "推导", "化简"]
-    # 数学对象关键词
-    MATH_OBJECT_KEYWORDS = ["函数", "方程", "不等式", "集合", "数列", "三角函数", "导数", "积分", "极限", "椭圆", "双曲线", "抛物线"]
-
-    async def check_math_problem(self, state: ConversationState) -> ConversationState:
-        """
-        数学问题检测节点 - 检测用户查询是否为数学问题。
-
-        使用基于规则的模式匹配：
-        - 排除概念性问题（"什么是函数"、"介绍一下三角函数"等）
-        - 检测数学操作+数学对象（"求函数值域"、"解方程"等）
-
-        Args:
-            state: Current conversation state
-
-        Returns:
-            Updated state with is_math_problem populated
-        """
-        async with time_node("check_math_problem", state):
-            query = state["user_query"].strip()
-
-            # 执行数学问题检测
-            is_math, reason = self._detect_math_problem(query)
-            state["is_math_problem"] = is_math
-
-            logger.info(
-                f"Math detection result: is_math={is_math}, reason={reason}, "
-                f"query={query[:50]}"
-            )
-
-            # 如果是数学问题，添加来源信息
-            if is_math:
-                state["sources"].append({
-                    "type": "text",
-                    "from": "math_llm",
-                    "text": query,
-                    "citations": []
-                })
-                logger.info(f"Math problem source added | query={query[:50]}")
-
-        return state
-
-    @staticmethod
-    def _detect_math_problem(query: str) -> tuple[bool, str]:
-        """
-        基于规则的模式匹配检测数学问题。
-
-        规则:
-        1. 概念性问题排除（"是什么"、"什么是"等 + 短问题）
-        2. 同时包含数学操作关键词 + 数学对象关键词 → 数学题
-        3. 其他 → 普通查询
-
-        Args:
-            query: 用户查询
-
-        Returns:
-            (is_math, reason) - 是否为数学问题及原因
-        """
-        query_lower = query.strip().lower()
-
-        # 1. 概念性问题排除
-        for concept_kw in ConversationNodes.CONCEPT_KEYWORDS:
-            if concept_kw in query_lower and len(query) < 50:
-                return (False, "concept_question")
-
-        # 2. 同时包含数学操作+数学对象 → 数学题
-        has_operation = any(kw in query_lower for kw in ConversationNodes.MATH_OPERATION_KEYWORDS)
-        has_object = any(kw in query_lower for kw in ConversationNodes.MATH_OBJECT_KEYWORDS)
-
-        if has_operation and has_object:
-            return (True, "math_problem")
-
-        return (False, "general_query")
-
-    @staticmethod
-    def route_after_math_check(state: ConversationState) -> str:
-        """
-        路由决策: 数学检测后的下一步。
-
-        Args:
-            state: Current conversation state
-
-        Returns:
-            目标节点名称 (math/normal)
-        """
-        if state.get("is_math_problem", False):
-            return "math"
-        return "normal"
-
     @staticmethod
     def route_after_classification(state: ConversationState) -> str:
         """
@@ -1254,12 +1207,12 @@ class ConversationNodes:
     # -------------------------------------------------------------------------
     async def evaluate_complexity(self, state: ConversationState) -> ConversationState:
         """
-        Query Complexity Evaluation - 评估问题复杂度，决定使用本地还是外部模型。
+        查询复杂度评估 — 决定使用本地还是外部模型。
 
-        使用本地 Ollama 模型快速评估问题复杂度（0-10分）：
-        - 0-3分：简单问题 - 本地 Ollama 足够
-        - 4-6分：中等复杂 - 可用本地，必要时用外部
-        - 7-10分：复杂问题 - 使用外部 API 模型
+        使用启发式规则快速评估问题复杂度（0-10分）：
+        - 0-3分：简单问题 — 本地 Ollama 足够
+        - 4-6分：中等复杂 — 可用本地，必要时用外部
+        - 7-10分：复杂问题 — 使用外部 API 模型
 
         复杂度评估维度：
         1. 问题长度（越长越复杂）
@@ -1269,10 +1222,10 @@ class ConversationNodes:
         5. 意图是否清晰
 
         Args:
-            state: Current conversation state
+            state: 当前对话状态
 
         Returns:
-            Updated state with complexity_score and complexity_reason populated
+            更新后的状态（complexity_score 和 complexity_reason 已填充）
         """
         async with time_node("evaluate_complexity", state):
             query = state["user_query"].strip()
@@ -1318,22 +1271,22 @@ class ConversationNodes:
     # -------------------------------------------------------------------------
     async def web_search(self, state: ConversationState) -> ConversationState:
         """
-        Web Search - Fetch realtime information from the internet.
+        联网搜索 — 从互联网获取实时信息。
 
-        Uses Tavily Search API to get current data for:
-        - Realtime queries (weather, news, prices)
-        - Low relevance fallback (when knowledge base doesn't have answer)
+        使用 Tavily Search API 获取最新数据：
+        - 实时查询（天气、新闻、行情）
+        - 知识库未命中时的低相关度兜底
 
-        Checks:
-        1. Web search enabled in settings
-        2. Tavily API key configured
-        3. Employee has web_search capability
+        前置检查：
+        1. 联网搜索已在设置中启用
+        2. Tavily API Key 已配置
+        3. 员工拥有联网搜索能力
 
         Args:
-            state: Current conversation state
+            state: 当前对话状态
 
         Returns:
-            Updated state with web_search_results populated
+            更新后的状态（web_search_results 已填充）
         """
         async with time_node("web_search", state):
             try:
@@ -1683,7 +1636,7 @@ class ConversationNodes:
         实际的流式输出在 chat_stream_v1.py 中根据这些配置执行。
         """
         async with time_node("generate_answer", state):
-            # If final_answer is already set (direct match), skip placeholder
+            # final_answer 已设置（直接匹配），跳过占位
             if state.get("final_answer"):
                 logger.info(
                     f"Direct match answer already set, skipping LLM generation: answer_length={len(state['final_answer'])}"
@@ -1846,7 +1799,7 @@ class ConversationNodes:
                         return state
 
             # 计算置信度
-            confidence = 0.5  # Base confidence
+            confidence = 0.5  # 基础置信度
             if intent == "greeting":
                 confidence = 0.98
             elif web_search_used:
@@ -1958,21 +1911,21 @@ class ConversationNodes:
     # -------------------------------------------------------------------------
     async def save_conversation(self, state: ConversationState) -> ConversationState:
         """
-        Save Conversation Record - Persist conversation to MongoDB.
+        保存对话记录 — 持久化到 MongoDB。
 
-        Saves:
-        - User query and AI response
-        - Performance metrics (timing, confidence)
-        - Data sources used (KB, web search)
-        - Intent and verification results
+        保存内容：
+        - 用户查询和 AI 回复
+        - 性能指标（耗时、置信度）
+        - 使用的数据源（知识库、联网搜索）
+        - 意图和校验结果
 
-        Also updates session with new messages.
+        同时更新会话中的消息记录。
 
         Args:
-            state: Current conversation state
+            state: 当前对话状态
 
         Returns:
-            Updated state with conversation_id populated
+            更新后的状态（conversation_id 已填充）
         """
         async with time_node("save_conversation", state):
             try:
