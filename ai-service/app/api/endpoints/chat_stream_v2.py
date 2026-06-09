@@ -243,15 +243,6 @@ async def generate_openai_stream_v2(
             "workflow_start_time": time.time(),
             "node_timings": {},
             "ttfb_ms": None,
-            # LLM parameters from OpenAI request
-            "llm_temperature": request.temperature,
-            "llm_top_p": request.top_p,
-            "llm_max_tokens": request.max_tokens,
-            "llm_presence_penalty": request.presence_penalty,
-            "llm_frequency_penalty": request.frequency_penalty,
-            "llm_seed": request.seed,
-            "llm_n": request.n,
-            "llm_tools": [tool.model_dump() for tool in request.tools] if request.tools else None,
             # Additional context
             "channel_name": request.channel_name,
             "team_id": request.team_id,

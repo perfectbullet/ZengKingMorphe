@@ -172,15 +172,6 @@ class ConversationState(TypedDict):
     verification_result: Optional[Dict[str, Any]]
     complexity_score: float  # 0-10: 问题复杂度评分
     complexity_reason: str  # 复杂度评分的原因说明
-    # LLM parameters from OpenAI-style request
-    llm_temperature: Optional[float]
-    llm_top_p: Optional[float]
-    llm_max_tokens: Optional[int]
-    llm_presence_penalty: Optional[float]
-    llm_frequency_penalty: Optional[float]
-    llm_seed: Optional[int]
-    llm_n: Optional[int]
-    llm_tools: Optional[List[Dict[str, Any]]]
     # Additional context from client
     channel_name: Optional[str]
     team_id: Optional[str]
