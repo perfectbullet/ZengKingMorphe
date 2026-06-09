@@ -3,6 +3,7 @@ Chat stream response generator for /v1/chat/completions endpoint.
 
 This version can be modified for custom behavior specific to v1 API.
 """
+
 import os
 import asyncio
 import hashlib
@@ -10,7 +11,7 @@ import json
 import re
 import time
 from datetime import datetime
-import random
+
 from typing import AsyncGenerator, Optional, Any
 
 from langchain_openai import ChatOpenAI
@@ -35,6 +36,7 @@ from app.services.math_intent_heuristic import is_math_problem
 from app.services.word2latex_service import word_to_latex
 from app.utils.common import sanitize_filename, detect_dominant_language
 from app.services.raganything_wrapper import get_raganything_stream
+
 logger = get_logger(__name__)
 
 # =============================================================================
@@ -69,6 +71,7 @@ CHUNK_TYPE_ERROR = "error"
 # Utility Functions
 # =============================================================================
 
+
 def _clean_user_query(text: str) -> str:
     """
     Clean user query by removing leading punctuation.
@@ -79,8 +82,9 @@ def _clean_user_query(text: str) -> str:
     Returns:
         Cleaned text with leading punctuation removed
     """
-    text = re.sub(r'^[，。！？、；：,.?!;:\s]+', '', text)
+    text = re.sub(r"^[，。！？、；：,.?!;:\s]+", "", text)
     return text.lstrip()
+
 
 def _build_history_prefix_for_query(
     context_messages: list,
@@ -99,7 +103,7 @@ def _build_history_prefix_for_query(
        塞给小模型（qwen3:14b 等）会显著拉偏“该用什么语言回答”的判断，导致出现
        “英文问、混合中英文答”这类污染。这里在构造历史前缀时，统一丢弃主导语言
        与 ``prefer_zh_output`` 不一致的消息；纯数字/标点等无法判定语言的消息保留。
- 
+
     动态上下文记忆：
        当上游 classify_query_type 把本轮判定为 ``unrelated``（与历史无关）时，
        统一返回空字符串——RAG 检索与最终生成都不再看到任何历史前缀，等价于
@@ -114,7 +118,7 @@ def _build_history_prefix_for_query(
 
     if not context_messages:
         return ""
-    
+
     target_lang = "zh" if prefer_zh_output else "en"
     filtered: list = []
     skipped = 0
@@ -129,7 +133,7 @@ def _build_history_prefix_for_query(
             skipped += 1
             continue
         filtered.append(m)
- 
+
     if skipped > 0:
         logger.info(
             f"[history_prefix] language filter: target={target_lang}, "
@@ -138,7 +142,7 @@ def _build_history_prefix_for_query(
 
     if not filtered:
         return ""
- 
+
     recent = filtered[-max_turns:]
     lines: list[str] = []
     for m in recent:
@@ -150,9 +154,21 @@ def _build_history_prefix_for_query(
         if len(content) > 300:
             content = content[:300] + "…"
         # 角色标签（中英适配）
-        role_label = "User" if role == "user" else "Assistant" if role == "assistant" else role or "Message"
+        role_label = (
+            "User"
+            if role == "user"
+            else "Assistant"
+            if role == "assistant"
+            else role or "Message"
+        )
         if prefer_zh_output:
-            role_label = "用户" if role == "user" else "助手" if role == "assistant" else role_label
+            role_label = (
+                "用户"
+                if role == "user"
+                else "助手"
+                if role == "assistant"
+                else role_label
+            )
         lines.append(f"{role_label}: {content}")
 
     history_text = "\n".join(lines).strip()
@@ -173,10 +189,11 @@ def _build_history_prefix_for_query(
     return (
         "[Conversation history (for context)]\n"
         f"{history_text}\n\n"
-        "Requirement: If the user uses pronouns or follow-ups like \"it/this/why/the result seems wrong/recalculate\", "
+        'Requirement: If the user uses pronouns or follow-ups like "it/this/why/the result seems wrong/recalculate", '
         "resolve them by referring to the prior problem statement, conditions, conclusion, key variables, formulas, definitions, "
         "and your previous steps. If information is still missing, ask for the missing details.\n\n"
     )
+
 
 def _prefer_zh_output(user_query: str) -> bool:
     """判断输出语言：含中文→中文，含英文→英文，其余默认中文"""
@@ -188,9 +205,11 @@ def _prefer_zh_output(user_query: str) -> bool:
         return False
     return True
 
+
 # =============================================================================
 # Source Attribution
 # =============================================================================
+
 
 def format_sources(
     retrieved_docs: list[dict],
@@ -247,9 +266,11 @@ def format_sources(
 
     return sources
 
+
 # =============================================================================
 # Formula to Voice Conversion
 # =============================================================================
+
 
 def _has_math_symbols_simple(text: str) -> bool:
     """
@@ -261,8 +282,9 @@ def _has_math_symbols_simple(text: str) -> bool:
     Returns:
         True if text contains math symbols
     """
-    math_symbol_pattern = re.compile(r'[∈∉⊂⊃⊆⊇∪∩∅∨∧¬∀∃→⇒⇐⇔≡≠≤≥≈≪≫√∞²³°π∏∑∫∂∇Δ]')
+    math_symbol_pattern = re.compile(r"[∈∉⊂⊃⊆⊇∪∩∅∨∧¬∀∃→⇒⇐⇔≡≠≤≥≈≪≫√∞²³°π∏∑∫∂∇Δ]")
     return math_symbol_pattern.search(text) is not None
+
 
 async def _process_segment_for_output(
     segment: str,
@@ -293,22 +315,37 @@ async def _process_segment_for_output(
         display_content = map_english_to_chinese(display_content)
         display_content = replace_en_math_verbs(display_content)
     if has_latex_formula(display_content):
-        logger.info(f"[{log_prefix} 公式转换] 转换前长度={len(display_content)}, 转换前={repr(display_content)}")
+        logger.info(
+            f"[{log_prefix} 公式转换] 转换前长度={len(display_content)}, 转换前={repr(display_content)}"
+        )
         voice_content = await convert_formula_to_voice(display_content, revise_llm)
-        logger.info(f"[{log_prefix} 公式转换] 转换后长度={len(voice_content)}, 转换后={repr(voice_content)}")
+        logger.info(
+            f"[{log_prefix} 公式转换] 转换后长度={len(voice_content)}, 转换后={repr(voice_content)}"
+        )
     elif enable_math_sentence_conversion and _has_math_symbols_simple(display_content):
-        logger.info(f"[{log_prefix} 数学句子转换] 转换前长度={len(display_content)}, 转换前={repr(display_content)}")
-        voice_content = await convert_math_sentence_to_voice(display_content, revise_llm)
-        logger.info(f"[{log_prefix} 数学句子转换] 转换后长度={len(voice_content)}, 转换后={repr(voice_content)}")
+        logger.info(
+            f"[{log_prefix} 数学句子转换] 转换前长度={len(display_content)}, 转换前={repr(display_content)}"
+        )
+        voice_content = await convert_math_sentence_to_voice(
+            display_content, revise_llm
+        )
+        logger.info(
+            f"[{log_prefix} 数学句子转换] 转换后长度={len(voice_content)}, 转换后={repr(voice_content)}"
+        )
     else:
         logger.info(f"{log_prefix}没有公式: {display_content}")
         voice_content = display_content
     # Strip markdown formatting from voice_content for TTS
     # (display_content retains original markdown formatting for display)
-    logger.info(f"[{log_prefix} 语音voice_content markdown清理前: {repr(voice_content)}")
+    logger.info(
+        f"[{log_prefix} 语音voice_content markdown清理前: {repr(voice_content)}"
+    )
     voice_content = strip_markdown_for_tts(voice_content)
-    logger.info(f"[{log_prefix} 语音voice_content markdown清理后: {repr(voice_content)}")
+    logger.info(
+        f"[{log_prefix} 语音voice_content markdown清理后: {repr(voice_content)}"
+    )
     return display_content, voice_content
+
 
 def _build_token_chunk_data(
     chat_id: str,
@@ -322,12 +359,15 @@ def _build_token_chunk_data(
         "object": "chat.completion.chunk",
         "created": created,
         "model": model,
-        "choices": [{
-            "index": 0,
-            "delta": {"content": content},
-            "finish_reason": None,
-        }],
+        "choices": [
+            {
+                "index": 0,
+                "delta": {"content": content},
+                "finish_reason": None,
+            }
+        ],
     }
+
 
 async def _stream_segment_with_formula_conversion(
     segment: str,
@@ -378,20 +418,32 @@ async def _stream_segment_with_formula_conversion(
     new_sequence = chunk_sequence + 1
     await asyncio.sleep(CHUNK_SAVE_DELAY_SECONDS)
     await save_stream_chunk(
-        db, chat_id, new_sequence, session_id, user_id, employee_id,
+        db,
+        chat_id,
+        new_sequence,
+        session_id,
+        user_id,
+        employee_id,
         "token",
-        {**voice_chunk_data, "choices": [{
-            **voice_chunk_data["choices"][0],
-            "delta": {"content": display_content},
-        }]},
-        conversation_id
+        {
+            **voice_chunk_data,
+            "choices": [
+                {
+                    **voice_chunk_data["choices"][0],
+                    "delta": {"content": display_content},
+                }
+            ],
+        },
+        conversation_id,
     )
 
     return new_sequence, voice_chunk_data
 
+
 # =============================================================================
 # Main Stream Generator
 # =============================================================================
+
 
 def _extract_user_query(messages: list) -> str:
     """Extract the last user message from the messages list."""
@@ -400,7 +452,10 @@ def _extract_user_query(messages: list) -> str:
             return msg.content
     return messages[-1].content if messages else ""
 
-def _build_initial_state(request: OpenAIChatRequest, session_id: str, user_query: str) -> dict:
+
+def _build_initial_state(
+    request: OpenAIChatRequest, session_id: str, user_query: str
+) -> dict:
     """Build the initial state for the conversation workflow."""
     return {
         "messages": [],
@@ -438,7 +493,7 @@ def _build_initial_state(request: OpenAIChatRequest, session_id: str, user_query
         "llm_frequency_penalty": request.frequency_penalty,
         "llm_seed": request.seed,
         "llm_n": request.n,
-        "llm_tools": [tool.model_dump() for tool in request.tools] if request.tools else None,
+        "llm_tools": [],
         "channel_name": request.channel_name,
         "team_id": request.team_id,
         # Streaming output configuration
@@ -458,7 +513,6 @@ def _build_initial_state(request: OpenAIChatRequest, session_id: str, user_query
         # 动态上下文记忆：classify_query_type 节点会改写为 "related"/"unrelated"
         "context_dependence": None,
         "context_dependence_reason": None,
-
     }
 
 
@@ -488,6 +542,7 @@ def _enforce_target_year_consistency(text: str, target_year: int | None) -> str:
     # 拼接结果，为空则返回原文
     cleaned = "".join(rebuilt).strip()
     return cleaned or text
+
 
 def _build_finish_chunk_data(
     chat_id: str,
@@ -520,6 +575,7 @@ def _build_finish_chunk_data(
         },
     }
 
+
 def _update_finish_chunk_metadata(
     finish_chunk_data: dict,
     final_state: dict,
@@ -545,9 +601,11 @@ def _update_finish_chunk_metadata(
         "model": model_name,
     }
 
+
 # =============================================================================
 # MongoDB Storage
 # =============================================================================
+
 
 async def save_stream_chunk(
     db: Any,
@@ -655,7 +713,9 @@ async def generate_openai_stream_v1(
 
     user_query = _clean_user_query(_extract_user_query(request.messages))
     prefer_zh_output = _prefer_zh_output(user_query)
-    logger.info(f"Request params | max_tokens={request.max_tokens} | model={request.model} | temperature={request.temperature} | top_p={request.top_p}")
+    logger.info(
+        f"Request params | max_tokens={request.max_tokens} | model={request.model} | temperature={request.temperature} | top_p={request.top_p}"
+    )
 
     # ── ASR → LaTeX 转换（仅数学问题） ──
     if is_math_problem(user_query):
@@ -674,7 +734,9 @@ async def generate_openai_stream_v1(
                     msg.content = converted
                     break
         else:
-            logger.info(f"ASR→LaTeX skipped (no result): duration={duration:.2f}s, query={user_query[:80]!r}")
+            logger.info(
+                f"ASR→LaTeX skipped (no result): duration={duration:.2f}s, query={user_query[:80]!r}"
+            )
 
     initial_state = _build_initial_state(request, session_id, user_query)
     # 工作流全局输出语言偏好
@@ -687,7 +749,9 @@ async def generate_openai_stream_v1(
     )
     think_tag_buffer = ThinkTagBuffer()  # 用于过滤 think 标签
 
-    finish_chunk_data = _build_finish_chunk_data(chat_id, created, request.model, user_query)
+    finish_chunk_data = _build_finish_chunk_data(
+        chat_id, created, request.model, user_query
+    )
 
     chunk_sequence = 0
     raw_token_index = 0
@@ -704,8 +768,14 @@ async def generate_openai_stream_v1(
         ],
     }
     await save_stream_chunk(
-        db, chat_id, chunk_sequence, session_id, request.user_id,
-        request.employee_id, "user_query", user_query_chunk_data
+        db,
+        chat_id,
+        chunk_sequence,
+        session_id,
+        request.user_id,
+        request.employee_id,
+        "user_query",
+        user_query_chunk_data,
     )
 
     role_chunk_data = {
@@ -724,8 +794,14 @@ async def generate_openai_stream_v1(
 
     chunk_sequence += 1
     await save_stream_chunk(
-        db, chat_id, chunk_sequence, session_id, request.user_id,
-        request.employee_id, "role", role_chunk_data
+        db,
+        chat_id,
+        chunk_sequence,
+        session_id,
+        request.user_id,
+        request.employee_id,
+        "role",
+        role_chunk_data,
     )
 
     yield json.dumps(role_chunk_data)
@@ -734,12 +810,16 @@ async def generate_openai_stream_v1(
     current_state = initial_state.copy()
     model_name = request.model
 
-    async for event in conversation_workflow.workflow.astream(initial_state, stream_mode="updates"):
+    async for event in conversation_workflow.workflow.astream(
+        initial_state, stream_mode="updates"
+    ):
         node_name = list(event.keys())[0] if event else None
         state_update = event.get(node_name, {}) if node_name else {}
 
         # DEBUG: 打印事件结构
-        logger.debug(f"Event | node={node_name} | state_update_keys={list(state_update.keys())}")
+        logger.debug(
+            f"Event | node={node_name} | state_update_keys={list(state_update.keys())}"
+        )
 
         if state_update:
             current_state.update(state_update)
@@ -758,17 +838,31 @@ async def generate_openai_stream_v1(
                 "object": "chat.completion.chunk",
                 "created": created,
                 "model": "status",
-                "choices": [{"index": 0, "delta": {"content": reject_message}, "finish_reason": "sensitive"}],
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"content": reject_message},
+                        "finish_reason": "sensitive",
+                    }
+                ],
             }
             chunk_sequence += 1
             await save_stream_chunk(
-                db, chat_id, chunk_sequence, session_id, request.user_id,
-                request.employee_id, "done", reject_chunk_data
+                db,
+                chat_id,
+                chunk_sequence,
+                session_id,
+                request.user_id,
+                request.employee_id,
+                "done",
+                reject_chunk_data,
             )
             yield json.dumps(reject_chunk_data)
-            logger.info(f"Sensitive word detected | reject_message sent | breaking workflow")
+            logger.info(
+                f"Sensitive word detected | reject_message sent | breaking workflow"
+            )
             break  # 跳出循环，终止后续处理
-            
+
         # 当到达 generate_answer 节点时，开始流式输出
         if node_name == "generate_answer":
             streaming_type = current_state.get("streaming_type")
@@ -794,50 +888,94 @@ async def generate_openai_stream_v1(
 
             if existing_answer and streaming_type == "text":
                 # 噪声输入或其他预设响应，直接返回
-                ttfb_ms = int((time.time() - initial_state["workflow_start_time"]) * 1000)
+                ttfb_ms = int(
+                    (time.time() - initial_state["workflow_start_time"]) * 1000
+                )
                 current_state["ttfb_ms"] = ttfb_ms
-                logger.info(f"Using preset answer | length={len(existing_answer)} | ttfb_ms={ttfb_ms}")
+                logger.info(
+                    f"Using preset answer | length={len(existing_answer)} | ttfb_ms={ttfb_ms}"
+                )
 
                 # 流式返回预设答案（通过 sentence_buffer 分段处理）
-                enable_math_sentence_conversion = bool(current_state.get("is_math_problem", False))
+                enable_math_sentence_conversion = bool(
+                    current_state.get("is_math_problem", False)
+                )
                 for char in existing_answer:
                     segment = sentence_buffer.add(char)
                     if segment:
-                        chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
-                            segment, revise_llm, chat_id, created, request.model,
-                            db, chunk_sequence, session_id, request.user_id,
-                            request.employee_id, current_state.get("conversation_id"),
+                        (
+                            chunk_sequence,
+                            chunk_data,
+                        ) = await _stream_segment_with_formula_conversion(
+                            segment,
+                            revise_llm,
+                            chat_id,
+                            created,
+                            request.model,
+                            db,
+                            chunk_sequence,
+                            session_id,
+                            request.user_id,
+                            request.employee_id,
+                            current_state.get("conversation_id"),
                             prefer_zh_output=prefer_zh_output,
                             enable_math_sentence_conversion=enable_math_sentence_conversion,
-                            log_prefix="PresetText"
+                            log_prefix="PresetText",
                         )
                         yield json.dumps(chunk_data)
 
                 # 刷新 buffer 中剩余内容
                 final_segment = await sentence_buffer.flush(is_final=True)
                 if final_segment:
-                    chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
-                        final_segment.content, revise_llm, chat_id, created, request.model,
-                        db, chunk_sequence, session_id, request.user_id,
-                        request.employee_id, current_state.get("conversation_id"),
+                    (
+                        chunk_sequence,
+                        chunk_data,
+                    ) = await _stream_segment_with_formula_conversion(
+                        final_segment.content,
+                        revise_llm,
+                        chat_id,
+                        created,
+                        request.model,
+                        db,
+                        chunk_sequence,
+                        session_id,
+                        request.user_id,
+                        request.employee_id,
+                        current_state.get("conversation_id"),
                         prefer_zh_output=prefer_zh_output,
                         enable_math_sentence_conversion=enable_math_sentence_conversion,
-                        log_prefix="PresetText-FinalSegment"
+                        log_prefix="PresetText-FinalSegment",
                     )
                     yield json.dumps(chunk_data)
 
                 # 发送结束标记
                 chunk_sequence += 1
-                finish_chunk_data["metadata"]["conversation_id"] = current_state.get("conversation_id", "")
-                finish_chunk_data["metadata"]["sources"] = current_state.get("sources", [])
-                finish_chunk_data["metadata"]["intent"] = current_state.get("intent", "")
-                finish_chunk_data["metadata"]["is_realtime_query"] = current_state.get("is_realtime_query", False)
-                finish_chunk_data["metadata"]["realtime_category"] = current_state.get("realtime_category", "")
+                finish_chunk_data["metadata"]["conversation_id"] = current_state.get(
+                    "conversation_id", ""
+                )
+                finish_chunk_data["metadata"]["sources"] = current_state.get(
+                    "sources", []
+                )
+                finish_chunk_data["metadata"]["intent"] = current_state.get(
+                    "intent", ""
+                )
+                finish_chunk_data["metadata"]["is_realtime_query"] = current_state.get(
+                    "is_realtime_query", False
+                )
+                finish_chunk_data["metadata"]["realtime_category"] = current_state.get(
+                    "realtime_category", ""
+                )
                 finish_chunk_data["metadata"]["confidence"] = 0.99
                 await save_stream_chunk(
-                    db, chat_id, chunk_sequence, session_id, request.user_id,
-                    request.employee_id, "done", finish_chunk_data,
-                    current_state.get("conversation_id", "")
+                    db,
+                    chat_id,
+                    chunk_sequence,
+                    session_id,
+                    request.user_id,
+                    request.employee_id,
+                    "done",
+                    finish_chunk_data,
+                    current_state.get("conversation_id", ""),
                 )
                 yield "[DONE]"
                 await conversation_workflow.save_conversation(current_state)
@@ -856,35 +994,51 @@ async def generate_openai_stream_v1(
                     "One sec, I'm putting this together…",
                 ]
             )
-            
+
             # 发送统一过渡话术，按输入语言适配
             preface = TALKING_POINTS[0] + ("\n" if prefer_zh_output else "\n")
-            enable_math_sentence_conversion = bool(current_state.get("is_math_problem", False))
+            enable_math_sentence_conversion = bool(
+                current_state.get("is_math_problem", False)
+            )
             chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
-                preface, revise_llm, chat_id, created, request.model,
-                db, chunk_sequence, session_id, request.user_id,
-                request.employee_id, current_state.get("conversation_id"),
+                preface,
+                revise_llm,
+                chat_id,
+                created,
+                request.model,
+                db,
+                chunk_sequence,
+                session_id,
+                request.user_id,
+                request.employee_id,
+                current_state.get("conversation_id"),
                 prefer_zh_output=prefer_zh_output,
                 enable_math_sentence_conversion=enable_math_sentence_conversion,
-                log_prefix="Preface"
+                log_prefix="Preface",
             )
             yield json.dumps(chunk_data)
 
             if not first_token_received:
                 first_token_received = True
-                ttfb_ms = int((time.time() - initial_state["workflow_start_time"]) * 1000)
+                ttfb_ms = int(
+                    (time.time() - initial_state["workflow_start_time"]) * 1000
+                )
                 current_state["ttfb_ms"] = ttfb_ms
                 logger.info(f"First token received | ttfb_ms={ttfb_ms}")
             model_name = streaming_type or model_name
             # 根据 streaming_type 选择不同的流式输出方式
             if streaming_type == "raganything_stream":
                 # RAGAnything 流式输出
-                raw_query = current_state.get("raganything_query", current_state.get("user_query", "")) 
+                raw_query = current_state.get(
+                    "raganything_query", current_state.get("user_query", "")
+                )
 
                 # 拼接最近对话历史（已按本轮语言过滤掉异种语言历史，避免语言污染）
                 # 动态上下文记忆：把上游 classify_query_type 的判定结果一起传进来，
                 # 当本轮与历史无关时直接拿到空前缀，等价于"全新对话"走 RAG。
-                context_messages = (current_state.get("context") or {}).get("messages") or []
+                context_messages = (current_state.get("context") or {}).get(
+                    "messages"
+                ) or []
                 history_prefix = _build_history_prefix_for_query(
                     context_messages=context_messages,
                     prefer_zh_output=prefer_zh_output,
@@ -902,7 +1056,9 @@ async def generate_openai_stream_v1(
                         "本次回复必须完整使用简体中文，不要输出英文段落或中英混合句子。"
                     )
                 else:
-                    lang_lead = "Please answer the following question in English only.\n\n"
+                    lang_lead = (
+                        "Please answer the following question in English only.\n\n"
+                    )
                     lang_tail = (
                         "\n\n[LANGUAGE CONSTRAINT] The conversation history above is only "
                         "for context reference. Your reply MUST be written entirely in English. "
@@ -912,7 +1068,9 @@ async def generate_openai_stream_v1(
                 query = (history_prefix or "") + lang_lead + raw_query + lang_tail
 
                 mode = current_state.get("raganything_mode", "hybrid")
-                logger.info(f"Using RAGAnything stream | query={query[:50]} | mode={mode}")
+                logger.info(
+                    f"Using RAGAnything stream | query={query[:50]} | mode={mode}"
+                )
                 # RAG 召回 / 错误状态跟踪：
                 # - rag_retrieval_empty：sources_info 显示 entities/chunks 都为 0 时置真，
                 #   作为 "RAG 没有结果" → 通用 LLM 兜底的"召回侧"判据；
@@ -921,7 +1079,9 @@ async def generate_openai_stream_v1(
                 # 因为 full_answer 本身就是空的，不会出现"两段答案叠加"的诡异体验）。
                 rag_retrieval_empty = False
                 rag_stream_error = False
-                async for chunk in get_raganything_stream(query, mode=mode, prefer_zh_output=prefer_zh_output):
+                async for chunk in get_raganything_stream(
+                    query, mode=mode, prefer_zh_output=prefer_zh_output
+                ):
                     chunk_type = chunk.get("type")
                     content = chunk.get("content")
                     if chunk_type == "chunk":
@@ -931,26 +1091,45 @@ async def generate_openai_stream_v1(
                         full_answer += content
                         raw_token_index += 1
                         await save_raw_token(
-                            db, chat_id, session_id, request.user_id, request.employee_id,
-                            content, raw_token_index, "raganything",
+                            db,
+                            chat_id,
+                            session_id,
+                            request.user_id,
+                            request.employee_id,
+                            content,
+                            raw_token_index,
+                            "raganything",
                             current_state.get("conversation_id"),
                         )
                         segment = sentence_buffer.add(content)
                         if segment:
-                            chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
-                                segment, revise_llm, chat_id, created, request.model,
-                                db, chunk_sequence, session_id, request.user_id,
-                                request.employee_id, current_state.get("conversation_id"),
+                            (
+                                chunk_sequence,
+                                chunk_data,
+                            ) = await _stream_segment_with_formula_conversion(
+                                segment,
+                                revise_llm,
+                                chat_id,
+                                created,
+                                request.model,
+                                db,
+                                chunk_sequence,
+                                session_id,
+                                request.user_id,
+                                request.employee_id,
+                                current_state.get("conversation_id"),
                                 prefer_zh_output=prefer_zh_output,
                                 enable_math_sentence_conversion=enable_math_sentence_conversion,
-                                log_prefix="RAGAnything"
+                                log_prefix="RAGAnything",
                             )
                             yield json.dumps(chunk_data)
                     elif chunk_type == "sources_info":
                         content: dict
-                        logger.info(f"📊 检索到: {content['entities_count']} 个实体, "
-                           f"{content['relationships_count']} 个关系, "
-                           f"{content['chunks_count']} 个文档块")
+                        logger.info(
+                            f"📊 检索到: {content['entities_count']} 个实体, "
+                            f"{content['relationships_count']} 个关系, "
+                            f"{content['chunks_count']} 个文档块"
+                        )
                         # 召回完全为空时记录"RAG 无召回"标记；不立刻打断流，
                         # 让 RAGAnything 走完它自己的输出，最后再统一判断是否需要兜底。
                         if (
@@ -966,37 +1145,47 @@ async def generate_openai_stream_v1(
                     elif chunk_type == "sources":
                         # 捕获 RAGAnything 返回的 sources
                         sources = content
-                        
+
                         # 【调试代码】
                         try:
                             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                             os.makedirs("json格式数据", exist_ok=True)
                             json_file_path = f"json格式数据/{timestamp}_sources.json"
-                            with open(json_file_path, 'w', encoding='utf-8') as f:
+                            with open(json_file_path, "w", encoding="utf-8") as f:
                                 json.dump(sources, f, ensure_ascii=False, indent=2)
                             print(f"📁 来源数据已保存到: {json_file_path}")
                         except Exception as e:
-                            logger.warning(f"Failed to save sources debug json: error={e}")
+                            logger.warning(
+                                f"Failed to save sources debug json: error={e}"
+                            )
                         # 【调试代码】
-                        
+
                         # 处理实体引用
                         if sources.get("entities"):
                             entities = sources["entities"]
-                            current_state["sources"].append({
-                                "type": "entity",
-                                "from": "【知识图谱】",
-                                "entities": sources["entities"]
-                            })
-                            logger.info(f"RAGAnything entities | count={len(entities)} | 添加到 state['sources']")
+                            current_state["sources"].append(
+                                {
+                                    "type": "entity",
+                                    "from": "【知识图谱】",
+                                    "entities": sources["entities"],
+                                }
+                            )
+                            logger.info(
+                                f"RAGAnything entities | count={len(entities)} | 添加到 state['sources']"
+                            )
                         # 处理文档块引用
                         if sources.get("chunks"):
                             chunks = sources["chunks"]
-                            current_state["sources"].append({
-                                "type": "chunk",
-                                "from": "【文档块】",
-                                "chunks": chunks
-                            })
-                            logger.info(f"RAGAnything chunks | count={len(chunks)} | 添加到 state['sources']")
+                            current_state["sources"].append(
+                                {
+                                    "type": "chunk",
+                                    "from": "【文档块】",
+                                    "chunks": chunks,
+                                }
+                            )
+                            logger.info(
+                                f"RAGAnything chunks | count={len(chunks)} | 添加到 state['sources']"
+                            )
                     elif chunk_type == "error":
                         logger.error(f"RAGAnything error | {chunk['content']}")
                         rag_stream_error = True
@@ -1004,13 +1193,24 @@ async def generate_openai_stream_v1(
                 # 刷新 buffer 中剩余内容
                 final_segment = await sentence_buffer.flush(is_final=True)
                 if final_segment:
-                    chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
-                        final_segment.content, revise_llm, chat_id, created, request.model,
-                        db, chunk_sequence, session_id, request.user_id,
-                        request.employee_id, current_state.get("conversation_id"),
+                    (
+                        chunk_sequence,
+                        chunk_data,
+                    ) = await _stream_segment_with_formula_conversion(
+                        final_segment.content,
+                        revise_llm,
+                        chat_id,
+                        created,
+                        request.model,
+                        db,
+                        chunk_sequence,
+                        session_id,
+                        request.user_id,
+                        request.employee_id,
+                        current_state.get("conversation_id"),
                         prefer_zh_output=prefer_zh_output,
                         enable_math_sentence_conversion=enable_math_sentence_conversion,
-                        log_prefix="RAGAnything FinalSegment"
+                        log_prefix="RAGAnything FinalSegment",
                     )
                     yield json.dumps(chunk_data)
 
@@ -1028,9 +1228,7 @@ async def generate_openai_stream_v1(
                 #     保留原 RAG 路径的最终态。
                 stripped_answer = (full_answer or "").strip()
                 need_general_fallback = (
-                    rag_stream_error
-                    or rag_retrieval_empty
-                    or not stripped_answer
+                    rag_stream_error or rag_retrieval_empty or not stripped_answer
                 )
                 if need_general_fallback:
                     logger.info(
@@ -1043,6 +1241,7 @@ async def generate_openai_stream_v1(
                         from app.services.conversation.conversation_helpers import (
                             build_generation_messages as _build_general_messages,
                         )
+
                         fallback_messages = _build_general_messages(current_state)
                         fallback_llm, fallback_model = (
                             conversation_workflow.get_streaming_llm(current_state)
@@ -1058,30 +1257,58 @@ async def generate_openai_stream_v1(
                             full_answer += fb_token
                             raw_token_index += 1
                             await save_raw_token(
-                                db, chat_id, session_id, request.user_id, request.employee_id,
-                                fb_token, raw_token_index, "rag_fallback",
+                                db,
+                                chat_id,
+                                session_id,
+                                request.user_id,
+                                request.employee_id,
+                                fb_token,
+                                raw_token_index,
+                                "rag_fallback",
                                 current_state.get("conversation_id"),
                             )
                             fb_segment = sentence_buffer.add(fb_token)
                             if fb_segment:
-                                chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
-                                    fb_segment, revise_llm, chat_id, created, request.model,
-                                    db, chunk_sequence, session_id, request.user_id,
-                                    request.employee_id, current_state.get("conversation_id"),
+                                (
+                                    chunk_sequence,
+                                    chunk_data,
+                                ) = await _stream_segment_with_formula_conversion(
+                                    fb_segment,
+                                    revise_llm,
+                                    chat_id,
+                                    created,
+                                    request.model,
+                                    db,
+                                    chunk_sequence,
+                                    session_id,
+                                    request.user_id,
+                                    request.employee_id,
+                                    current_state.get("conversation_id"),
                                     prefer_zh_output=prefer_zh_output,
                                     enable_math_sentence_conversion=enable_math_sentence_conversion,
-                                    log_prefix="RAG-Fallback-LLM"
+                                    log_prefix="RAG-Fallback-LLM",
                                 )
                                 yield json.dumps(chunk_data)
                         fb_final = await sentence_buffer.flush(is_final=True)
                         if fb_final:
-                            chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
-                                fb_final.content, revise_llm, chat_id, created, request.model,
-                                db, chunk_sequence, session_id, request.user_id,
-                                request.employee_id, current_state.get("conversation_id"),
+                            (
+                                chunk_sequence,
+                                chunk_data,
+                            ) = await _stream_segment_with_formula_conversion(
+                                fb_final.content,
+                                revise_llm,
+                                chat_id,
+                                created,
+                                request.model,
+                                db,
+                                chunk_sequence,
+                                session_id,
+                                request.user_id,
+                                request.employee_id,
+                                current_state.get("conversation_id"),
                                 prefer_zh_output=prefer_zh_output,
                                 enable_math_sentence_conversion=enable_math_sentence_conversion,
-                                log_prefix="RAG-Fallback-FinalSegment"
+                                log_prefix="RAG-Fallback-FinalSegment",
                             )
                             yield json.dumps(chunk_data)
                         # 标记当次实际生成模型，便于 metadata 与日志统计
@@ -1111,12 +1338,23 @@ async def generate_openai_stream_v1(
                 if direct_text:
                     full_answer += direct_text
                     # 调用流式输出工具，分段发送文本并转换公式格式
-                    chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
-                        direct_text, revise_llm, chat_id, created, request.model,
-                        db, chunk_sequence, session_id, request.user_id,
-                        request.employee_id, current_state.get("conversation_id"),
+                    (
+                        chunk_sequence,
+                        chunk_data,
+                    ) = await _stream_segment_with_formula_conversion(
+                        direct_text,
+                        revise_llm,
+                        chat_id,
+                        created,
+                        request.model,
+                        db,
+                        chunk_sequence,
+                        session_id,
+                        request.user_id,
+                        request.employee_id,
+                        current_state.get("conversation_id"),
                         enable_math_sentence_conversion=enable_math_sentence_conversion,
-                        log_prefix="DirectText"
+                        log_prefix="DirectText",
                     )
                     yield json.dumps(chunk_data)
 
@@ -1124,16 +1362,21 @@ async def generate_openai_stream_v1(
                 final_state = current_state
                 final_state["final_answer"] = full_answer
 
-
             elif streaming_type == "math_llm":
                 # 数学模型推理流式输出
                 streaming_llm = current_state.get("streaming_llm")
                 messages = current_state.get("streaming_messages")
                 if not streaming_llm or not messages:
-                    logger.error("streaming_llm or messages not configured for math_llm type")
+                    logger.error(
+                        "streaming_llm or messages not configured for math_llm type"
+                    )
                     continue
-                _llm_base_url = getattr(streaming_llm, 'openai_api_base', None) or getattr(streaming_llm, 'base_url', 'unknown')
-                logger.info(f"Using math LLM stream | model={model_name} | base_url={_llm_base_url}")
+                _llm_base_url = getattr(
+                    streaming_llm, "openai_api_base", None
+                ) or getattr(streaming_llm, "base_url", "unknown")
+                logger.info(
+                    f"Using math LLM stream | model={model_name} | base_url={_llm_base_url}"
+                )
 
                 # 使用真正的流式输出
                 logger.info("Starting streaming response with astream")
@@ -1143,12 +1386,20 @@ async def generate_openai_stream_v1(
                 start_time = time.perf_counter()
                 try:
                     async for chunk in streaming_llm.astream(messages):
-                        token = chunk.content if hasattr(chunk, 'content') else str(chunk)
+                        token = (
+                            chunk.content if hasattr(chunk, "content") else str(chunk)
+                        )
                         if token:
                             raw_token_index += 1
                             await save_raw_token(
-                                db, chat_id, session_id, request.user_id, request.employee_id,
-                                token, raw_token_index, "math_llm",
+                                db,
+                                chat_id,
+                                session_id,
+                                request.user_id,
+                                request.employee_id,
+                                token,
+                                raw_token_index,
+                                "math_llm",
                                 current_state.get("conversation_id"),
                             )
                             # 过滤 think 标签
@@ -1160,21 +1411,40 @@ async def generate_openai_stream_v1(
                                 full_answer += filtered_token
                                 segment = sentence_buffer.add(filtered_token)
                                 if segment:
-                                    chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
-                                        segment, revise_llm, chat_id, created, request.model,
-                                        db, chunk_sequence, session_id, request.user_id,
-                                        request.employee_id, current_state.get("conversation_id"),
+                                    (
+                                        chunk_sequence,
+                                        chunk_data,
+                                    ) = await _stream_segment_with_formula_conversion(
+                                        segment,
+                                        revise_llm,
+                                        chat_id,
+                                        created,
+                                        request.model,
+                                        db,
+                                        chunk_sequence,
+                                        session_id,
+                                        request.user_id,
+                                        request.employee_id,
+                                        current_state.get("conversation_id"),
                                         prefer_zh_output=prefer_zh_output,
                                         enable_math_sentence_conversion=True,
-                                        log_prefix="Math-LLM-Stream"
+                                        log_prefix="Math-LLM-Stream",
                                     )
                                     yield json.dumps(chunk_data)
 
                                     if not first_token_received:
                                         first_token_received = True
-                                        ttfb_ms = int((time.time() - initial_state["workflow_start_time"]) * 1000)
+                                        ttfb_ms = int(
+                                            (
+                                                time.time()
+                                                - initial_state["workflow_start_time"]
+                                            )
+                                            * 1000
+                                        )
                                         current_state["ttfb_ms"] = ttfb_ms
-                                        logger.info(f"First token received | ttfb_ms={ttfb_ms}")
+                                        logger.info(
+                                            f"First token received | ttfb_ms={ttfb_ms}"
+                                        )
                 except Exception as e:
                     logger.error(
                         f"Math LLM astream failed | base_url={_llm_base_url} | model={model_name} | "
@@ -1184,33 +1454,52 @@ async def generate_openai_stream_v1(
                     raise
 
                 duration = int((time.perf_counter() - start_time) * 1000)
-                logger.info(f"Math-LLM done | duration={duration}ms | output_chars={len(full_answer)}")
+                logger.info(
+                    f"Math-LLM done | duration={duration}ms | output_chars={len(full_answer)}"
+                )
 
                 # 刷新 buffer 中剩余内容
                 final_segment = await sentence_buffer.flush(is_final=True)
                 if final_segment:
-                    chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
-                        final_segment.content, revise_llm, chat_id, created, request.model,
-                        db, chunk_sequence, session_id, request.user_id,
-                        request.employee_id, current_state.get("conversation_id"),
+                    (
+                        chunk_sequence,
+                        chunk_data,
+                    ) = await _stream_segment_with_formula_conversion(
+                        final_segment.content,
+                        revise_llm,
+                        chat_id,
+                        created,
+                        request.model,
+                        db,
+                        chunk_sequence,
+                        session_id,
+                        request.user_id,
+                        request.employee_id,
+                        current_state.get("conversation_id"),
                         prefer_zh_output=prefer_zh_output,
                         enable_math_sentence_conversion=True,
-                        log_prefix="Math-LLM FinalSegment"
+                        log_prefix="Math-LLM FinalSegment",
                     )
                     yield json.dumps(chunk_data)
 
                 final_state = current_state
                 final_state["final_answer"] = full_answer
 
-            elif streaming_type == "langchain_llm":              
-                # LangChain LLM 流式输出（原有逻辑）, 可以不使用话术                
+            elif streaming_type == "langchain_llm":
+                # LangChain LLM 流式输出（原有逻辑）, 可以不使用话术
                 streaming_llm = current_state.get("streaming_llm")
                 messages = current_state.get("streaming_messages")
                 if not streaming_llm or not messages:
-                    logger.error("streaming_llm or messages not configured for langchain_llm type")
+                    logger.error(
+                        "streaming_llm or messages not configured for langchain_llm type"
+                    )
                     continue
-                _llm_base_url = getattr(streaming_llm, 'openai_api_base', None) or getattr(streaming_llm, 'base_url', 'unknown')
-                logger.info(f"Using LangChain LLM stream | model={model_name} | base_url={_llm_base_url}")
+                _llm_base_url = getattr(
+                    streaming_llm, "openai_api_base", None
+                ) or getattr(streaming_llm, "base_url", "unknown")
+                logger.info(
+                    f"Using LangChain LLM stream | model={model_name} | base_url={_llm_base_url}"
+                )
 
                 # 实时查询+年份锚点：先生成再清洗，避免回答出现冲突年份
                 target_year = current_state.get("target_year")
@@ -1230,13 +1519,24 @@ async def generate_openai_stream_v1(
                     if text:
                         full_answer += text
                         # 分段流式输出
-                        chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
-                            text, revise_llm, chat_id, created, request.model,
-                            db, chunk_sequence, session_id, request.user_id,
-                            request.employee_id, current_state.get("conversation_id"),
+                        (
+                            chunk_sequence,
+                            chunk_data,
+                        ) = await _stream_segment_with_formula_conversion(
+                            text,
+                            revise_llm,
+                            chat_id,
+                            created,
+                            request.model,
+                            db,
+                            chunk_sequence,
+                            session_id,
+                            request.user_id,
+                            request.employee_id,
+                            current_state.get("conversation_id"),
                             prefer_zh_output=prefer_zh_output,
                             enable_math_sentence_conversion=enable_math_sentence_conversion,
-                            log_prefix="Realtime-YearAnchor"
+                            log_prefix="Realtime-YearAnchor",
                         )
                         yield json.dumps(chunk_data)
                     # 更新最终会话状态
@@ -1251,27 +1551,44 @@ async def generate_openai_stream_v1(
                             full_answer += token
                             raw_token_index += 1
                             await save_raw_token(
-                                db, chat_id, session_id, request.user_id, request.employee_id,
-                                token, raw_token_index, "langchain_llm",
+                                db,
+                                chat_id,
+                                session_id,
+                                request.user_id,
+                                request.employee_id,
+                                token,
+                                raw_token_index,
+                                "langchain_llm",
                                 current_state.get("conversation_id"),
                             )
                             segment = sentence_buffer.add(token)
                             token_len = len(token)
                             buffer_len = sentence_buffer.get_buffer_length()
-                            if segment or ('$$' in token[:10]):
+                            if segment or ("$$" in token[:10]):
                                 logger.info(
                                     f"[STREAMING] token_len={token_len}, buffer_len={buffer_len}, "
                                     f"has_segment={bool(segment)}, token_preview={repr(token[:50])}, "
                                     f"buffer_start={repr(sentence_buffer.buffer[:30])}, buffer_end={repr(sentence_buffer.buffer[-30:])}"
                                 )
                             if segment:
-                                chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
-                                    segment, revise_llm, chat_id, created, request.model,
-                                    db, chunk_sequence, session_id, request.user_id,
-                                    request.employee_id, current_state.get("conversation_id"),
+                                (
+                                    chunk_sequence,
+                                    chunk_data,
+                                ) = await _stream_segment_with_formula_conversion(
+                                    segment,
+                                    revise_llm,
+                                    chat_id,
+                                    created,
+                                    request.model,
+                                    db,
+                                    chunk_sequence,
+                                    session_id,
+                                    request.user_id,
+                                    request.employee_id,
+                                    current_state.get("conversation_id"),
                                     prefer_zh_output=prefer_zh_output,
                                     enable_math_sentence_conversion=enable_math_sentence_conversion,
-                                    log_prefix=""
+                                    log_prefix="",
                                 )
                                 yield json.dumps(chunk_data)
                 except Exception as e:
@@ -1283,13 +1600,24 @@ async def generate_openai_stream_v1(
                     raise
                 final_segment = await sentence_buffer.flush(is_final=True)
                 if final_segment:
-                    chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
-                        final_segment.content, revise_llm, chat_id, created, request.model,
-                        db, chunk_sequence, session_id, request.user_id,
-                        request.employee_id, current_state.get("conversation_id"),
+                    (
+                        chunk_sequence,
+                        chunk_data,
+                    ) = await _stream_segment_with_formula_conversion(
+                        final_segment.content,
+                        revise_llm,
+                        chat_id,
+                        created,
+                        request.model,
+                        db,
+                        chunk_sequence,
+                        session_id,
+                        request.user_id,
+                        request.employee_id,
+                        current_state.get("conversation_id"),
                         prefer_zh_output=prefer_zh_output,
                         enable_math_sentence_conversion=enable_math_sentence_conversion,
-                        log_prefix="FinalSegment"
+                        log_prefix="FinalSegment",
                     )
                     yield json.dumps(chunk_data)
 
@@ -1301,13 +1629,21 @@ async def generate_openai_stream_v1(
 
     sources = final_state.get("sources", [])
 
-    _update_finish_chunk_metadata(finish_chunk_data, final_state, user_query, model_name, sources)
+    _update_finish_chunk_metadata(
+        finish_chunk_data, final_state, user_query, model_name, sources
+    )
 
     chunk_sequence += 1
     await save_stream_chunk(
-        db, chat_id, chunk_sequence, session_id, request.user_id,
-        request.employee_id, "done", finish_chunk_data,
-        final_state.get("conversation_id", "")
+        db,
+        chat_id,
+        chunk_sequence,
+        session_id,
+        request.user_id,
+        request.employee_id,
+        "done",
+        finish_chunk_data,
+        final_state.get("conversation_id", ""),
     )
 
     yield json.dumps(finish_chunk_data)
@@ -1319,7 +1655,7 @@ async def generate_openai_stream_v1(
     safe_query = sanitize_filename(user_query)
     filename = f"{timestamp}_{session_id}_{safe_query}_finish_chunk_data.json"
     filepath = os.path.join(save_dir, filename)
-    with open(filepath, 'w', encoding='utf-8') as f:
+    with open(filepath, "w", encoding="utf-8") as f:
         json.dump(finish_chunk_data, f, ensure_ascii=False, indent=2, default=str)
     logger.info(f"[调试] 保存 conversation_state 到 {filepath}")
 
@@ -1327,6 +1663,8 @@ async def generate_openai_stream_v1(
     try:
         await conversation_workflow.save_conversation(final_state)
     except Exception as e:
-        logger.error(f"Failed to persist streaming conversation at end: {e}", exc_info=True)
+        logger.error(
+            f"Failed to persist streaming conversation at end: {e}", exc_info=True
+        )
 
     yield "[DONE]"

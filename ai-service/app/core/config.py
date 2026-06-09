@@ -63,16 +63,6 @@ class Settings(BaseSettings):
         description="统一 LLM API Key（单一数据源）"
     )
 
-    # --- 以下为旧配置，保留作为 fallback 兼容，新部署无需设置 ---
-    # Ollama Configuration (本地模型配置)
-    # ollama_base_url: str = Field(default="http://localhost:11434")
-    # ollama_model: str = Field(default="qwen3:14b")
-    # ollama_grader_model: str = Field(default="qwen3:14b")
-    # ollama_keep_alive_interval: int = Field(
-    #     default=180,
-    #     description="Interval in seconds between Ollama keep-alive requests (0 to disable)"
-    # )
-
     # OpenAI-style API Configuration (外部模型配置)
     openai_api_key: str = Field(
         default="", description="OpenAI-style API key (e.g., SiliconFlow)"

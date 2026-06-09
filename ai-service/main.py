@@ -13,8 +13,7 @@ from app.core.config import settings
 from app.core.logging import setup_logging, get_logger
 from app.core.database import mongodb
 from app.core.elasticsearch import es_db
-# from app.services.task_processor import task_processor
-from app.services.ollama_keepalive import ollama_keep_alive
+
 from app.api.middleware.error_handler import (
     http_exception_handler,
     validation_exception_handler,
@@ -94,9 +93,6 @@ async def lifespan(app: FastAPI):
         # Start task processor
         # await task_processor.start()
 
-        # Start Ollama keep-alive service
-        await ollama_keep_alive.start()
-
         # 后台预热 RAGAnything / QueryClassifier 单例，避免首请求被 ~4s 懒加载拉满。
         # 用 create_task 不阻塞 lifespan，让服务尽快开始接受请求；预热失败时回落
         # 到原有的请求时懒加载路径，不会影响服务启动。
@@ -117,10 +113,6 @@ async def lifespan(app: FastAPI):
         # Stop task processor first (停止任务处理器)
         # await task_processor.stop()
         logger.debug("Task processor stopped")
-
-        # Stop Ollama keep-alive service (停止 Ollama 保活服务)
-        await ollama_keep_alive.stop()
-        logger.debug("Ollama keep-alive service stopped")
 
         # Disconnect databases in reverse order (按相反顺序断开数据库连接)
         await mongodb.disconnect()
