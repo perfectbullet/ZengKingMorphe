@@ -65,13 +65,13 @@ class Settings(BaseSettings):
 
     # --- 以下为旧配置，保留作为 fallback 兼容，新部署无需设置 ---
     # Ollama Configuration (本地模型配置)
-    ollama_base_url: str = Field(default="http://localhost:11434")
-    ollama_model: str = Field(default="qwen2.5:7b")
-    ollama_grader_model: str = Field(default="qwen2.5:7b")
-    ollama_keep_alive_interval: int = Field(
-        default=180,
-        description="Interval in seconds between Ollama keep-alive requests (0 to disable)"
-    )
+    # ollama_base_url: str = Field(default="http://localhost:11434")
+    # ollama_model: str = Field(default="qwen3:14b")
+    # ollama_grader_model: str = Field(default="qwen3:14b")
+    # ollama_keep_alive_interval: int = Field(
+    #     default=180,
+    #     description="Interval in seconds between Ollama keep-alive requests (0 to disable)"
+    # )
 
     # OpenAI-style API Configuration (外部模型配置)
     openai_api_key: str = Field(
@@ -219,7 +219,7 @@ class Settings(BaseSettings):
     )
     # noise_preset_min_confidence
     # 仅当 LLM 分类置信度 >= 此等级时才允许判 noise；其余降级为 GENERAL_LLM。
-    # qwen2.5:7b 这类小分类器对短/口语化输入误判率较高，默认要求 ``high``
+    # qwen3:14b 这类小分类器对短/口语化输入误判率较高，默认要求 ``high``
     # 才能触发预设话术，把 medium/low 的噪声判定一律放行给 LLM。
     noise_preset_min_confidence: str = Field(
         default="high",

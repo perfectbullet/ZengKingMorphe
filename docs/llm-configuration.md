@@ -22,7 +22,7 @@ OPENAI_MODEL=deepseek-ai/DeepSeek-V3.1-Terminus
 
 ```bash
 OLLAMA_BASE_URL=http://192.168.8.233:11434
-OLLAMA_MODEL=qwen2.5:7b
+OLLAMA_MODEL=qwen3:14b
 ```
 
 ### Math LLM (vLLM / Qwen / Phi)

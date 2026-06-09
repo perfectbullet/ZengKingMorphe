@@ -21,12 +21,7 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.services.conversation.conversation_state import ConversationState
 from app.utils.common import detect_dominant_language
-from prompts.prompts import (
-    GEOMETRY_FORMULA_BOOK,
-    MATH_SYSTEM_PROMPT,
-    MATH_SIMPLE_SYSTEM_PROMPT,
-    QWEN_MATH_SYSTEM_PROMPT,
-)
+from prompts.prompts import QWEN_MATH_SYSTEM_PROMPT
 
 logger = get_logger(__name__)
 
@@ -210,7 +205,7 @@ def select_llm(state: ConversationState, local_llm, remote_llm) -> Tuple[Any, st
         reason = [f"complexity_{complexity_score:.1f}", complexity_reason]
 
     # 「需要广博/最新世界知识」的事实性人事查询：复杂度评估节点对它们看起来"短而
-    # 简单"会给出 3.0 分这种低分，但本地小模型（qwen2.5:7b 等）面对这类问题常
+    # 简单"会给出 3.0 分这种低分，但本地小模型（qwen3:14b 等）面对这类问题常
     # 表现为"我无法提供具体姓名"或答出过时人名（如"李克强"→"李强"）。
     # 直接基于查询本身重新判定：命中「现任/当前 + 公共职务 + 谁」三元模式时强制
     # 走远端大模型——它们的预训练语料对国际、国家级公共职务覆盖远比本地 7B 完整。
@@ -460,7 +455,7 @@ def _build_conversation_history(
     语言一致性过滤（双向对称）：
         “本轮输出语言只跟当前问句的语言相关”。反复使用同一 session 来回切换中英文
         测试时，历史会积累异种语言消息；把这些消息原样注入给 LLM，会和 web context、
-        员工角色描述等其他语料叠加，让小模型（如 qwen2.5:7b）在本轮问句下飘移到错
+        员工角色描述等其他语料叠加，让小模型（如 qwen3:14b）在本轮问句下飘移到错
         误语言（典型表现：“英文问、中英文混合答”）。
         这里对两个方向都启用过滤——主导语言与本轮目标语言不一致的历史消息一律
         丢弃；纯数字/标点等无法判定语言的消息保留。
@@ -1263,7 +1258,7 @@ def _is_simple_math_query(query: str) -> bool:
 
 
 # 「需要广博/最新世界知识」的关键词组合：典型代表是「现任 / 当前 + 公共职务 + 谁」。
-# 本地小模型（如 qwen2.5:7b）这类问题的命中率很低——要么没训练、要么回避不答；
+# 本地小模型（如 qwen3:14b）这类问题的命中率很低——要么没训练、要么回避不答；
 # 远端 DeepSeek 等大模型对这类知识覆盖完整得多。在「混合路由」模式里，把命中
 # 此模式的问题手动抬高复杂度分数，让它们越过 ``complexity_threshold`` 走远端 LLM。
 # 词表与正则集中在这里维护，避免把"该走哪个模型"的判断散落到各处。

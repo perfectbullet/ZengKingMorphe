@@ -96,7 +96,7 @@ def _build_history_prefix_for_query(
     语言一致性过滤（双向对称）：
        “本轮输出语言只跟当前问句的语言相关”——若历史里夹杂了与本轮不同语言的
        消息（典型场景：上一轮中文路况问答 → 本轮英文提问），把这段异种语言原文
-       塞给小模型（qwen2.5:7b 等）会显著拉偏“该用什么语言回答”的判断，导致出现
+       塞给小模型（qwen3:14b 等）会显著拉偏“该用什么语言回答”的判断，导致出现
        “英文问、混合中英文答”这类污染。这里在构造历史前缀时，统一丢弃主导语言
        与 ``prefer_zh_output`` 不一致的消息；纯数字/标点等无法判定语言的消息保留。
  
@@ -890,7 +890,7 @@ async def generate_openai_stream_v1(
                     prefer_zh_output=prefer_zh_output,
                     context_dependence=current_state.get("context_dependence"),
                 )
-                # 语言锁定（三道防线，针对 qwen2.5:7b 这类对中文有偏向的模型）：
+                # 语言锁定（三道防线，针对 qwen3:14b 这类对中文有偏向的模型）：
                 # 1) history_prefix 之后立刻给出本轮语言指令；
                 # 2) 在 raw_query 前再次重申；
                 # 3) 在 raw_query 之后追加最终强约束（利用 LLM 的 recency bias）。

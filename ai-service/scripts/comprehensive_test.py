@@ -244,7 +244,7 @@ class APIClient:
 
         url = f"{self.host}/api/chat/v1/chat/completions"
         payload = {
-            "model": "qwen2.5:7b",
+            "model": "qwen3:14b",
             "messages": [{"role": "user", "content": query}],
             "stream": True,
             "employee_id": self.employee_id,

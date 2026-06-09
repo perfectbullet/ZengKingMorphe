@@ -170,7 +170,7 @@ docker-compose logs -f ai-service | findstr "TTFB"
 
 ```
 INFO     | app.services.ollama_keepalive:start:45 - Ollama keep-alive service started interval_seconds=180
-DEBUG    | app.services.ollama_keepalive:_send_keep_alive:88 - Ollama keep-alive ping successful models=['qwen2.5:7b', 'smartcreation/bge-large-zh-v1.5:latest']
+DEBUG    | app.services.ollama_keepalive:_send_keep_alive:88 - Ollama keep-alive ping successful models=['qwen3:14b', 'smartcreation/bge-large-zh-v1.5:latest']
 ```
 
 如果Ollama服务不可用,会记录错误但不会影响主服务:

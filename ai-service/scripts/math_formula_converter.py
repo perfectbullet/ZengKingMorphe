@@ -65,7 +65,7 @@ class MathFormulaConverter:
         self,
         api_key: Optional[str] = "no-key",  # Ollama 不需要真实 API key，任意值即可
         base_url: str = "http://192.168.8.233:11434",
-        model: str = "qwen2.5:7b-instruct",
+        model: str = "qwen3:14b",
         timeout: int = 30,  # API 请求超时时间（秒）
         max_formula_length: int = 500  # 最大公式长度限制
     ):

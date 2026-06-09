@@ -410,7 +410,7 @@ async def get_task_status(
             \n- Task status information (status, progress, doc_id, error, etc.)
     """
     try:
-        logger.info(f"get_task_status request task_id={task_id}")
+        # logger.info(f"get_task_status request task_id={task_id}")
 
         task = await task_processor.get_task_status(task_id)
 

@@ -2,7 +2,7 @@
 测试 generate_openai_stream_v1 流式输出
 
 基于日志参数测试流式输出功能：
-- model=qwen2.5:7b
+- model=qwen3:14b
 - user_id=3
 - employee_id=29
 - session_id=sess_4_3_29
@@ -38,7 +38,7 @@ logger = get_logger(__name__)
 
 # 默认测试参数（基于日志）
 DEFAULT_PARAMS = {
-    "model": "qwen2.5:7b",
+    "model": "qwen3:14b",
     "user_id": "3",
     "employee_id": "29",
     "session_id": "sess_4_3_29",
@@ -66,7 +66,7 @@ class ChatStreamV1Tester:
         employee_id: str = "29",
         session_id: Optional[str] = None,
         team_id: Optional[str] = "4",
-        model: str = "qwen2.5:7b",
+        model: str = "qwen3:14b",
         temperature: float = 0.7,
         top_p: float = 0.9,
         max_tokens: Optional[int] = None,
@@ -271,7 +271,7 @@ async def main():
     parser.add_argument(
         "--model", "-m",
         type=str,
-        default="qwen2.5:7b",
+        default="qwen3:14b",
         help="模型名称"
     )
     parser.add_argument(

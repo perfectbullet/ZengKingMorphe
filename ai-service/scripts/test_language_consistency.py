@@ -61,7 +61,7 @@ def strip_preface(text: str) -> str:
 def run_query(host: str, session_id: str, query: str, timeout: int = 120) -> str:
     url = host.rstrip("/") + "/api/chat/v1/chat/completions"
     body = {
-        "model": "qwen2.5:7b",
+        "model": "qwen3:14b",
         "messages": [{"role": "user", "content": query}],
         "stream": True,
         "employee_id": "68",

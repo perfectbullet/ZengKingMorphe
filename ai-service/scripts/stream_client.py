@@ -47,7 +47,7 @@ OpenAI-style streaming client for /api/chat/v1/chat/completions and /api/chat/v2
   --employee_id    29
   --user_id        3
   --session_id     sess_4_3_29
-  --model          qwen2.5:7b
+  --model          qwen3:14b
   --api-version    v1
 
 =======
@@ -178,7 +178,8 @@ def handle_stream_payloads(payload_iter: Iterator[str], start_time: float) -> in
                             first_token_latency = time.perf_counter() - start_time
                             print(f"⏱️ First token latency: {first_token_latency*1000:.2f}ms\n", file=sys.stderr)
                         
-                        print(f'# {idx}: {content!r}')
+                        print(f'# chunk-{idx}: {content!r}')
+                        # print(f'# chunk-for-md-{idx}: {content}')
 
                     # 检查 finish_reason
                     finish = choice.get("finish_reason")
@@ -288,7 +289,7 @@ def main():
     parser.add_argument("--employee_id", default="29", help="Employee ID, 默认: 29")
     parser.add_argument("--user_id", default="3", help="User ID, 默认: 3")
     parser.add_argument("--session_id", default="sess_4_3_29", help="Session ID, 默认: sess_4_3_29")
-    parser.add_argument("--model", default="qwen2.5:7b", help="Model name, 默认: qwen2.5:7b")
+    parser.add_argument("--model", default="qwen3:14b", help="Model name, 默认: qwen3:14b")
 
     # 新增参数
     parser.add_argument("--channel_name", default=None, help="Channel name (格式: employee_<team_id>_<user_id>_<employee_id>)")

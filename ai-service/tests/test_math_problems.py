@@ -54,7 +54,7 @@ logger = get_logger(__name__)
 DEFAULT_PROBLEMS_PATH = "/home/zj/math_model_deployment/Qwen2.5-Math/reports/problems.json"
 
 DEFAULT_PARAMS = {
-    "model": "qwen2.5:7b",
+    "model": "qwen3:14b",
     "user_id": "3",
     "employee_id": "29",
     "team_id": "4",

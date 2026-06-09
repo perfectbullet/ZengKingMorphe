@@ -300,7 +300,7 @@ else:           confidence = 0.5
 # 本地 LLM (Ollama)
 local_llm = ChatOllama(
     base_url=settings.ollama_base_url,
-    model=settings.ollama_model,  # qwen2.5:7b
+    model=settings.ollama_model,  # qwen3:14b
     temperature=0
 )
 

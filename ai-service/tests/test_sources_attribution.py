@@ -169,7 +169,7 @@ async def test_openai_completion(client: httpx.AsyncClient):
     print_separator()
 
     request_data = {
-        "model": "qwen2.5:7b",
+        "model": "qwen3:14b",
         "messages": [
             {"role": "user", "content": "首饰铸造工艺的优缺点是什么？"}
         ],

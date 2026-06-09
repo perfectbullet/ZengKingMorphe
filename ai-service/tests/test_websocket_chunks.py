@@ -9,10 +9,6 @@ This script connects to the WebSocket endpoint and displays received chunks.
 import asyncio
 import json
 import sys
-from pathlib import Path
-
-# Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 try:
     import websockets
@@ -70,12 +66,14 @@ async def test_websocket_chunks(
                         chunk_count += 1
                         chunk_type = data.get("chunk_type", "unknown")
                         sequence = data.get("sequence", 0)
-                        chunk_id = data.get("chunk_id", "")[:30]
+                        chunk_id = data.get("chunk_id", "")
 
                         # Different display for different chunk types
                         if chunk_type == "token":
                             content = data.get("chunk_data", {}).get("choices", [{}])[0].get("delta", {}).get("content", "")
-                            print(f"[{message_count:04d}] 🔤 Token #{sequence}: '{content}'")
+                            print(f"[{message_count:04d}] 🔤 chunk-{sequence}: {content!r}")
+                            print(f"[{message_count:04d}] 🔤 chunk-md-{sequence}: {content}")
+                            
                         elif chunk_type == "done":
                             print(f"[{message_count:04d}] ✅ Done - {chunk_id}")
                         elif chunk_type == "error":
@@ -83,13 +81,13 @@ async def test_websocket_chunks(
                         elif chunk_type == "role":
                             print(f"[{message_count:04d}] 🎭 Role - {chunk_id}")
                         elif chunk_type == "user_query":
-                            query = data.get("chunk_data", {}).get("messages", [{}])[-1].get("content", "")[:50]
-                            print(f"[{message_count:04d}] 👤 User: {query}...")
+                            query = data.get("chunk_data", {}).get("messages", [{}])[-1].get("content", "")
+                            print(f"[{message_count:04d}] 👤 User: {query}")
                         else:
                             print(f"[{message_count:04d}] 📦 {chunk_type} - {chunk_id}")
 
                 except json.JSONDecodeError:
-                    print(f"[{message_count:04d}] ⚠️  Non-JSON message: {message[:100]}")
+                    print(f"[{message_count:04d}] ⚠️  Non-JSON message: {message}")
 
     except KeyboardInterrupt:
         elapsed = asyncio.get_event_loop().time() - start_time
