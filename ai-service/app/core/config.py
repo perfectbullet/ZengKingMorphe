@@ -34,13 +34,8 @@ class Settings(BaseSettings):
         extra="allow",  # ⚠️ 允许未定义的字段（不推荐）
     )
 
-    # LLM Configuration
-    use_ollama: bool = Field(
-        default=False, description="Use Ollama instead of OpenAI-style API (deprecated, use llm_routing_mode)"
-    )
-
     # LLM Routing Mode (推荐使用此配置控制模型选择)
-    # local_only - 仅使用本地 Ollama 模型
+    # local_only - 仅使用本地 vllm 模型
     # remote_only - 仅使用外部 API 模型
     # hybrid - 根据问题复杂度自动选择模型
     llm_routing_mode: str = Field(
@@ -77,7 +72,7 @@ class Settings(BaseSettings):
 
     # 混合模式复杂度阈值配置 (hybrid 模式下生效)
     # 复杂度评估使用本地 LLM 快速判断问题复杂度 (0-10分)
-    # 0-6分: 使用本地 Ollama (简单到中等复杂)
+    # 0-6分: 使用本地 vllm (简单到中等复杂)
     # 7-10分: 使用外部 API (高复杂度)
     complexity_threshold: float = Field(
         default=7.0,
@@ -89,7 +84,7 @@ class Settings(BaseSettings):
     # Embedding Configuration
     embedding_type: str = Field(
         default="openai_style",
-        description="Embedding type: openai_style, siliconflow, or ollama",
+        description="Embedding type: openai_style, siliconflow",
     )
     embedding_model: str = Field(default="bge-large-zh-v1.5-2k:latest")
     embedding_base_url: str = Field(
@@ -371,14 +366,6 @@ class Settings(BaseSettings):
     rerank_enabled: bool = Field(
         default=True,
         description="Enable document reranking using BGE Reranker"
-    )
-    reranker_type: str = Field(
-        default="bge_api",
-        description="Reranker type: bge_api, ollama (legacy), bge, noop, hybrid"
-    )
-    ollama_reranker_model: str = Field(
-        default="qllama/bge-reranker-v2-m3:latest",
-        description="Ollama reranker model name"
     )
 
     # BGE Reranker API Configuration

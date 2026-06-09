@@ -64,9 +64,9 @@ class ConversationWorkflow:
     def __init__(self):
         """初始化工作流，创建双 LLM 实例用于混合路由。"""
         # 统一 LLM 配置（单一数据源）
-        llm_base_url = os.getenv("LLM_BASE_URL") or settings.ollama_base_url
-        llm_model = os.getenv("LLM_MODEL") or settings.ollama_model
-        llm_api_key = os.getenv("LLM_API_KEY") or settings.siliconflow_api_key or "no-key"
+        llm_base_url = os.getenv("LLM_BASE_URL")
+        llm_model = os.getenv("LLM_MODEL")
+        llm_api_key = os.getenv("LLM_API_KEY", "no-key")
 
         # 初始化本地 LLM — 用于快速、简单的响应
         self.local_llm = ChatOpenAI(

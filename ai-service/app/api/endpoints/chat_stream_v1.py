@@ -21,6 +21,7 @@ from app.models.database import StreamChunkModel, RawTokenModel
 from app.core.logging import get_logger
 from app.core.database import get_database
 from app.services.conversation_service import conversation_workflow
+from app.services.conversation.conversation_state import ConversationState
 
 from app.services.revise_llm import (
     get_revise_llm,
@@ -456,58 +457,96 @@ def _extract_user_query(messages: list) -> str:
     return messages[-1].content if messages else ""
 
 
+# ConversationState 全字段的默认值表。
+# 新增字段到 ConversationState TypedDict 后，必须同步更新此表；
+# 启动时会自动校验，遗漏则断言失败。
+_STATE_DEFAULTS: ConversationState = {
+    # ── 用户/会话标识 ──
+    "messages": [],
+    "user_query": "",
+    "user_id": "",
+    "user_name": "",
+    "head_url": "",
+    "session_id": "",
+    "employee_id": "",
+    "employee_config": {},
+    # ── 查询分类 ──
+    "is_realtime_query": False,
+    "realtime_category": "",
+    "realtime_detect_reason": "",
+    "intent": "",
+    "entities": {},
+    "classification_label": None,
+    "classification_confidence": None,
+    "classification_reason": None,
+    "is_math_problem": False,
+    "answer_mode": None,
+    # ── 检索 & 联网 ──
+    "retrieved_docs": [],
+    "relevance_score": 0.0,
+    "web_search_results": [],
+    "kb_used": [],
+    "web_search_used": False,
+    "web_search_error": None,
+    "sources": [],
+    # ── 答案 & 验证 ──
+    "final_answer": "",
+    "confidence": 0.0,
+    "direct_match": None,
+    "direct_text_answer": None,
+    "query_rewritten": False,
+    "rewritten_query": "",
+    "compressed_context": None,
+    "answer_verified": False,
+    "verification_result": None,
+    # ── 上下文 & 敏感词 ──
+    "context": {},
+    "has_sensitive": False,
+    "error": None,
+    "faq_matched": None,
+    "context_dependence": None,
+    "context_dependence_reason": None,
+    # ── 对话持久化 ──
+    "conversation_id": "",
+    # ── 性能指标 ──
+    "response_time_ms": 0,
+    "workflow_start_time": 0.0,
+    "node_timings": {},
+    "ttfb_ms": None,
+    "complexity_score": 0.0,
+    "complexity_reason": "",
+    "target_year": None,
+    # ── 流式输出配置 ──
+    "streaming_type": None,
+    "streaming_llm": None,
+    "streaming_messages": None,
+    "raganything_query": None,
+    "raganything_mode": None,
+    # ── 客户端附加上下文 ──
+    "channel_name": None,
+    "team_id": None,
+    # ── 输出语言偏好 ──
+    "prefer_zh_output": True,
+}
+
+# 启动时校验：_STATE_DEFAULTS 必须覆盖 ConversationState 的全部字段
+_missing = set(ConversationState.__annotations__) - set(_STATE_DEFAULTS)
+assert not _missing, f"_STATE_DEFAULTS 缺少 ConversationState 字段: {_missing}"
+
+
 def _build_initial_state(
     request: OpenAIChatRequest, session_id: str, user_query: str
-) -> dict:
-    """构建对话工作流的初始状态。"""
+) -> ConversationState:
+    """基于 _STATE_DEFAULTS 构建初始状态，覆盖请求相关字段。"""
     return {
-        "messages": [],
+        **_STATE_DEFAULTS,
         "user_query": user_query,
         "user_id": request.user_id,
         "session_id": session_id,
         "employee_id": request.employee_id,
-        "employee_config": {},
-        "is_realtime_query": False,
-        "realtime_category": "",
-        "realtime_detect_reason": "",
-        "intent": "",
-        "entities": {},
-        "retrieved_docs": [],
-        "relevance_score": 0.0,
-        "web_search_results": [],
-        "final_answer": "",
-        "confidence": 0.0,
-        "context": {},
-        "has_sensitive": False,
-        "error": None,
-        "faq_matched": None,
-        "kb_used": [],
-        "web_search_used": False,
-        "web_search_error": None,
-        "conversation_id": "",
-        "response_time_ms": 0,
-        "workflow_start_time": time.time(),
-        "node_timings": {},
-        "ttfb_ms": None,
         "channel_name": request.channel_name,
         "team_id": request.team_id,
-        # 流式输出配置
-        "streaming_type": None,
-        "streaming_llm": None,
-        "streaming_messages": None,
-        "raganything_query": None,
-        "raganything_mode": None,
-        "sources": [],
-        # LLM 分类结果（来自 QueryClassifier）
-        "classification_label": None,
-        "classification_confidence": None,
-        "classification_reason": None,
-        # Answer mode（由 classify_query_type 写入；下游统一按此分发生成路径）
-        "answer_mode": None,
-        "target_year": None,
-        # 动态上下文记忆：classify_query_type 节点会改写为 "related"/"unrelated"
-        "context_dependence": None,
-        "context_dependence_reason": None,
+        "workflow_start_time": time.time(),
     }
 
 
@@ -628,15 +667,6 @@ async def save_stream_chunk(
         conversation_id: 可选的对话 ID
     """
     # 打印所有参数用于调试
-    chunk_data_preview = str(chunk_data)[:200] if chunk_data else None
-    logger.info(
-        f"[save_stream_chunk] chat_id={chat_id}, seq={chunk_sequence}, "
-        f"session_id={session_id}, user_id={user_id}, employee_id={employee_id}, "
-        f"chunk_type={chunk_type}, conversation_id={conversation_id}, "
-        f"chunk_data_keys={list(chunk_data.keys()) if chunk_data else []}, "
-        f"chunk_data_preview={chunk_data_preview}"
-    )
-
     chunk_record = StreamChunkModel(
         chunk_id=f"{chat_id}_chunk_{chunk_sequence}",
         conversation_id=conversation_id,
@@ -687,12 +717,9 @@ async def generate_openai_stream_v1(
 ) -> AsyncGenerator[str, None]:
     """
     生成 OpenAI 风格的 v1 API 流式响应。
-
     本版本可针对 v1 端点的自定义行为进行修改。
-
     Args:
         request: OpenAI 聊天请求
-
     Yields:
         OpenAI 格式的 SSE 消息
     """
@@ -727,7 +754,7 @@ async def generate_openai_stream_v1(
                     break
         else:
             logger.info(
-                f"ASR→LaTeX skipped (no result): duration={duration:.2f}s, query={user_query[:80]!r}"
+                f"ASR→LaTeX skipped (no result): duration={duration:.2f}s, query={user_query!r}"
             )
 
     initial_state = _build_initial_state(request, session_id, user_query)
@@ -802,15 +829,13 @@ async def generate_openai_stream_v1(
     current_state = initial_state.copy()
     model_name = SERVER_MODEL
 
-    async for event in conversation_workflow.workflow.astream(
-        initial_state, stream_mode="updates"
-    ):
+    async for event in conversation_workflow.workflow.astream(initial_state, stream_mode="updates"):
         node_name = list(event.keys())[0] if event else None
         state_update = event.get(node_name, {}) if node_name else {}
 
         # 调试：打印事件结构
-        logger.debug(
-            f"Event | node={node_name} | state_update_keys={list(state_update.keys())}"
+        logger.info(
+            f"Event node={node_name} | state_update_keys={list(state_update.keys())}"
         )
 
         if state_update:
@@ -861,7 +886,7 @@ async def generate_openai_stream_v1(
             revise_llm = await get_revise_llm()
 
             # 调试：打印当前状态中的关键字段
-            logger.debug(
+            logger.info(
                 f"generate_answer state | streaming_type={streaming_type} | "
                 f"has_streaming_llm={current_state.get('streaming_llm') is not None} | "
                 f"intent={current_state.get('intent')} | "
@@ -885,7 +910,7 @@ async def generate_openai_stream_v1(
                 )
                 current_state["ttfb_ms"] = ttfb_ms
                 logger.info(
-                    f"Using preset answer | length={len(existing_answer)} | ttfb_ms={ttfb_ms}"
+                    f"Using preset answer | existing_answer={existing_answer} | ttfb_ms={ttfb_ms}"
                 )
 
                 # 流式返回预设答案（通过 sentence_buffer 分段处理）
@@ -989,9 +1014,8 @@ async def generate_openai_stream_v1(
 
             # 发送统一过渡话术，按输入语言适配
             preface = TALKING_POINTS[0] + ("\n" if prefer_zh_output else "\n")
-            enable_math_sentence_conversion = bool(
-                current_state.get("is_math_problem", False)
-            )
+            enable_math_sentence_conversion = current_state.get("is_math_problem", False)
+            
             chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
                 preface,
                 revise_llm,

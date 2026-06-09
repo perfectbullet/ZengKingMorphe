@@ -1201,7 +1201,6 @@ use_hybrid_search: true     # 启用混合搜索
 rrf_k: 60                  # RRF常数
 
 # 重排序配置
-reranker_type: "bge_api"   # bge_api, bge, hybrid
 bge_reranker_api_url: "http://192.168.8.233:8091"
 ```
 
