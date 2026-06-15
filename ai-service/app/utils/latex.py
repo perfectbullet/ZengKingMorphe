@@ -1,28 +1,28 @@
 """
-LaTeX formula processing utilities.
+LaTeX 公式处理工具集。
 
-Provides LaTeX formula normalization, cleaning, and escaping functions.
+提供 LaTeX 公式的规范化、清理和转义功能。
 """
 import re
 from typing import List, Optional
 
 def normalize_latex_delimiters(text: str) -> str:
     r"""
-    Normalize LaTeX delimiters by replacing escaped forms with standard format.
+    将转义的 LaTeX 定界符替换为标准格式。
 
-    Replacement rules:
-    - \( or \\( or \\\( → $
-    - \) or \\) or \\\) → $
-    - \[ or \\[ or \\\[ → $$
-    - \] or \\] or \\\] → $$
+    替换规则：
+    - \( 或 \\( 或 \\\( → $
+    - \) 或 \\) 或 \\\) → $
+    - \[ 或 \\[ 或 \\\[ → $$
+    - \] 或 \\] 或 \\\] → $$
 
     Args:
-        text: Text containing potentially escaped LaTeX delimiters
+        text: 可能包含转义 LaTeX 定界符的文本
 
     Returns:
-        Normalized text
+        规范化后的文本
     """
-    # Process from multiple backslashes to single backslashes
+    # 从多反斜杠到单反斜杠依次处理
     text = re.sub(r'\\\\\(', '$', text)
     text = re.sub(r'\\\\\)', '$', text)
     text = re.sub(r'\\\\\[', '$$', text)
@@ -35,18 +35,18 @@ def normalize_latex_delimiters(text: str) -> str:
 
     return text
 
-# Backward compatibility alias
+# 向后兼容别名
 _normalize_latex_delimiters = normalize_latex_delimiters
 
 def clean_latex_formula_spaces(text: str) -> str:
     """
-    Remove spaces inside LaTeX formula delimiters.
+    移除 LaTeX 公式定界符内侧的空格。
 
-    Processing rules:
+    处理规则：
     - `$ text $` → `$text$`
     - `$$ text $$` → `$$text$$`
-    - Only removes spaces directly adjacent to delimiters, keeps internal spaces
-    - External spaces (e.g., "formula $x^2$ and") are preserved
+    - 仅移除紧邻定界符的空格，保留公式内部空格
+    - 保留外部空格（如 "formula $x^2$ and"）
 
     Examples:
         >>> clean_latex_formula_spaces("$ S_n = a_1 \\cdot q^{n-1} $")
@@ -57,10 +57,10 @@ def clean_latex_formula_spaces(text: str) -> str:
         '公式 $x^2$ 和 $$y+z$$'
 
     Args:
-        text: Text containing LaTeX formulas
+        text: 包含 LaTeX 公式的文本
 
     Returns:
-        Text with spaces removed inside delimiter boundaries
+        定界符内侧空格已移除的文本
     """
     result = []
     i = 0
@@ -69,18 +69,22 @@ def clean_latex_formula_spaces(text: str) -> str:
     just_entered_formula = False
 
     while i < len(text):
+        # 跳过转义的美元符号 \$
         if i < len(text) - 1 and text[i] == '\\' and text[i + 1] == '$':
             result.append('\\$')
             i += 2
             continue
 
+        # 处理 $$ 定界符
         if text[i:i+2] == '$$':
             if not in_formula:
+                # 进入公式
                 in_formula = True
                 formula_delimiter = '$$'
                 result.append('$$')
                 just_entered_formula = True
             elif formula_delimiter == '$$':
+                # 退出公式前，移除尾部空格
                 while result and result[-1] == ' ':
                     result.pop()
                 in_formula = False
@@ -90,13 +94,16 @@ def clean_latex_formula_spaces(text: str) -> str:
             i += 2
             continue
 
+        # 处理 $ 定界符
         if text[i] == '$':
             if not in_formula:
+                # 进入公式
                 in_formula = True
                 formula_delimiter = '$'
                 result.append('$')
                 just_entered_formula = True
             elif formula_delimiter == '$':
+                # 退出公式前，移除尾部空格
                 while result and result[-1] == ' ':
                     result.pop()
                 in_formula = False
@@ -106,6 +113,7 @@ def clean_latex_formula_spaces(text: str) -> str:
             i += 1
             continue
 
+        # 刚进入公式时跳过前导空格
         if in_formula and just_entered_formula and text[i] == ' ':
             i += 1
             while i < len(text) and text[i] == ' ':
@@ -121,9 +129,9 @@ def clean_latex_formula_spaces(text: str) -> str:
 
 def escape_latex_backslashes(text: str) -> str:
     """
-    Escape single backslashes to double backslashes within LaTeX formulas.
+    在 LaTeX 公式内部将单反斜杠转义为双反斜杠。
 
-    Only processes content within $...$ or $$...$$ delimiters.
+    仅处理 $...$ 或 $$...$$ 定界符内的内容。
 
     Examples:
         >>> escape_latex_backslashes("$S_n = a_1 \\frac{1-q^n}{1-q}$")
@@ -132,10 +140,10 @@ def escape_latex_backslashes(text: str) -> str:
         '公式 $x^2$ 和 $$y+z$$'
 
     Args:
-        text: Text containing LaTeX formulas
+        text: 包含 LaTeX 公式的文本
 
     Returns:
-        Text with backslashes escaped within formulas
+        公式内反斜杠已转义的文本
     """
     result: List[str] = []
     i = 0
@@ -143,11 +151,13 @@ def escape_latex_backslashes(text: str) -> str:
     formula_delimiter: Optional[str] = None
 
     while i < len(text):
+        # 跳过转义的美元符号 \$
         if i < len(text) - 1 and text[i] == '\\' and text[i + 1] == '$':
             result.append('\\$')
             i += 2
             continue
 
+        # 处理 $$ 定界符
         if text[i:i+2] == '$$':
             if not in_formula:
                 in_formula = True
@@ -160,6 +170,7 @@ def escape_latex_backslashes(text: str) -> str:
             i += 2
             continue
 
+        # 处理 $ 定界符
         if text[i] == '$':
             if not in_formula:
                 in_formula = True
@@ -172,6 +183,7 @@ def escape_latex_backslashes(text: str) -> str:
             i += 1
             continue
 
+        # 在公式内部转义反斜杠
         if in_formula and text[i] == '\\':
             if i + 1 < len(text) and text[i + 1] == '\\':
                 result.append('\\\\')
@@ -187,10 +199,10 @@ def escape_latex_backslashes(text: str) -> str:
 
 def wrap_bare_boxed(text: str) -> str:
     r"""
-    Wrap bare \boxed{...} in $...$ delimiters.
+    将裸露的 \boxed{...} 用 $...$ 包裹。
 
-    Math models (e.g., vLLM/Qwen) may output \boxed{(2, 3)} without $ delimiters.
-    This function wraps only \boxed{...} that is not already inside $...$ or $$...$$.
+    数学模型（如 vLLM/Qwen）可能输出不带 $ 定界符的 \boxed{(2, 3)}。
+    本函数仅包裹不在 $...$ 或 $$...$$ 内部的 \boxed{...}。
 
     Examples:
         >>> wrap_bare_boxed("答案为 \\boxed{(2, 3)}")
@@ -199,10 +211,10 @@ def wrap_bare_boxed(text: str) -> str:
         '$$\\boxed{(2, 3)}$$'
 
     Args:
-        text: Text potentially containing bare \boxed{...}
+        text: 可能包含裸露 \boxed{...} 的文本
 
     Returns:
-        Text with bare \boxed{...} wrapped in $...$
+        裸露 \boxed{...} 已用 $...$ 包裹的文本
     """
     BOXED_PATTERN = re.compile(r'\\boxed\s*\{')
     result: list[str] = []
@@ -211,7 +223,7 @@ def wrap_bare_boxed(text: str) -> str:
     formula_delim: Optional[str] = None
 
     while i < len(text):
-        # Handle existing $$ delimiters
+        # 处理 $$ 定界符
         if text[i:i+2] == '$$':
             if not in_formula:
                 in_formula = True
@@ -223,7 +235,7 @@ def wrap_bare_boxed(text: str) -> str:
             i += 2
             continue
 
-        # Handle existing $ delimiters
+        # 处理 $ 定界符
         if text[i] == '$':
             if not in_formula:
                 in_formula = True
@@ -235,18 +247,18 @@ def wrap_bare_boxed(text: str) -> str:
             i += 1
             continue
 
-        # Already inside formula — copy verbatim
+        # 已在公式内部 —— 原样复制
         if in_formula:
             result.append(text[i])
             i += 1
             continue
 
-        # Check for bare \boxed{...}
+        # 检测裸露的 \boxed{...}
         m = BOXED_PATTERN.match(text, i)
         if m:
             start = i
             i = m.end()
-            # Consume the brace group {...} (matching nested braces)
+            # 消费花括号组 {...}（匹配嵌套花括号）
             depth = 1
             while i < len(text) and depth > 0:
                 if text[i] == '\\' and i + 1 < len(text):
@@ -257,7 +269,7 @@ def wrap_bare_boxed(text: str) -> str:
                 elif text[i] == '}':
                     depth -= 1
                 i += 1
-            # Wrap in $...$
+            # 用 $...$ 包裹
             result.append('$')
             result.append(text[start:i])
             result.append('$')
@@ -269,12 +281,13 @@ def wrap_bare_boxed(text: str) -> str:
 
 def normalize_latex_formulas(text: str) -> str:
     r"""
-    Perform complete LaTeX formula normalization.
+    执行完整的 LaTeX 公式规范化。
 
-    Applies operations in order:
-    1. Normalize delimiters (\( \) \[ \] → $ $$)
-    2. Remove spaces inside delimiters
-    3. Wrap bare \boxed{...} in $...$
+    按顺序执行以下操作：
+    1. 规范化定界符（\( \) \[ \] → $ $$）
+    2. 移除定界符内侧空格
+    3. 将裸露的 \boxed{...} 用 $...$ 包裹
+    4. 将 \text 替换为 \mathrm
 
     Examples:
         >>> normalize_latex_formulas(r"\( S_n = a_1 \cdot q^{n-1} \)")
@@ -285,10 +298,10 @@ def normalize_latex_formulas(text: str) -> str:
         '$\\boxed{(2, 3)}$'
 
     Args:
-        text: Text containing LaTeX formulas
+        text: 包含 LaTeX 公式的文本
 
     Returns:
-        Fully normalized text
+        完整规范化后的文本
     """
     text = normalize_latex_delimiters(text)
     text = clean_latex_formula_spaces(text)

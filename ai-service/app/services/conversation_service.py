@@ -35,6 +35,7 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.services.conversation.conversation_state import ConversationState
 from app.services.conversation.conversation_nodes import ConversationNodes
+from app.services.math_agent_service import MathAgentService, MathRuntimeConfig
 from app.utils.get_vllm_first_model import get_vllm_first_model
 
 logger = get_logger(__name__)
@@ -191,6 +192,10 @@ class ConversationWorkflow:
         - MATH_LLM_ENABLED: 是否启用（默认 true）
         - MATH_MODEL_BASE_URL: API 地址
         - MATH_MODEL_NAME: 模型名（不设则通过 vLLM 自动发现）
+        - MATH_RUNTIME_MODE: llm / cot / tir
+        - MATH_RUNTIME_LANG: zh / en（不设时按 query 粗略推断）
+        - MATH_TEMPERATURE / MATH_TOP_P: 非 Qwen3-32B 模型的采样参数；
+          Qwen3-32B 始终使用服务端 generation_config.json
 
         Args:
             state: 当前对话状态
@@ -211,23 +216,51 @@ class ConversationWorkflow:
         if not model_id:
             model_id = get_vllm_first_model(base_url)
 
-        math_temperature = os.getenv("MATH_TEMPERATURE", 0.6)
-        math_max_token = os.getenv("MATH_MAX_TOKEN", 10240)
+        math_temperature = float(os.getenv("MATH_TEMPERATURE", 0.6))
+        math_max_token = int(os.getenv("MATH_MAX_TOKEN", 10240))
+        math_top_p = float(os.getenv("MATH_TOP_P", 0.95))
+        use_model_generation_defaults = (
+            MathAgentService.is_model_generation_default(model_id)
+        )
+        if use_model_generation_defaults:
+            math_temperature = None
+            math_top_p = None
+        runtime_mode = os.getenv("MATH_RUNTIME_MODE", "llm").lower()
+        runtime_lang = (os.getenv("MATH_RUNTIME_LANG") or "").strip().lower()
+        if runtime_mode not in {"llm", "cot", "tir"}:
+            logger.warning(
+                f"Invalid MATH_RUNTIME_MODE={runtime_mode}, fallback to llm"
+            )
+            runtime_mode = "llm"
 
-        # 动态创建 ChatOpenAI 实例
-        math_llm = ChatOpenAI(
+        query_text = (
+            state.get("rewritten_query")
+            or state.get("user_query")
+            or ""
+        )
+        if runtime_lang not in {"zh", "en"}:
+            runtime_lang = MathAgentService.resolve_lang(query_text, fallback="zh")
+
+        math_service = MathAgentService(MathRuntimeConfig(
             base_url=base_url,
             api_key="dummy-key",  # vLLM 不需要真实 key
             model=model_id,
             temperature=math_temperature,
             max_tokens=math_max_token,
             streaming=True,
-            top_p=0.95,
+            top_p=math_top_p,
+        ))
+        math_llm = math_service.create_streaming_interface(
+            mode=runtime_mode,
+            lang=runtime_lang,
         )
 
         logger.info(
-            f"Math LLM created | model={model_id} | "
-            f"base_url={base_url} | math_temperature={math_temperature} | math_max_token={math_max_token}"
+            f"Math runtime created | mode={runtime_mode} | lang={runtime_lang} | "
+            f"model={model_id} | base_url={base_url} | "
+            f"sampling={'model_default' if use_model_generation_defaults else 'env'} | "
+            f"math_temperature={math_temperature} | math_top_p={math_top_p} | "
+            f"math_max_token={math_max_token}"
         )
 
         return math_llm, model_id

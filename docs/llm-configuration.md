@@ -31,15 +31,21 @@ OLLAMA_MODEL=qwen3:14b
 
 ```bash
 MATH_LLM_ENABLED=true
-MATH_LLM_BASE_URL=http://192.168.8.235:8000/v1
+MATH_MODEL_BASE_URL=http://192.168.8.235:8000/v1
 MATH_MODEL_NAME=                     # 留空则通过 vLLM 自动发现模型名
 MATH_TEMPERATURE=0.6
+MATH_TOP_P=0.95
 MATH_MAX_TOKEN=10240
+MATH_RUNTIME_MODE=llm                # llm / cot / tir
 ```
 
+`Qwen3-32B` 会忽略 `MATH_TEMPERATURE` / `MATH_TOP_P`，请求中不传
+`temperature`、`top_p`、`top_k`、`min_p`，由模型服务端的 `generation_config.json`
+决定采样参数。
+
 **模型切换示例：**
-- vLLM 自动发现（如 Phi-3）：只设 `MATH_LLM_BASE_URL`，不设 `MATH_MODEL_NAME`
-- Qwen Math 固定端点：`MATH_LLM_BASE_URL=http://...` + `MATH_MODEL_NAME=/data/models/Qwen2.5-Math-1.5B-Instruct`
+- vLLM 自动发现（如 Phi-3）：只设 `MATH_MODEL_BASE_URL`，不设 `MATH_MODEL_NAME`
+- Qwen Math 固定端点：`MATH_MODEL_BASE_URL=http://...` + `MATH_MODEL_NAME=/data/models/Qwen2.5-Math-1.5B-Instruct`
 
 ### Embedding Configuration
 
