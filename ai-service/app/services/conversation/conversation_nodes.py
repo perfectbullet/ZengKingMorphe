@@ -1829,14 +1829,20 @@ class ConversationNodes:
 
             if state.get("is_math_problem", False) or effective_mode == AnswerMode.MATH_LLM.value:
                 # 数学题：数学模型推理，明确不走 RAG
-                messages = build_math_generation_messages(state)
                 streaming_llm, model_name = self.workflow.get_math_streaming_llm(state)
+                math_runtime_mode = getattr(streaming_llm, "mode", "llm")
+                messages = build_math_generation_messages(
+                    state,
+                    include_system_prompt=(math_runtime_mode == "llm"),
+                )
                 state["streaming_llm"] = streaming_llm
                 state["streaming_messages"] = messages
                 state["streaming_type"] = "math_llm"
+                state["math_runtime_mode"] = math_runtime_mode
                 logger.info(
                     f"Streaming configured: type=math_llm, model={model_name}, "
-                    f"answer_mode={answer_mode}, query={state['user_query'][:50]}..."
+                    f"runtime_mode={math_runtime_mode}, answer_mode={answer_mode}, "
+                    f"query={state['user_query'][:50]}..."
                 )
             elif effective_mode == AnswerMode.RAG_WITH_FALLBACK.value:
                 employee_config = state.get("employee_config", {})

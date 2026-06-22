@@ -1332,6 +1332,9 @@ async def generate_openai_stream_v1(
                 # 数学模型推理流式输出
                 streaming_llm = current_state.get("streaming_llm")
                 messages = current_state.get("streaming_messages")
+                math_runtime_mode = current_state.get("math_runtime_mode") or getattr(
+                    streaming_llm, "mode", "llm"
+                )
                 if not streaming_llm or not messages:
                     logger.error(
                         "streaming_llm or messages not configured for math_llm type"
@@ -1341,11 +1344,14 @@ async def generate_openai_stream_v1(
                     streaming_llm, "openai_api_base", None
                 ) or getattr(streaming_llm, "base_url", "unknown")
                 logger.info(
-                    f"Using math LLM stream | model={model_name} | base_url={_llm_base_url}"
+                    f"Using math LLM stream | mode={math_runtime_mode} | "
+                    f"model={model_name} | base_url={_llm_base_url}"
                 )
 
                 # 使用真正的流式输出
-                logger.info("Starting streaming response with astream")
+                logger.info(
+                    f"Starting streaming response with astream | type=math_llm | mode={math_runtime_mode}"
+                )
                 first_token_received = False
                 full_answer = ""
 

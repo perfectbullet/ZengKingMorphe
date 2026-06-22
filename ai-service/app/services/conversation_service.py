@@ -211,6 +211,10 @@ class ConversationWorkflow:
 
         base_url = os.getenv("MATH_MODEL_BASE_URL")
         model_id = os.getenv("MATH_MODEL_NAME")
+        math_api_key = (
+            os.getenv("MATH_MODEL_API_KEY", "").strip().strip('"').strip("'")
+            or "dummy-key"
+        )
 
         # 未指定模型名时通过 vLLM 自动发现
         if not model_id:
@@ -243,7 +247,7 @@ class ConversationWorkflow:
 
         math_service = MathAgentService(MathRuntimeConfig(
             base_url=base_url,
-            api_key="dummy-key",  # vLLM 不需要真实 key
+            api_key=math_api_key,
             model=model_id,
             temperature=math_temperature,
             max_tokens=math_max_token,

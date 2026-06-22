@@ -100,3 +100,7 @@ bench_results/*
 ai-service/env-files
 logs/*
 zj-aha-vllm-v100/bench_results/*
+ai-service/data/asr_latex_before_after.jsonl
+data/*.jsonl
+data/*.md
+data/asr_to_latex_history.log

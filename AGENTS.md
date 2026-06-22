@@ -136,6 +136,24 @@ cd ai-service
 /home/zj/miniconda3/envs/morphe/bin/python -m pytest tests/test_api.py -v
 ```
 
+For quick local streaming-chat smoke tests, use the project root and the active local or server Python environment:
+
+```bash
+# Server environment
+cd /data/metahuman_work/ZengKingMorphe
+source venv/bin/activate
+
+# Local development environment
+cd /home/zj/ZengKingMorphe
+conda activate morphe
+
+python -m tests.test_chat_stream_v1 -q "求解不等式x的平方减去5x加上6小于0的解"
+python -m tests.test_chat_stream_v1 -q "什么是土豆什么是马铃薯"
+
+# Test meaningless input handling
+python -m tests.test_chat_stream_v1 -q "负三的值阿巴阿巴阿巴"
+```
+
 For endpoint, routing, or conversation changes, prefer adding or updating tests under `ai-service/tests/`. If tests cannot run because local services or secrets are unavailable, state exactly what was not run and why.
 
 Some tests may depend on application startup side effects and external services. Do not hide failing tests. Report the failure, identify whether it is a code regression or environment/test-staleness issue, and keep the patch minimal.

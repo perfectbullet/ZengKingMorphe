@@ -1189,16 +1189,20 @@ User question:
     return messages
 
 
-def build_math_generation_messages(state: ConversationState) -> List:
+def build_math_generation_messages(
+    state: ConversationState,
+    include_system_prompt: bool = True,
+) -> List:
     """
     构建数学问题的模型消息。
 
-    根据 MATH_MODEL_NAME 环境变量选择提示词:
-    - 模型名含 "qwen"/"Qwen" 时: 使用简洁 CoT 提示词（QWEN_MATH_SYSTEM_PROMPT）
-    - 其他: 使用通用 6 步解题流程 + 公式库
+    ``llm`` 模式使用 QWEN_MATH_SYSTEM_PROMPT；``cot`` / ``tir`` 模式由
+    Qwen-Agent 自己的 Assistant / TIRMathAgent system_message 决定模式提示词，
+    这里不再额外注入 system prompt，避免两套模式提示互相叠加。
 
     Args:
         state: Current conversation state
+        include_system_prompt: 是否注入通用数学 system prompt
 
     Returns:
         List of Message objects for math LLM
@@ -1208,9 +1212,9 @@ def build_math_generation_messages(state: ConversationState) -> List:
 
     # raw_query = (state.get("user_query") or "").strip()
 
-    # if is_qwen_math:
-    # Qwen Math: 统一使用简洁 qwen推荐 提示词，不区分简单/复杂题
-    messages = [SystemMessage(content=QWEN_MATH_SYSTEM_PROMPT)]
+    messages = []
+    if include_system_prompt:
+        messages.append(SystemMessage(content=QWEN_MATH_SYSTEM_PROMPT))
 
     history_msgs = _build_conversation_history(state, max_messages=12)
     messages.extend(history_msgs)
@@ -1221,6 +1225,7 @@ def build_math_generation_messages(state: ConversationState) -> List:
 
     logger.info(
         "build_math_generation_messages [qwen_math]: "
+        f"include_system_prompt={include_system_prompt}, "
         f"history_msgs={len(history_msgs)}, "
         f"effective_query={effective_query!r}"
     )
