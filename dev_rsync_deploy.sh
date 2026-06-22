@@ -69,7 +69,6 @@ rsync ${RSYNC_OPTS} -e "ssh -i ${SSH_KEY}" \
     --include="requirements.txt" \
     --include=".dockerignore" \
     --include="DEFAULT_SENSITIVE_WORDS.txt" \
-    --include=".env" \
     --include="run_stream_test.sh" \
     --exclude="*" \
     "${LOCAL_DIR}/ai-service/" \

@@ -697,9 +697,9 @@ async def generate_openai_stream_v1(
     chat_id = f"chatcmpl-{hashlib.md5(f'{session_id}_{time.time()}'.encode()).hexdigest()[:12]}"
     created = int(time.time())
 
-    user_query = _extract_user_query(request.messages)
+    original_user_query = _extract_user_query(request.messages)
 
-    initial_state = _build_initial_state(request, session_id, user_query)
+    initial_state = _build_initial_state(request, session_id, original_user_query)
 
     # 输出语言偏好：默认中文，preprocess_query 节点会根据用户查询更新 state 中的值；
     # 每次事件循环更新 current_state 后同步刷新此局部变量，下游统一使用。
@@ -712,34 +712,19 @@ async def generate_openai_stream_v1(
     )
     think_tag_buffer = ThinkTagBuffer()  # 用于过滤 think 标签
 
+    # 结束块模板：usage 字段会在最终发送 done 前由 _update_finish_chunk_metadata
+    # 用 final_user_query（ASR→LaTeX 转换后的文本）重新计算，此处仅用原文占位。
     finish_chunk_data = _build_finish_chunk_data(
-        chat_id, created, SERVER_MODEL, user_query
+        chat_id, created, SERVER_MODEL, original_user_query
     )
 
     chunk_sequence = 0
     raw_token_index = 0
 
-    chunk_sequence += 1
-    user_query_chunk_data = {
-        "id": chat_id,
-        "object": "chat.completion.chunk",
-        "created": created,
-        "model": SERVER_MODEL,
-        "user_message": user_query,
-        "messages": [
-            {"role": msg.role, "content": msg.content} for msg in request.messages
-        ],
-    }
-    await save_stream_chunk(
-        db,
-        chat_id,
-        chunk_sequence,
-        session_id,
-        request.user_id,
-        request.employee_id,
-        "user_query",
-        user_query_chunk_data,
-    )
+    # user_query chunk 延迟到 preprocess_query 节点之后保存，确保返回的是
+    # ASR→LaTeX 转换后的文本；若 workflow 在此前退出（敏感词 break / 异常），
+    # 由收尾兜底保存原文，保证前端一定能收到 user_query chunk。
+    user_query_chunk_saved = False
 
     role_chunk_data = {
         "id": chat_id,
@@ -773,6 +758,53 @@ async def generate_openai_stream_v1(
     current_state = initial_state.copy()
     model_name = SERVER_MODEL
 
+    async def save_user_query_chunk_once(
+        display_user_query: str, query_preprocessed: bool
+    ) -> None:
+        """保存 user_query chunk（仅一次）。
+
+        display_user_query 为 preprocess_query 之后的展示文本（含 LaTeX）；
+        original_user_message 始终保留原始 ASR 文本，便于排查；
+        query_preprocessed 标识是否发生过实际转换。
+        """
+        nonlocal chunk_sequence, user_query_chunk_saved
+
+        if user_query_chunk_saved:
+            return
+
+        updated_messages = [
+            {"role": msg.role, "content": msg.content} for msg in request.messages
+        ]
+        # 最后一条 user 消息替换为转换后的展示文本
+        for msg in reversed(updated_messages):
+            if msg.get("role") == "user":
+                msg["content"] = display_user_query
+                break
+
+        chunk_sequence += 1
+        user_query_chunk_data = {
+            "id": chat_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": SERVER_MODEL,
+            "user_message": display_user_query,
+            "original_user_message": original_user_query,
+            "query_preprocessed": query_preprocessed,
+            "messages": updated_messages,
+        }
+        await save_stream_chunk(
+            db,
+            chat_id,
+            chunk_sequence,
+            session_id,
+            request.user_id,
+            request.employee_id,
+            "user_query",
+            user_query_chunk_data,
+            current_state.get("conversation_id"),
+        )
+        user_query_chunk_saved = True
+
     async for event in conversation_workflow.workflow.astream(
         initial_state, stream_mode="updates"
     ):
@@ -788,6 +820,15 @@ async def generate_openai_stream_v1(
             current_state.update(state_update)
             # 同步输出语言偏好（preprocess_query 节点会设置此值）
             prefer_zh_output = current_state.get("prefer_zh_output", prefer_zh_output)
+
+        # preprocess_query 完成后保存 user_query chunk（含 ASR→LaTeX 转换结果）。
+        # 必须在 current_state.update(state_update) 之后，确保取到转换后的 user_query。
+        if node_name == "preprocess_query" and not user_query_chunk_saved:
+            display_user_query = current_state.get("user_query") or original_user_query
+            await save_user_query_chunk_once(
+                display_user_query=display_user_query,
+                query_preprocessed=display_user_query != original_user_query,
+            )
 
         # 检测敏感词并提前终止
         if node_name == "input_validation" and state_update.get("has_sensitive"):
@@ -1599,10 +1640,19 @@ async def generate_openai_stream_v1(
     if final_state is None:
         final_state = current_state
 
+    # 兜底：workflow 在 preprocess_query 之前退出（敏感词 break / 异常）时，
+    # 前端仍能收到 user_query chunk，保存原始输入。
+    if not user_query_chunk_saved:
+        await save_user_query_chunk_once(
+            display_user_query=original_user_query,
+            query_preprocessed=False,
+        )
+
     sources = final_state.get("sources", [])
 
+    final_user_query = current_state.get("user_query") or original_user_query
     _update_finish_chunk_metadata(
-        finish_chunk_data, final_state, user_query, model_name, sources
+        finish_chunk_data, final_state, final_user_query, model_name, sources
     )
 
     chunk_sequence += 1
@@ -1624,7 +1674,7 @@ async def generate_openai_stream_v1(
     save_dir = "finish_chunk_data"
     os.makedirs(save_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    safe_query = sanitize_filename(user_query)
+    safe_query = sanitize_filename(final_user_query)
     filename = f"{timestamp}_{session_id}_{safe_query}_finish_chunk_data.json"
     filepath = os.path.join(save_dir, filename)
     with open(filepath, "w", encoding="utf-8") as f:

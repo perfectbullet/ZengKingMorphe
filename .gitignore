@@ -105,3 +105,5 @@ data/*.jsonl
 data/*.md
 data/asr_to_latex_history.log
 ai-service/myplan.md
+myplan.md
+dev_rsync_deploy.sh
