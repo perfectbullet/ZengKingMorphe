@@ -14,8 +14,6 @@ from datetime import datetime
 
 from typing import AsyncGenerator, Optional, Any
 
-from langchain_openai import ChatOpenAI
-
 from app.models.schemas import OpenAIChatRequest
 from app.models.database import StreamChunkModel, RawTokenModel
 from app.core.logging import get_logger
@@ -24,7 +22,6 @@ from app.services.conversation_service import conversation_workflow
 from app.services.conversation.conversation_state import ConversationState
 
 from app.services.revise_llm import (
-    get_revise_llm,
     convert_formula_to_voice,
     convert_math_sentence_to_voice,
 )
@@ -256,7 +253,6 @@ def _has_math_symbols_simple(text: str) -> bool:
 
 async def _process_segment_for_output(
     segment: str,
-    revise_llm: ChatOpenAI,
     log_prefix: str = "",
     prefer_zh_output: bool = True,
     enable_math_sentence_conversion: bool = False,
@@ -266,12 +262,13 @@ async def _process_segment_for_output(
 
     流程：
     1. 规范化 LaTeX 定界符
-    2. 将 LaTeX 公式转换为语音友好文本（通过 LLM）
-    3. 将含数学符号的句子转换为语音友好文本（通过 LLM）
+    2. 将 LaTeX 公式转换为语音友好文本（内部自管 LLM）
+    3. 将含数学符号的句子转换为语音友好文本（内部自管 LLM）
+
+    语音转换为辅助能力：失败时 ``logger.exception`` 并降级为展示文本，不中断主输出。
 
     Args:
         segment: 待处理的文本段
-        revise_llm: 用于公式转语音的 LLM
         log_prefix: 日志前缀
 
     Returns:
@@ -282,26 +279,30 @@ async def _process_segment_for_output(
     if prefer_zh_output:
         display_content = map_english_to_chinese(display_content)
         display_content = replace_en_math_verbs(display_content)
-    if has_latex_formula(display_content):
-        logger.info(
-            f"[{log_prefix} 公式转换] 转换前长度={len(display_content)}, 转换前={repr(display_content)}"
+    try:
+        if has_latex_formula(display_content):
+            logger.info(
+                f"[{log_prefix} 公式转换] 转换前长度={len(display_content)}, 转换前={repr(display_content)}"
+            )
+            voice_content = await convert_formula_to_voice(display_content)
+            logger.info(
+                f"[{log_prefix} 公式转换] 转换后长度={len(voice_content)}, 转换后={repr(voice_content)}"
+            )
+        elif enable_math_sentence_conversion and _has_math_symbols_simple(display_content):
+            logger.info(
+                f"[{log_prefix} 数学句子转换] 转换前长度={len(display_content)}, 转换前={repr(display_content)}"
+            )
+            voice_content = await convert_math_sentence_to_voice(display_content)
+            logger.info(
+                f"[{log_prefix} 数学句子转换] 转换后长度={len(voice_content)}, 转换后={repr(voice_content)}"
+            )
+        else:
+            logger.info(f"{log_prefix}没有公式: {display_content}")
+            voice_content = display_content
+    except Exception:
+        logger.exception(
+            f"[{log_prefix} 语音转换失败，降级使用展示文本] display_content={display_content[:500]!r}"
         )
-        voice_content = await convert_formula_to_voice(display_content, revise_llm)
-        logger.info(
-            f"[{log_prefix} 公式转换] 转换后长度={len(voice_content)}, 转换后={repr(voice_content)}"
-        )
-    elif enable_math_sentence_conversion and _has_math_symbols_simple(display_content):
-        logger.info(
-            f"[{log_prefix} 数学句子转换] 转换前长度={len(display_content)}, 转换前={repr(display_content)}"
-        )
-        voice_content = await convert_math_sentence_to_voice(
-            display_content, revise_llm
-        )
-        logger.info(
-            f"[{log_prefix} 数学句子转换] 转换后长度={len(voice_content)}, 转换后={repr(voice_content)}"
-        )
-    else:
-        logger.info(f"{log_prefix}没有公式: {display_content}")
         voice_content = display_content
     # 从 voice_content 中移除 markdown 格式，用于 TTS
     # （display_content 保留原始 markdown 格式用于显示）
@@ -339,7 +340,6 @@ def _build_token_chunk_data(
 
 async def _stream_segment_with_formula_conversion(
     segment: str,
-    revise_llm: ChatOpenAI,
     chat_id: str,
     created: int,
     model: str,
@@ -358,7 +358,6 @@ async def _stream_segment_with_formula_conversion(
 
     Args:
         segment: 待处理的文本段
-        revise_llm: 用于公式转语音的 LLM
         chat_id: 聊天完成 ID
         created: 创建时间戳
         model: 模型名
@@ -375,7 +374,6 @@ async def _stream_segment_with_formula_conversion(
     """
     display_content, voice_content = await _process_segment_for_output(
         segment,
-        revise_llm,
         log_prefix,
         prefer_zh_output=prefer_zh_output,
         enable_math_sentence_conversion=enable_math_sentence_conversion,
@@ -872,7 +870,6 @@ async def generate_openai_stream_v1(
         # 当到达 generate_answer 节点时，开始流式输出
         if node_name == "generate_answer":
             streaming_type = current_state.get("streaming_type")
-            revise_llm = await get_revise_llm()
 
             # 调试：打印当前状态中的关键字段
             logger.info(
@@ -914,7 +911,6 @@ async def generate_openai_stream_v1(
                             chunk_data,
                         ) = await _stream_segment_with_formula_conversion(
                             segment,
-                            revise_llm,
                             chat_id,
                             created,
                             SERVER_MODEL,
@@ -938,7 +934,6 @@ async def generate_openai_stream_v1(
                         chunk_data,
                     ) = await _stream_segment_with_formula_conversion(
                         final_segment.content,
-                        revise_llm,
                         chat_id,
                         created,
                         SERVER_MODEL,
@@ -1009,7 +1004,6 @@ async def generate_openai_stream_v1(
 
             chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
                 preface,
-                revise_llm,
                 chat_id,
                 created,
                 SERVER_MODEL,
@@ -1115,7 +1109,6 @@ async def generate_openai_stream_v1(
                                 chunk_data,
                             ) = await _stream_segment_with_formula_conversion(
                                 segment,
-                                revise_llm,
                                 chat_id,
                                 created,
                                 SERVER_MODEL,
@@ -1205,7 +1198,6 @@ async def generate_openai_stream_v1(
                         chunk_data,
                     ) = await _stream_segment_with_formula_conversion(
                         final_segment.content,
-                        revise_llm,
                         chat_id,
                         created,
                         SERVER_MODEL,
@@ -1281,7 +1273,6 @@ async def generate_openai_stream_v1(
                                     chunk_data,
                                 ) = await _stream_segment_with_formula_conversion(
                                     fb_segment,
-                                    revise_llm,
                                     chat_id,
                                     created,
                                     SERVER_MODEL,
@@ -1303,7 +1294,6 @@ async def generate_openai_stream_v1(
                                 chunk_data,
                             ) = await _stream_segment_with_formula_conversion(
                                 fb_final.content,
-                                revise_llm,
                                 chat_id,
                                 created,
                                 SERVER_MODEL,
@@ -1350,7 +1340,6 @@ async def generate_openai_stream_v1(
                         chunk_data,
                     ) = await _stream_segment_with_formula_conversion(
                         direct_text,
-                        revise_llm,
                         chat_id,
                         created,
                         SERVER_MODEL,
@@ -1429,7 +1418,6 @@ async def generate_openai_stream_v1(
                                         chunk_data,
                                     ) = await _stream_segment_with_formula_conversion(
                                         segment,
-                                        revise_llm,
                                         chat_id,
                                         created,
                                         SERVER_MODEL,
@@ -1479,7 +1467,6 @@ async def generate_openai_stream_v1(
                         chunk_data,
                     ) = await _stream_segment_with_formula_conversion(
                         final_segment.content,
-                        revise_llm,
                         chat_id,
                         created,
                         SERVER_MODEL,
@@ -1537,7 +1524,6 @@ async def generate_openai_stream_v1(
                             chunk_data,
                         ) = await _stream_segment_with_formula_conversion(
                             text,
-                            revise_llm,
                             chat_id,
                             created,
                             SERVER_MODEL,
@@ -1589,7 +1575,6 @@ async def generate_openai_stream_v1(
                                     chunk_data,
                                 ) = await _stream_segment_with_formula_conversion(
                                     segment,
-                                    revise_llm,
                                     chat_id,
                                     created,
                                     SERVER_MODEL,
@@ -1618,7 +1603,6 @@ async def generate_openai_stream_v1(
                         chunk_data,
                     ) = await _stream_segment_with_formula_conversion(
                         final_segment.content,
-                        revise_llm,
                         chat_id,
                         created,
                         SERVER_MODEL,

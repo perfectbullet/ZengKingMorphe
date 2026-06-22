@@ -19,10 +19,7 @@ from app.core.logging import get_logger
 from app.core.database import get_database
 from app.services.conversation_service import conversation_workflow
 from app.utils.sentence_buffer import SentenceBuffer
-from langchain_openai import ChatOpenAI
-from app.services.revise_llm import (
-    get_revise_llm
-)
+from app.services.revise_llm import get_voice_conversion_llm
 
 logger = get_logger(__name__)
 
@@ -515,7 +512,7 @@ async def generate_openai_stream_v2(
                         # teaching_script_tts 为空或查询不到，走 LLM 转换逻辑
                         logger.info("teaching_script_tts not found, using LLM to revise for voice output")
                         system_prompt = _load_revise_prompt()
-                        revise_llm = get_revise_llm()
+                        revise_llm = get_voice_conversion_llm()
                         revise_messages = [
                             {"role": "system", "content": system_prompt},
                             {"role": "user", "content": existing_answer}
