@@ -5,8 +5,8 @@ LaTeX formula / math sentence → voice-friendly text conversion service.
 
 设计要点：
 - LLM 客户端由 ``get_voice_conversion_llm()`` 内部按需创建并缓存，调用方不再传递 llm。
-- ``LLM_BASE_URL`` / ``LLM_MODEL`` 为必需环境变量，缺失即报错（由调用处兜底降级为原文）。
-- 公式转换优先走规则（如 ``\\boxed{...}`` → ``答案是 ...``），命中规则不请求 LLM。
+- ``LLM_BASE_URL`` / ``LLM_MODEL`` / ``LLM_API_KEY`` 为项目级必需配置，启动时即由主 LLM（conversation_service）保证可用，这里与主 LLM 共用、直接读取不额外校验。
+- ``\\boxed{...}`` 只去外壳保留内部内容（``\\boxed{8}`` → ``8``）；简单内容直接返回，复杂内容交 LLM。
 - 所有转换均为 best-effort：失败 ``logger.exception`` 后返回原文，不中断主聊天流。
 
 Formula Extraction Strategy:
@@ -51,6 +51,7 @@ FORMULA_ONLY_PROMPT = r'''
 - 用"的"连接修饰语（例如"x的平方"表示"x squared"）
 - 澄清结构：明确指出"分子"、"分母"、"下标"、"上标"、"积分限"、"求和范围"
 - 流畅表达：输出适合稳定TTS朗读的完整短句
+- 遇到 \boxed{...} 时，只读取其中的内容，不要读 boxed、方框、框起来，也不要额外添加"答案是"
 
 符号转换规则（严格遵守）：
 - + → 加
@@ -109,62 +110,33 @@ MATH_SENTENCE_PROMPT = """你负责把包含数学符号的中文句子改写为
 """
 
 # =============================================================================
-# Required environment variables
+# LLM client (cached)
 # =============================================================================
-
-
-def _get_required_env(name: str) -> str:
-    """读取必需环境变量；缺失或为空直接抛 RuntimeError。"""
-    value = os.getenv(name)
-    if not value or not value.strip():
-        raise RuntimeError(f"Required environment variable {name} is not set")
-    return value.strip()
-
-
-# =============================================================================
-# LLM client (cached, required env)
-# =============================================================================
+# LLM_BASE_URL / LLM_MODEL / LLM_API_KEY 为项目级必需配置，启动时即由主 LLM
+# （conversation_service）保证可用；这里与主 LLM 共用同一组配置，直接读取、不额外校验。
 
 _voice_conversion_llm: ChatOpenAI | None = None
 
 
 def get_voice_conversion_llm() -> ChatOpenAI:
-    """返回用于语音转换的 ChatOpenAI（单例缓存）。
+    """返回用于语音转换的 ChatOpenAI（懒加载单例）。
 
-    - ``LLM_BASE_URL`` / ``LLM_MODEL`` 必需，缺失抛 RuntimeError。
-    - ``streaming=False``：语音转换用 ``ainvoke`` 一次性返回，不需要流式。
-    - ``LLM_API_KEY`` 允许缺省为 ``"no-key"``（本地 OpenAI 兼容服务常不校验）。
+    复用项目统一的 ``LLM_BASE_URL`` / ``LLM_MODEL`` / ``LLM_API_KEY``；
+    ``streaming=False`` 配合 ``ainvoke`` 一次性返回，其余参数与主 LLM 一致。
     """
     global _voice_conversion_llm
 
-    if _voice_conversion_llm is not None:
-        return _voice_conversion_llm
-
-    base_url = _get_required_env("LLM_BASE_URL")
-    model = _get_required_env("LLM_MODEL")
-
-    if not base_url.rstrip("/").endswith("/v1"):
-        base_url = f"{base_url.rstrip('/')}/v1"
-
-    _voice_conversion_llm = ChatOpenAI(
-        base_url=base_url,
-        api_key=os.getenv("LLM_API_KEY") or "no-key",
-        model=model,
-        temperature=0.1,
-        streaming=False,
-    )
-
-    logger.info(
-        f"[VoiceConversionLLM] ChatOpenAI initialized | BASE_URL={base_url} | MODEL={model}"
-    )
+    if _voice_conversion_llm is None:
+        _voice_conversion_llm = ChatOpenAI(
+            base_url=os.getenv("LLM_BASE_URL"),
+            api_key=os.getenv("LLM_API_KEY", "no-key"),
+            model=os.getenv("LLM_MODEL"),
+            temperature=0.1,
+            streaming=False,
+        )
+        logger.info("[VoiceConversionLLM] ChatOpenAI initialized")
 
     return _voice_conversion_llm
-
-
-def reset_voice_conversion_llm() -> None:
-    """重置缓存的 LLM 客户端（主要供测试在切换环境变量后使用）。"""
-    global _voice_conversion_llm
-    _voice_conversion_llm = None
 
 
 # =============================================================================
@@ -179,10 +151,10 @@ MATH_SENTENCE_CONVERSION_TIMEOUT_SECONDS = float(
 )
 
 # =============================================================================
-# Rule-based conversion (boxed → 答案是 ...)
+# Boxed wrapper removal & LaTeX delimiter helpers
 # =============================================================================
 
-_BOXED_PREFIX = r"\boxed{"
+_BOXED_MARKER = r"\boxed{"
 
 
 def _strip_latex_delimiters(formula: str) -> str:
@@ -203,59 +175,76 @@ def _strip_latex_delimiters(formula: str) -> str:
     return text
 
 
-def _extract_boxed_content(text: str, start: int) -> tuple[str | None, int]:
-    """从 ``text[start]``（应位于 ``\\boxed{`` 之后的首字符）按花括号深度提取内容。
+def _remove_boxed_wrappers(text: str) -> str:
+    """去除 ``\\boxed{...}`` 外壳，保留内部原始内容（不额外补"答案是"）。
 
-    正确处理嵌套花括号（如 ``\\boxed{\\frac{2}{3}}``）与转义括号（``\\{`` / ``\\}``）。
-    返回 ``(内容, 闭括号之后的位置)``；若括号失衡返回 ``(None, start)``。
+    基于花括号深度扫描，支持嵌套（``\\boxed{\\frac{2}{3}}`` → ``\\frac{2}{3}``）、
+    多个 boxed、boxed 内再嵌套 boxed；转义括号（``\\{`` / ``\\}``）不计入深度。
+    boxed 结构不完整时保留原文，不抛异常。
+
+    Examples:
+        \\boxed{8} -> 8
+        \\boxed{\\frac{2}{3}} -> \\frac{2}{3}
+        $$\\boxed{8}$$ -> $$8$$
     """
-    depth = 1
-    i = start
+    if not text or "\\boxed" not in text:
+        return text
+
+    result: list[str] = []
+    i = 0
     n = len(text)
+
     while i < n:
-        ch = text[i]
-        if ch == "\\" and i + 1 < n:
-            i += 2  # 跳过转义字符（\{ \} \\ 等）
-            continue
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                return text[start:i], i + 1
-        i += 1
-    return None, start
+        start = text.find(_BOXED_MARKER, i)
+        if start == -1:
+            result.append(text[i:])
+            break
+
+        result.append(text[i:start])
+
+        content_start = start + len(_BOXED_MARKER)
+        depth = 1
+        j = content_start
+
+        while j < n and depth > 0:
+            char = text[j]
+            # 跳过转义字符（\{ \} \\ 等），避免误计花括号深度
+            if char == "\\" and j + 1 < n:
+                j += 2
+                continue
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+            j += 1
+
+        if depth != 0:
+            # boxed 结构不完整，不强行处理，保留原文
+            result.append(text[start:])
+            break
+
+        inner = text[content_start:j - 1]
+        # 递归处理 boxed 内部再次出现的 boxed
+        result.append(_remove_boxed_wrappers(inner))
+        i = j
+
+    return "".join(result)
 
 
-def _convert_formula_by_rule(formula: str) -> str | None:
-    """规则转换：纯 ``\\boxed{...}`` 公式 → ``答案是 ...``。
+def _is_simple_unboxed_content(text: str) -> bool:
+    """去壳后的内容是否可直接朗读、无需 LLM 转换。
 
-    仅当整个公式（去掉定界符后）恰好是一个 ``\\boxed{...}`` 时命中；
-    形如 ``\\boxed{a}+\\boxed{b}`` 的复合公式不命中，交给 LLM。
-    仅处理简单结果（数字、``x=1`` 等，不含 LaTeX 命令）；含 ``\\frac``/``\\sqrt``
-    等 LaTeX 命令的内容（如 ``\\boxed{\\frac{2}{3}}``）原样读不通，交给 LLM。
-    返回 ``None`` 表示规则未命中。
+    含 LaTeX 命令（反斜杠）或花括号结构（``\\frac``、``\\sqrt``、``{...}``）
+    时返回 False，交给 LLM；数字、``x=1``、``-2`` 等返回 True。
     """
-    inner = _strip_latex_delimiters(formula.strip()).strip()
-    if not inner.startswith(_BOXED_PREFIX):
-        return None
-
-    content_start = len(_BOXED_PREFIX)
-    value, end = _extract_boxed_content(inner, content_start)
-    if value is None:
-        return None
-
-    # boxed 闭合后若还残留非空白内容，说明不是纯 boxed 公式，交给 LLM
-    if inner[end:].strip():
-        return None
-
-    value = value.strip()
-    if not value:
-        return None
-    # 含 LaTeX 命令（反斜杠）的复杂结果，规则读不通口语，交给 LLM
-    if "\\" in value:
-        return None
-    return f"答案是 {value}"
+    stripped = text.strip()
+    if not stripped:
+        return False
+    if "\\" in stripped:
+        return False
+    if "{" in stripped or "}" in stripped:
+        return False
+    return True
 
 
 # =============================================================================
@@ -299,19 +288,22 @@ def _extract_latex_formulas(text: str) -> list[tuple[str, int, int]]:
 async def _convert_single_formula(formula: str) -> str:
     """转换单个公式为语音友好文本。
 
-    优先走规则（boxed），未命中再请求 LLM（``ainvoke``，带超时）。
-    任何异常都 ``logger.exception`` 后返回原公式，不抛出。
+    先去掉 ``\\boxed{}`` 外壳与 LaTeX 定界符；若剩余内容简单（数字、``x=1`` 等）
+    直接返回；否则请求 LLM（``ainvoke``，带超时）。
+    任何异常 / 空结果都 ``logger.exception`` 后返回去壳后的内容，绝不返回 ``\\boxed{...}``。
     """
-    rule_result = _convert_formula_by_rule(formula)
-    if rule_result is not None:
+    unboxed_formula = _remove_boxed_wrappers(formula)
+    stripped_formula = _strip_latex_delimiters(unboxed_formula)
+
+    if unboxed_formula != formula and _is_simple_unboxed_content(stripped_formula):
         logger.info(
-            f"[_convert_single_formula] Formula converted by rule | input={formula[:100]!r} | output={rule_result[:100]}"
+            f"[_convert_single_formula] Formula unboxed and returned directly | input={formula[:100]!r} | output={stripped_formula[:100]!r}"
         )
-        return rule_result
+        return stripped_formula
 
     messages = [
         {"role": "system", "content": FORMULA_ONLY_PROMPT},
-        {"role": "user", "content": formula},
+        {"role": "user", "content": stripped_formula},
     ]
 
     try:
@@ -324,20 +316,20 @@ async def _convert_single_formula(formula: str) -> str:
 
         if not result:
             logger.warning(
-                f"[_convert_single_formula] Empty conversion result, fallback to original formula | input={formula[:300]!r}"
+                f"[_convert_single_formula] Empty conversion result, fallback to unboxed formula | input={formula[:300]!r} | unboxed={stripped_formula[:300]!r}"
             )
-            return formula
+            return stripped_formula or unboxed_formula
 
         logger.info(
-            f"[_convert_single_formula] Formula converted by LLM | input={formula[:100]!r} | output={result[:100]!r}"
+            f"[_convert_single_formula] Formula converted by LLM | input={formula[:100]!r} | normalized={stripped_formula[:100]!r} | output={result[:100]!r}"
         )
         return result
 
     except Exception:
         logger.exception(
-            f"[_convert_single_formula] Formula conversion failed, fallback to original formula | input={formula[:300]!r}"
+            f"[_convert_single_formula] Formula conversion failed, fallback to unboxed formula | input={formula[:300]!r} | unboxed={stripped_formula[:300]!r}"
         )
-        return formula
+        return stripped_formula or unboxed_formula
 
 
 # =============================================================================
@@ -347,21 +339,23 @@ async def _convert_single_formula(formula: str) -> str:
 async def convert_formula_to_voice(text: str) -> str:
     """把含 LaTeX 公式的文本转换为语音友好文本（仅替换公式部分）。
 
-    best-effort：空文本/无公式快速返回；命中规则的 boxed 不请求 LLM；
-    顶层异常 ``logger.exception`` 后返回原文。
+    先整体去掉 ``\\boxed{}`` 外壳再做公式抽取/替换，保证语音里不会读出 ``boxed``。
+    best-effort：顶层异常 ``logger.exception`` 后返回去壳后的原文（同样不含 ``\\boxed``）。
     """
     try:
         if _is_empty_or_delimiter_only(text):
             return text
 
-        if not _has_any_formula_marker(text):
-            return _remove_list_markers(text)
+        normalized_text = _remove_boxed_wrappers(text)
 
-        formulas = _extract_latex_formulas(text)
+        if not _has_any_formula_marker(normalized_text):
+            return _remove_list_markers(normalized_text)
+
+        formulas = _extract_latex_formulas(normalized_text)
         if not formulas:
-            return text
+            return normalized_text
 
-        result = text
+        result = normalized_text
         # 倒序替换，避免位置偏移
         for formula, start, end in reversed(formulas):
             voice_formula = await _convert_single_formula(formula)
@@ -371,9 +365,9 @@ async def convert_formula_to_voice(text: str) -> str:
 
     except Exception:
         logger.exception(
-            f"[convert_formula_to_voice] Failed, fallback to original text | text={(text[:500] if text else text)!r}"
+            f"[convert_formula_to_voice] Failed, fallback to unboxed original text | text={(text[:500] if text else text)!r}"
         )
-        return text
+        return _remove_boxed_wrappers(text) if text else text
 
 
 async def convert_math_sentence_to_voice(text: str) -> str:
@@ -417,7 +411,6 @@ async def convert_math_sentence_to_voice(text: str) -> str:
 
 __all__ = [
     "get_voice_conversion_llm",
-    "reset_voice_conversion_llm",
     "convert_formula_to_voice",
     "convert_math_sentence_to_voice",
 ]

@@ -18,7 +18,6 @@ from app.services import revise_llm
 from app.services.revise_llm import (
     convert_formula_to_voice,
     get_voice_conversion_llm,
-    reset_voice_conversion_llm,
     _is_empty_or_delimiter_only,
     _has_any_formula_marker,
     _extract_latex_formulas,
@@ -193,12 +192,12 @@ class TestGetReviseLLM:
         monkeypatch.setenv("LLM_BASE_URL", "http://localhost:11434/v1")
         monkeypatch.setenv("LLM_MODEL", "qwen3:14b")
         monkeypatch.setenv("OLLAMA_REVISE_MODEL", "qwen3:14b")
-        reset_voice_conversion_llm()
+        revise_llm._voice_conversion_llm = None
 
         llm = get_voice_conversion_llm()
         assert llm is not None
         assert llm.model_name == "qwen3:14b"
-        reset_voice_conversion_llm()
+        revise_llm._voice_conversion_llm = None
 
     @pytest.mark.asyncio
     async def test_get_siliconflow_llm(self, monkeypatch):
