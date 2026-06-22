@@ -1850,7 +1850,8 @@ class ConversationNodes:
                 logger.info(
                     f"Streaming configured: type=math_llm, model={model_name}, "
                     f"runtime_mode={math_runtime_mode}, answer_mode={answer_mode}, "
-                    f"query={state['user_query'][:50]}..."
+                    f"query={state['user_query'][:50]}..., "
+                    f"message_count={len(messages)}"
                 )
             elif effective_mode == AnswerMode.RAG_WITH_FALLBACK.value:
                 employee_config = state.get("employee_config", {})

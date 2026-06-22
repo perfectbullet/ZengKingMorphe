@@ -68,6 +68,7 @@ rsync ${RSYNC_OPTS} -e "ssh -i ${SSH_KEY}" \
     --include="Dockerfile" \
     --include="requirements.txt" \
     --include=".dockerignore" \
+    --include=".env" \
     --include="DEFAULT_SENSITIVE_WORDS.txt" \
     --include="run_stream_test.sh" \
     --exclude="*" \
