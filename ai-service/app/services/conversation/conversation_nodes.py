@@ -57,7 +57,7 @@ from app.services.conversation.conversation_helpers import (
     clean_user_query,
     prefer_zh_output,
 )
-from app.services.word2latex_service import word_to_latex
+from app.services.word_to_latex import word_to_latex
 from app.services.conversation.intent_routing import (
     AnswerMode,
     ROUTE_BRANCH_GENERAL,
@@ -784,7 +784,15 @@ class ConversationNodes:
 
             # 3. 数学检测 + ASR→LaTeX 转换
             if is_math_problem(query):
-                converted = await word_to_latex(query)
+                try:
+                    converted = await word_to_latex(query)
+                except Exception as exc:
+                    logger.warning(
+                        f"ASR→LaTeX failed, keep original query: "
+                        f"error={exc}, query={query!r}",
+                        exc_info=True,
+                    )
+                    converted = ""
                 if converted:
                     logger.info(
                         f"ASR→LaTeX: before={query!r}, after={converted!r}"

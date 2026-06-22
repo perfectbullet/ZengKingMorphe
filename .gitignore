@@ -104,3 +104,4 @@ ai-service/data/asr_latex_before_after.jsonl
 data/*.jsonl
 data/*.md
 data/asr_to_latex_history.log
+ai-service/myplan.md

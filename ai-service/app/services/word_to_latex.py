@@ -3,9 +3,9 @@
 随机抽样测试提示词版 word_to_latex，并将结果保存为 Markdown。
 
 用法：
-    cd /home/zj/ZengKingMorphe
+    cd ai-service
     conda activate morphe
-    python ai-service/scripts/test_word2latex_prompt.py -n 10
+    python -m app.services.word_to_latex -n 10
 
 环境变量从 ai-service/.env 读取：
     LLM_BASE_URL
@@ -27,7 +27,7 @@ import httpx
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
 
-AI_SERVICE_DIR = Path(__file__).resolve().parents[1]
+AI_SERVICE_DIR = Path(__file__).resolve().parents[2]
 REPO_ROOT = AI_SERVICE_DIR.parent
 
 load_dotenv(AI_SERVICE_DIR / ".env", override=False)
@@ -145,9 +145,9 @@ def create_client() -> AsyncOpenAI:
 
 
 async def word_to_latex(text: str) -> str:
-    query = text.strip()
-    if not query:
+    if not text or not text.strip():
         return ""
+    query = text.strip()
 
     client = create_client()
     try:
