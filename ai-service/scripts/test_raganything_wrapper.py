@@ -29,8 +29,19 @@ async def main():
     print(f"RAGAnything initialized: {rag is not None}")
 
     print("4. 测试流式查询")
+    merged_chunks = []
     async for chunk in get_raganything_stream(query=query, mode=mode):
+        # type=chunk 是回答文本片段，累加后合并打印
+        if chunk.get("type") == "chunk":
+            content = chunk.get("content")
+            if content:
+                merged_chunks.append(content)
+            continue
+        # 其他类型（sources_info / sources / error 等）原样打印
         print(chunk)
+
+    print("--- 合并后的 chunk 内容 ---")
+    print("".join(merged_chunks))
 
     print("5. 重置/关闭 RAGAnything")
     await reset_raganything_instance()
