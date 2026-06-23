@@ -161,7 +161,8 @@ async def openai_chat_completions(
                     "channel_name": effective_channel_name,
                 }
             )
-            return EventSourceResponse(generate_openai_stream_v1(stream_request))
+            # ping=15: 长时间思考（如数学题）期间发送 SSE keepalive，避免前端/代理误判连接超时断开
+            return EventSourceResponse(generate_openai_stream_v1(stream_request), ping=15)
         else:
             # Non-streaming response (not implemented in this snippet)
             raise HTTPException(
@@ -332,7 +333,8 @@ async def openai_chat_completions_v2(
                 "channel_name": effective_channel_name,
             }
         )
-        return EventSourceResponse(generate_openai_stream_v2(stream_request))
+        # ping=15: 长时间思考（如数学题）期间发送 SSE keepalive，避免前端/代理误判连接超时断开
+        return EventSourceResponse(generate_openai_stream_v2(stream_request), ping=15)
     else:
         # Non-streaming response (not implemented)
         raise HTTPException(

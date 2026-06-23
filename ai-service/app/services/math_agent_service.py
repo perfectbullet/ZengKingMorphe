@@ -13,12 +13,35 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import threading
+import time
 from dataclasses import dataclass
 from typing import Any, AsyncIterator
 
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
+
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
+
+# 兜底最大运行时间（秒）。数学问题长时间思考是正常现象，默认值设得较长，
+# 仅用于防止永久挂死；可通过环境变量 MATH_AGENT_MAX_RUNTIME_SECONDS 覆盖。
+_DEFAULT_MAX_RUNTIME_SECONDS = 600
+
+
+def _resolve_max_runtime_seconds() -> int:
+    raw = os.getenv("MATH_AGENT_MAX_RUNTIME_SECONDS", str(_DEFAULT_MAX_RUNTIME_SECONDS))
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            f"[MathAgentStreamingAdapter] Invalid MATH_AGENT_MAX_RUNTIME_SECONDS={raw!r}, "
+            f"fallback to {_DEFAULT_MAX_RUNTIME_SECONDS}"
+        )
+        return _DEFAULT_MAX_RUNTIME_SECONDS
+    return value if value > 0 else _DEFAULT_MAX_RUNTIME_SECONDS
 
 
 TIR_SYSTEM_EN = (
@@ -183,9 +206,43 @@ class MathAgentStreamingAdapter:
         self.openai_api_base = service.config.base_url
 
     async def astream(self, messages: list[Any]) -> AsyncIterator[AIMessageChunk]:
-        """返回增量文本流，兼容上层 `async for chunk in llm.astream(...)`。"""
+        """返回增量文本流，兼容上层 `async for chunk in llm.astream(...)`。
+
+        取消/关闭感知设计：
+        - 通过 ``stop_event`` 通知后台 worker 线程尽快停止投递。
+        - 所有 ``loop.call_soon_threadsafe`` 调用都经由 ``safe_put`` 封装，
+          event loop 关闭或调用失败时不再二次异常。
+        - async 侧收到 ``CancelledError`` 时设置 ``stop_event`` 并重新抛出。
+        """
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue[tuple[str, str | None]] = asyncio.Queue()
+        stop_event = threading.Event()
+        max_runtime = _resolve_max_runtime_seconds()
+        start_time = time.monotonic()
+        logger.info(
+            f"[MathAgentStreamingAdapter] Worker start | mode={self.mode} "
+            f"lang={self.lang} max_runtime={max_runtime}s"
+        )
+
+        def safe_put(item: tuple[str, str | None]) -> bool:
+            """线程安全地向 event loop 投递消息；取消/loop 已关闭时安全跳过。"""
+            if stop_event.is_set():
+                return False
+
+            if loop.is_closed():
+                logger.warning(
+                    f"[MathAgentStreamingAdapter] Event loop closed, drop worker message | kind={item[0]}"
+                )
+                return False
+
+            try:
+                loop.call_soon_threadsafe(queue.put_nowait, item)
+                return True
+            except RuntimeError:
+                logger.exception(
+                    f"[MathAgentStreamingAdapter] Failed to put worker message into event loop queue | kind={item[0]}"
+                )
+                return False
 
         def worker():
             previous_text = ""
@@ -193,6 +250,12 @@ class MathAgentStreamingAdapter:
                 bot = self.service.create_qwen_agent(mode=self.mode, lang=self.lang)
                 agent_messages = self._to_agent_messages(messages)
                 for response in bot.run(agent_messages):
+                    if stop_event.is_set():
+                        logger.info(
+                            f"[MathAgentStreamingAdapter] Worker cancelled before processing response | mode={self.mode}"
+                        )
+                        return
+
                     full_text = self.service.extract_full_text(response)
                     if not full_text:
                         continue
@@ -204,22 +267,69 @@ class MathAgentStreamingAdapter:
                     previous_text = full_text
 
                     if delta:
-                        loop.call_soon_threadsafe(queue.put_nowait, ("chunk", delta))
+                        if not safe_put(("chunk", delta)):
+                            return
 
-                loop.call_soon_threadsafe(queue.put_nowait, ("done", None))
+                if not safe_put(("done", None)):
+                    return
+                logger.info(
+                    f"[MathAgentStreamingAdapter] Worker finished | mode={self.mode}"
+                )
             except Exception as exc:  # pragma: no cover
-                loop.call_soon_threadsafe(queue.put_nowait, ("error", str(exc)))
+                logger.exception(
+                    f"[MathAgentStreamingAdapter] Worker failed | mode={self.mode}"
+                )
+                safe_put(("error", str(exc)))
 
-        threading.Thread(target=worker, daemon=True).start()
+        thread = threading.Thread(
+            target=worker,
+            name=f"MathAgentStreamingAdapter-{self.mode}",
+            daemon=True,
+        )
+        thread.start()
 
-        while True:
-            event, payload = await queue.get()
-            if event == "chunk":
-                yield AIMessageChunk(content=payload or "")
-            elif event == "error":
-                raise RuntimeError(payload or "math agent stream failed")
-            elif event == "done":
-                break
+        try:
+            while True:
+                # 用「剩余预算」作为 queue.get() 的等待上限。这样即使 worker 长时间
+                # 静默（例如数学题首个 token 之前的长时间思考），也能在超过 max_runtime
+                # 后兜底退出；正常产出时 wait_for 会立即返回，不会误判长思考为失败。
+                remaining = max_runtime - (time.monotonic() - start_time)
+                if remaining <= 0:
+                    stop_event.set()
+                    logger.error(
+                        f"[MathAgentStreamingAdapter] Max runtime exceeded, abort stream | "
+                        f"mode={self.mode} max_runtime={max_runtime}s"
+                    )
+                    raise TimeoutError(
+                        f"math agent stream exceeded max runtime {max_runtime}s"
+                    )
+
+                try:
+                    kind, payload = await asyncio.wait_for(queue.get(), timeout=remaining)
+                except asyncio.TimeoutError:
+                    stop_event.set()
+                    logger.error(
+                        f"[MathAgentStreamingAdapter] Max runtime exceeded, abort stream | "
+                        f"mode={self.mode} max_runtime={max_runtime}s"
+                    )
+                    raise TimeoutError(
+                        f"math agent stream exceeded max runtime {max_runtime}s"
+                    )
+
+                if kind == "chunk":
+                    yield AIMessageChunk(content=payload or "")
+                elif kind == "error":
+                    raise RuntimeError(payload or "math agent stream failed")
+                elif kind == "done":
+                    break
+        except asyncio.CancelledError:
+            stop_event.set()
+            logger.info(
+                f"[MathAgentStreamingAdapter] Stream cancelled; stop worker delivery | mode={self.mode}"
+            )
+            raise
+        finally:
+            stop_event.set()
 
     async def ainvoke(self, messages: list[Any]) -> AIMessage:
         """一次性返回完整答案。"""
