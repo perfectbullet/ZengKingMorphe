@@ -860,25 +860,48 @@ async def generate_openai_stream_v1(
                 query_preprocessed=display_user_query != original_user_query,
             )
 
-        # 检测敏感词并提前终止
+        # 检测敏感词并提前终止：命中后不再进入 preprocess_query /
+        # classify_query_type / generate_answer，但仍按正常流式协议返回
+        # assistant role → content → finish chunk，并保存拒答对话。
         if node_name == "input_validation" and state_update.get("has_sensitive"):
-            # 发送拒绝消息
             reject_message = (
                 "抱歉，您的问题包含敏感内容，请规范用语后再试。"
                 if prefer_zh_output
                 else "Sorry, your question contains sensitive content. Please rephrase and try again."
             )
 
-            reject_chunk_data = {
+            # 写入 final_answer 等，保证收尾 save_conversation 落库的是拒答话术，
+            # 而不是空字符串。
+            current_state["final_answer"] = reject_message
+            current_state["direct_text_answer"] = reject_message
+            current_state["confidence"] = 1.0
+            current_state["has_sensitive"] = True
+            current_state["streaming_type"] = "direct_text"
+
+            # 命中敏感词时尚未经过 preprocess_query，先保存 user_query chunk（原文），
+            # 保证前端先收到用户消息、再收到拒答内容，chunk 顺序与正常回答一致。
+            if not user_query_chunk_saved:
+                await save_user_query_chunk_once(
+                    display_user_query=original_user_query,
+                    query_preprocessed=False,
+                )
+
+            # 拒答 content chunk：content 与 voice_content 同文案，不进入
+            # 公式转换 / MathAgentService / RAG。chunk_type 与普通回答一致用 "token"，
+            # 便于前端按既有逻辑渲染；finish chunk 与 [DONE] 交给收尾段统一发送。
+            content_chunk_data = {
                 "id": chat_id,
                 "object": "chat.completion.chunk",
                 "created": created,
-                "model": "status",
+                "model": SERVER_MODEL,
                 "choices": [
                     {
                         "index": 0,
-                        "delta": {"content": reject_message},
-                        "finish_reason": "sensitive",
+                        "delta": {
+                            "content": reject_message,
+                            "voice_content": reject_message,
+                        },
+                        "finish_reason": None,
                     }
                 ],
             }
@@ -890,14 +913,21 @@ async def generate_openai_stream_v1(
                 session_id,
                 request.user_id,
                 request.employee_id,
-                "done",
-                reject_chunk_data,
+                "token",
+                content_chunk_data,
+                current_state.get("conversation_id"),
             )
-            yield json.dumps(reject_chunk_data)
+            yield json.dumps(content_chunk_data)
             logger.info(
-                f"Sensitive word detected | reject_message sent | breaking workflow"
+                "Sensitive word detected | reject response emitted | "
+                "chat_id=%s | session_id=%s | user_id=%s | employee_id=%s",
+                chat_id,
+                session_id,
+                request.user_id,
+                request.employee_id,
             )
-            break  # 跳出循环，终止后续处理
+            # 跳出 workflow 消费循环，由收尾段统一发送 finish chunk + 保存对话。
+            break
 
         # 当到达 generate_answer 节点时，开始流式输出
         if node_name == "generate_answer":
