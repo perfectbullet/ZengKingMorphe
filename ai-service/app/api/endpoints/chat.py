@@ -2,7 +2,7 @@
 Chat API endpoints.
 """
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi import Query
 from sse_starlette.sse import EventSourceResponse
 from datetime import datetime
@@ -35,7 +35,9 @@ async def chat_v1_health_check():
 
 @router.post("/v1/chat/completions")
 async def openai_chat_completions(
-    request: OpenAIChatRequest, api_key: str = Depends(get_api_key)
+    http_request: Request,
+    request: OpenAIChatRequest,
+    api_key: str = Depends(get_api_key),
 ):
     """
     兼容 OpenAI 的对话补全接口
@@ -162,7 +164,7 @@ async def openai_chat_completions(
                 }
             )
             # ping=15: 长时间思考（如数学题）期间发送 SSE keepalive，避免前端/代理误判连接超时断开
-            return EventSourceResponse(generate_openai_stream_v1(stream_request), ping=15)
+            return EventSourceResponse(generate_openai_stream_v1(stream_request, http_request=http_request), ping=15)
         else:
             # Non-streaming response (not implemented in this snippet)
             raise HTTPException(

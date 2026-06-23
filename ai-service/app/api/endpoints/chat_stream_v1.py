@@ -14,6 +14,8 @@ from datetime import datetime
 
 from typing import AsyncGenerator, Optional, Any
 
+from fastapi import Request
+
 from app.models.schemas import OpenAIChatRequest
 from app.models.database import StreamChunkModel, RawTokenModel
 from app.core.logging import get_logger
@@ -299,6 +301,9 @@ async def _process_segment_for_output(
         else:
             logger.info(f"{log_prefix}没有公式: {display_content}")
             voice_content = display_content
+    except asyncio.CancelledError:
+        logger.info(f"[{log_prefix} 语音转换被取消]")
+        raise
     except Exception:
         logger.exception(
             f"[{log_prefix} 语音转换失败，降级使用展示文本] display_content={display_content[:500]!r}"
@@ -676,6 +681,7 @@ async def save_raw_token(
 
 async def generate_openai_stream_v1(
     request: OpenAIChatRequest,
+    http_request: Optional[Request] = None,
 ) -> AsyncGenerator[str, None]:
     """
     生成 OpenAI 风格的 v1 API 流式响应。
@@ -737,6 +743,32 @@ async def generate_openai_stream_v1(
             }
         ],
     }
+
+    async def client_disconnected() -> bool:
+        """检查客户端是否已断开；http_request 缺失时视为未断开。
+
+        长时间推理（如数学题 TIR 185s）期间客户端可能已关闭，这里主动探测，
+        避免对已断开的连接继续做昂贵的后处理（boxed→语音转换 LLM 调用等）。
+        """
+        if http_request is None:
+            return False
+        try:
+            return await http_request.is_disconnected()
+        except Exception:
+            logger.exception("[Stream] Failed to check client disconnect state")
+            return False
+
+    async def stop_if_disconnected(stage: str) -> bool:
+        """客户端已断开则记录日志并返回 True，调用方据此尽早 return 结束生成器。"""
+        if await client_disconnected():
+            logger.info(
+                "[Stream] Client disconnected, stop streaming | stage=%s | chat_id=%s | session_id=%s",
+                stage,
+                chat_id,
+                session_id,
+            )
+            return True
+        return False
 
     chunk_sequence += 1
     await save_stream_chunk(
@@ -1190,6 +1222,10 @@ async def generate_openai_stream_v1(
                         logger.error(f"RAGAnything error | {chunk['content']}")
                         rag_stream_error = True
 
+                # 客户端断开后不再做最终 segment 的语音转换
+                if await stop_if_disconnected("before_rag_final_segment"):
+                    return
+
                 # 刷新 buffer 中剩余内容
                 final_segment = await sentence_buffer.flush(is_final=True)
                 if final_segment:
@@ -1387,7 +1423,11 @@ async def generate_openai_stream_v1(
 
                 start_time = time.perf_counter()
                 try:
+                    if await stop_if_disconnected("before_math_llm_stream"):
+                        return
                     async for chunk in streaming_llm.astream(messages):
+                        if await stop_if_disconnected("math_llm_chunk"):
+                            return
                         token = (
                             chunk.content if hasattr(chunk, "content") else str(chunk)
                         )
@@ -1458,6 +1498,10 @@ async def generate_openai_stream_v1(
                 logger.info(
                     f"Math-LLM done | duration={duration}ms | output_chars={len(full_answer)}"
                 )
+
+                # 客户端断开后不再做最终 segment 的 boxed→语音转换（LLM 调用，开销大）
+                if await stop_if_disconnected("before_math_final_segment"):
+                    return
 
                 # 刷新 buffer 中剩余内容
                 final_segment = await sentence_buffer.flush(is_final=True)
@@ -1596,6 +1640,8 @@ async def generate_openai_stream_v1(
                         exc_info=True,
                     )
                     raise
+                if await stop_if_disconnected("before_langchain_final_segment"):
+                    return
                 final_segment = await sentence_buffer.flush(is_final=True)
                 if final_segment:
                     (
@@ -1621,56 +1667,67 @@ async def generate_openai_stream_v1(
                 final_state = current_state
                 final_state["final_answer"] = full_answer
 
-    if final_state is None:
-        final_state = current_state
-
-    # 兜底：workflow 在 preprocess_query 之前退出（敏感词 break / 异常）时，
-    # 前端仍能收到 user_query chunk，保存原始输入。
-    if not user_query_chunk_saved:
-        await save_user_query_chunk_once(
-            display_user_query=original_user_query,
-            query_preprocessed=False,
-        )
-
-    sources = final_state.get("sources", [])
-
-    final_user_query = current_state.get("user_query") or original_user_query
-    _update_finish_chunk_metadata(
-        finish_chunk_data, final_state, final_user_query, model_name, sources
-    )
-
-    chunk_sequence += 1
-    await save_stream_chunk(
-        db,
-        chat_id,
-        chunk_sequence,
-        session_id,
-        request.user_id,
-        request.employee_id,
-        "done",
-        finish_chunk_data,
-        final_state.get("conversation_id", ""),
-    )
-
-    yield json.dumps(finish_chunk_data)
-
-    # 保存 final_state 用于调试
-    save_dir = "finish_chunk_data"
-    os.makedirs(save_dir, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    safe_query = sanitize_filename(final_user_query)
-    filename = f"{timestamp}_{session_id}_{safe_query}_finish_chunk_data.json"
-    filepath = os.path.join(save_dir, filename)
-    with open(filepath, "w", encoding="utf-8") as f:
-        json.dump(finish_chunk_data, f, ensure_ascii=False, indent=2, default=str)
-    logger.info(f"[调试] 保存 conversation_state 到 {filepath}")
-
-    # 流式结束保存会话，保证上下文记忆
+    # 收尾段统一在 try 内执行：客户端断开 / 任务取消时抛出 CancelledError，
+    # 这里单独捕获并记录后重新抛出——客户端断开是正常路径，不应记为错误，
+    # 也不应继续向已关闭的连接推送 done chunk。
     try:
-        await conversation_workflow.save_conversation(final_state)
-    except Exception as e:
-        logger.error(
-            f"Failed to persist streaming conversation at end: {e}", exc_info=True
+        if final_state is None:
+            final_state = current_state
+
+        # 兜底：workflow 在 preprocess_query 之前退出（敏感词 break / 异常）时，
+        # 前端仍能收到 user_query chunk，保存原始输入。
+        if not user_query_chunk_saved:
+            await save_user_query_chunk_once(
+                display_user_query=original_user_query,
+                query_preprocessed=False,
+            )
+
+        sources = final_state.get("sources", [])
+
+        final_user_query = current_state.get("user_query") or original_user_query
+        _update_finish_chunk_metadata(
+            finish_chunk_data, final_state, final_user_query, model_name, sources
         )
 
-    yield "[DONE]"
+        chunk_sequence += 1
+        await save_stream_chunk(
+            db,
+            chat_id,
+            chunk_sequence,
+            session_id,
+            request.user_id,
+            request.employee_id,
+            "done",
+            finish_chunk_data,
+            final_state.get("conversation_id", ""),
+        )
+
+        yield json.dumps(finish_chunk_data)
+
+        # 保存 final_state 用于调试
+        save_dir = "finish_chunk_data"
+        os.makedirs(save_dir, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_query = sanitize_filename(final_user_query)
+        filename = f"{timestamp}_{session_id}_{safe_query}_finish_chunk_data.json"
+        filepath = os.path.join(save_dir, filename)
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(finish_chunk_data, f, ensure_ascii=False, indent=2, default=str)
+        logger.info(f"[调试] 保存 conversation_state 到 {filepath}")
+
+        # 流式结束保存会话，保证上下文记忆
+        try:
+            await conversation_workflow.save_conversation(final_state)
+        except Exception as e:
+            logger.error(
+                f"Failed to persist streaming conversation at end: {e}", exc_info=True
+            )
+
+        yield "[DONE]"
+    except asyncio.CancelledError:
+        logger.info(
+            "[Stream] Streaming task cancelled | chat_id=%s | session_id=%s",
+            chat_id,
+            session_id,
+        )
+        raise
