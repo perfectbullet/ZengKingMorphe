@@ -16,18 +16,18 @@ What it measures:
 Example:
   python bench_vllm_openai.py \
     --base-url http://192.168.100.230:8200/v1 \
-    --model Qwen3-14B-AWQ \
+    --model Qwen3-32B \
     --concurrency 1 \
     --requests 10 \
     --max-tokens 512
 
 Concurrent test:
   python bench_vllm_openai.py \
-    --base-url http://192.168.100.230:8200/v1 \
-    --model Qwen3-14B-AWQ \
+    --base-url http://192.168.100.203:8200/v1 \
+    --model Qwen3-32B \
     --concurrency 4 \
     --requests 40 \
-    --max-tokens 1024
+    --max-tokens 16384
 """
 
 from __future__ import annotations

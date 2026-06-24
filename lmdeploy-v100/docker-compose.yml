@@ -1,26 +1,26 @@
 services:
-  qwen2-math-72b:
+  lmdeploy-v100:
     image: nvidia/cuda:12.8.0-devel-ubuntu24.04-py12-venv-v1.7
-    container_name: Qwen2.5-Math-72B
+    container_name: lmdeploy-v100
     restart: unless-stopped
 
     ports:
-      - "8015:8015"
+      - "8200:8200"
 
     volumes:
       - ~/.cache/huggingface:/root/.cache/huggingface
-      - /data/lx_code/llm_models:/home/workspace
+      - /data/metahuman_work/models:/home/workspace
 
-    shm_size: "16g"
-    ipc: host
+    shm_size: "64g"
+    # ipc: host
 
     gpus:
-      - count: 8
+      - count: 4
         capabilities: [gpu]
 
-    working_dir: /home/workspace/Qwen2.5-Math-72B-Instruct
+    working_dir: /home/workspace/
 
     command:
       - bash
       - -c
-      - "source /mnt/py12_confucius3_math/bin/activate && lmdeploy serve api_server Qwen2.5-Math-72B-Instruct --server-port 8015 --dtype float16 --tp 8 --session-len 10240"
+      - "source /mnt/py12_confucius3_math/bin/activate && lmdeploy serve api_server Qwen3-32B --server-port 8200 --dtype float16 --tp 4 --session-len 20480"

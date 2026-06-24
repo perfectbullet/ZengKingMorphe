@@ -108,3 +108,8 @@ ai-service/myplan.md
 myplan.md
 dev_rsync_deploy.sh
 ai-service/debug_contexts/*.md
+ai-service/data/math_concepts/math_concepts_content_list.json
+ai-service/data/math_concepts/binomial_theorem.md
+.gitignore
+测试流式查询.json
+ai-service/test_raganything_wrapper_output.txt

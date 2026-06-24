@@ -1,8 +1,13 @@
+import argparse
 import asyncio
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).parent.parent / ".env", override=False)
 
 from app.services.raganything_wrapper import (
     validate_required_env,
@@ -14,8 +19,21 @@ from app.services.raganything_wrapper import (
 
 
 async def main():
-    query = "请帮我讲解二项式定理"
-    mode = "hybrid"
+    parser = argparse.ArgumentParser(description="RAGAnything wrapper 流式查询测试")
+    parser.add_argument(
+        "--query",
+        default="请帮我讲解二项式定理",
+        help="测试查询问题（默认：请帮我讲解二项式定理）",
+    )
+    parser.add_argument(
+        "--mode",
+        default="hybrid",
+        help="检索模式 hybrid/local/global/naive（默认：hybrid）",
+    )
+    args = parser.parse_args()
+
+    query = args.query
+    mode = args.mode
 
     print("1. 检查环境变量")
     validate_required_env()
