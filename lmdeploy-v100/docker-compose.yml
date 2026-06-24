@@ -11,8 +11,27 @@ services:
       - ~/.cache/huggingface:/root/.cache/huggingface
       - /data/metahuman_work/models:/home/workspace
 
+    # LMDeploy 官方 docker 示例使用 --ipc=host；长上下文/多卡推理下更稳。
+    ipc: host
     shm_size: "64g"
-    # ipc: host
+
+    environment:
+      NVIDIA_VISIBLE_DEVICES: "0,1,2,3"
+      CUDA_VISIBLE_DEVICES: "0,1,2,3"
+
+      # 默认速度优先：20480。需要 40960 时启动前设置 SESSION_LEN=40960。
+      SESSION_LEN: "${SESSION_LEN:-20480}"
+
+      # 4 * 32GB V100 + Qwen3-32B + TP=4：默认给 KV Cache 留中等空间。
+      # 若 SESSION_LEN=40960 且并发=4，建议启动前设置 CACHE_MAX_ENTRY_COUNT=0.70。
+      CACHE_MAX_ENTRY_COUNT: "${CACHE_MAX_ENTRY_COUNT:-0.60}"
+
+      # 你的目标并发是 4；这里同时限制 engine batch 与 API 并发。
+      MAX_BATCH_SIZE: "${MAX_BATCH_SIZE:-4}"
+      MAX_CONCURRENT_REQUESTS: "${MAX_CONCURRENT_REQUESTS:-4}"
+
+      # 长 prompt 的 prefill 分块大小。20480 场景保持 8192；40960/OOM 时可降到 4096。
+      MAX_PREFILL_TOKEN_NUM: "${MAX_PREFILL_TOKEN_NUM:-8192}"
 
     gpus:
       - count: 4
@@ -22,5 +41,22 @@ services:
 
     command:
       - bash
-      - -c
-      - "source /mnt/py12_confucius3_math/bin/activate && lmdeploy serve api_server Qwen3-32B --server-port 8200 --dtype float16 --tp 4 --session-len 20480"
+      - -lc
+      - |
+        source /mnt/py12_confucius3_math/bin/activate
+        exec lmdeploy serve api_server Qwen3-32B \
+          --server-name 0.0.0.0 \
+          --server-port 8200 \
+          --backend turbomind \
+          --model-name Qwen3-32B \
+          --dtype float16 \
+          --tp 4 \
+          --session-len "${SESSION_LEN}" \
+          --cache-max-entry-count "${CACHE_MAX_ENTRY_COUNT}" \
+          --cache-block-seq-len 64 \
+          --max-batch-size "${MAX_BATCH_SIZE}" \
+          --max-concurrent-requests "${MAX_CONCURRENT_REQUESTS}" \
+          --max-prefill-token-num "${MAX_PREFILL_TOKEN_NUM}" \
+          --enable-prefix-caching \
+          --log-level INFO \
+          --max-log-len 2000
