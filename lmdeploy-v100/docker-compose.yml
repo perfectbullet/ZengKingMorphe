@@ -51,12 +51,12 @@ services:
           --model-name Qwen3-32B \
           --dtype float16 \
           --tp 4 \
-          --session-len "${SESSION_LEN}" \
-          --cache-max-entry-count "${CACHE_MAX_ENTRY_COUNT}" \
+          --session-len "$${SESSION_LEN}" \
+          --cache-max-entry-count "$${CACHE_MAX_ENTRY_COUNT}" \
           --cache-block-seq-len 64 \
-          --max-batch-size "${MAX_BATCH_SIZE}" \
-          --max-concurrent-requests "${MAX_CONCURRENT_REQUESTS}" \
-          --max-prefill-token-num "${MAX_PREFILL_TOKEN_NUM}" \
+          --max-batch-size "$${MAX_BATCH_SIZE}" \
+          --max-concurrent-requests "$${MAX_CONCURRENT_REQUESTS}" \
+          --max-prefill-token-num "$${MAX_PREFILL_TOKEN_NUM}" \
           --enable-prefix-caching \
           --log-level INFO \
           --max-log-len 2000
