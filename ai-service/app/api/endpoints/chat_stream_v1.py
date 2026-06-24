@@ -34,6 +34,15 @@ from app.utils.tts_formatter import strip_markdown_for_tts
 from app.utils.text_mapping import map_english_to_chinese, replace_en_math_verbs
 from app.utils.common import sanitize_filename, detect_dominant_language
 from app.services.raganything_wrapper import get_raganything_stream
+from app.services.math_debug_dump import (
+    build_base_debug_payload,
+    create_math_debug_file,
+    is_math_debug_dump_enabled,
+    mark_cancelled,
+    mark_completed,
+    mark_error,
+    safe_write_math_debug,
+)
 
 logger = get_logger(__name__)
 
@@ -1450,11 +1459,56 @@ async def generate_openai_stream_v1(
                 )
                 first_token_received = False
                 full_answer = ""
+                # ── 数学模型调试 dump：保存本次数学模型输入/输出为 JSON，便于排查 ──
+                math_debug_path = None
+                math_debug_payload = None
+                math_output_parts: list[str] = []
 
                 start_time = time.perf_counter()
                 try:
                     if await stop_if_disconnected("before_math_llm_stream"):
                         return
+
+                    # 创建调试 JSON（状态 running）；初始化失败不影响数学调用
+                    if is_math_debug_dump_enabled():
+                        try:
+                            math_debug_path = create_math_debug_file(
+                                user_id=request.user_id,
+                                employee_id=request.employee_id,
+                                session_id=session_id,
+                                chat_id=chat_id,
+                                runtime_mode=math_runtime_mode,
+                            )
+                            math_model_name = (
+                                getattr(streaming_llm, "model_name", None)
+                                or getattr(streaming_llm, "model", None)
+                                or model_name
+                            )
+                            math_debug_payload = build_base_debug_payload(
+                                status="running",
+                                user_id=request.user_id,
+                                employee_id=request.employee_id,
+                                session_id=session_id,
+                                chat_id=chat_id,
+                                runtime_mode=math_runtime_mode,
+                                model_name=math_model_name,
+                                base_url=_llm_base_url,
+                                user_query=current_state.get("user_query") or "",
+                                messages=messages,
+                                state=current_state,
+                            )
+                            safe_write_math_debug(math_debug_path, math_debug_payload)
+                            logger.info(
+                                "[MathDebugDump] Created math debug json | path=%s",
+                                math_debug_path,
+                            )
+                        except Exception:
+                            logger.exception(
+                                "[MathDebugDump] Failed to initialize math debug dump"
+                            )
+                            math_debug_path = None
+                            math_debug_payload = None
+
                     async for chunk in streaming_llm.astream(messages):
                         if await stop_if_disconnected("math_llm_chunk"):
                             return
@@ -1462,6 +1516,8 @@ async def generate_openai_stream_v1(
                             chunk.content if hasattr(chunk, "content") else str(chunk)
                         )
                         if token:
+                            # 保存模型原始增量（未经 think 标签过滤）用于调试
+                            math_output_parts.append(token)
                             raw_token_index += 1
                             await save_raw_token(
                                 db,
@@ -1516,18 +1572,57 @@ async def generate_openai_stream_v1(
                                         logger.info(
                                             f"First token received | ttfb_ms={ttfb_ms}"
                                         )
+                except asyncio.CancelledError:
+                    # 客户端断开 / 任务取消：记录 cancelled 后必须继续 raise
+                    if math_debug_payload is not None:
+                        math_debug_payload = mark_cancelled(
+                            math_debug_payload,
+                            output_content="".join(math_output_parts),
+                            duration_ms=int(
+                                (time.perf_counter() - start_time) * 1000
+                            ),
+                        )
+                        safe_write_math_debug(math_debug_path, math_debug_payload)
+                    raise
                 except Exception as e:
                     logger.error(
                         f"Math LLM astream failed | base_url={_llm_base_url} | model={model_name} | "
                         f"error_type={type(e).__name__} | tokens_sent_so_far={raw_token_index}",
                         exc_info=True,
                     )
+                    # 记录 error 调试 JSON（仍在 except 内，traceback 可取）；不吞异常
+                    if math_debug_payload is not None:
+                        math_debug_payload = mark_error(
+                            math_debug_payload,
+                            exc=e,
+                            output_content="".join(math_output_parts),
+                            duration_ms=int(
+                                (time.perf_counter() - start_time) * 1000
+                            ),
+                        )
+                        safe_write_math_debug(math_debug_path, math_debug_payload)
                     raise
 
                 duration = int((time.perf_counter() - start_time) * 1000)
                 logger.info(
                     f"Math-LLM done | duration={duration}ms | output_chars={len(full_answer)}"
                 )
+
+                # 数学模型正常结束：更新调试 JSON 为 completed
+                if math_debug_payload is not None:
+                    _math_output_content = "".join(math_output_parts)
+                    math_debug_payload = mark_completed(
+                        math_debug_payload,
+                        output_content=_math_output_content,
+                        duration_ms=duration,
+                    )
+                    safe_write_math_debug(math_debug_path, math_debug_payload)
+                    logger.info(
+                        "[MathDebugDump] Completed math debug json | path=%s | output_chars=%s | duration_ms=%s",
+                        math_debug_path,
+                        len(_math_output_content),
+                        duration,
+                    )
 
                 # 客户端断开后不再做最终 segment 的 boxed→语音转换（LLM 调用，开销大）
                 if await stop_if_disconnected("before_math_final_segment"):
