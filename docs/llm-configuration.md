@@ -36,7 +36,7 @@ MATH_MODEL_NAME=                     # 留空则通过 vLLM 自动发现模型�
 MATH_TEMPERATURE=0.6
 MATH_TOP_P=0.95
 MATH_MAX_TOKEN=10240
-MATH_RUNTIME_MODE=llm                # llm / cot / tir
+MATH_RUNTIME_MODE=direct             # direct / cot / tir（旧 llm 已删除，配置 llm 会报错）
 ```
 
 `Qwen3-32B` 会忽略 `MATH_TEMPERATURE` / `MATH_TOP_P`，请求中不传

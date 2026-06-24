@@ -4,10 +4,15 @@
 目标：
 1. 保持上层仍可使用 `astream(messages)` / `ainvoke(messages)`。
 2. 根据配置动态切换：
-   - llm: 直接使用 ChatOpenAI
+   - direct: 直接使用 ChatOpenAI
    - cot: 使用 Qwen-Agent Assistant(function_list=[])
    - tir: 使用 Qwen-Agent TIRMathAgent
 3. 将 Qwen-Agent 的“全量流式输出”适配成更接近 OpenAI / LangChain 的增量流式接口。
+
+合法运行模式固定为 ``direct / cot / tir``（见 ``VALID_RUNTIME_MODES``）。旧版
+``llm`` 模式名已彻底删除：传入 ``llm`` 会被 ``validate_runtime_mode`` 判定为
+非法配置并直接抛 ``ValueError``，不会静默 fallback 到 ``direct``，也不再提供
+``llm -> direct`` 别名兼容。
 """
 
 from __future__ import annotations
@@ -44,6 +49,13 @@ def _resolve_max_runtime_seconds() -> int:
     return value if value > 0 else _DEFAULT_MAX_RUNTIME_SECONDS
 
 
+# direct 模式专用系统提示词。
+# 当前内容与 cot 暂时相同，但必须拆成独立常量，后续方便单独调整。
+# 注意：direct 的系统提示词不再从 prompts.prompts.QWEN_MATH_SYSTEM_PROMPT 获取，
+# 而是统一收敛到本模块的 SYSTEM_PROMPTS。
+DIRECT_SYSTEM_EN = "Please reason step by step, and put your final answer within \\boxed{}."
+DIRECT_SYSTEM_ZH = "请逐步推理，并将最终答案放在 \\boxed{} 中。请全程使用中文作答。"
+
 TIR_SYSTEM_EN = (
     "Please integrate natural language reasoning with programs to solve "
     "the problem above, and put your final answer within \\boxed{}."
@@ -53,7 +65,13 @@ COT_SYSTEM_EN = "Please reason step by step, and put your final answer within \\
 TIR_SYSTEM_ZH = "请结合自然语言推理和程序来解决上述问题，并将最终答案放在 \\boxed{} 中。请全程使用中文作答。"
 COT_SYSTEM_ZH = "请逐步推理，并将最终答案放在 \\boxed{} 中。请全程使用中文作答。"
 
+# 数学运行模式合法值集合。``llm`` 已彻底删除，不再提供别名/兼容；
+# 传入 ``llm`` 会被 ``validate_runtime_mode`` 直接判定为非法配置。
+VALID_RUNTIME_MODES = {"direct", "cot", "tir"}
+
 SYSTEM_PROMPTS = {
+    ("direct", "zh"): DIRECT_SYSTEM_ZH,
+    ("direct", "en"): DIRECT_SYSTEM_EN,
     ("tir", "zh"): TIR_SYSTEM_ZH,
     ("tir", "en"): TIR_SYSTEM_EN,
     ("cot", "zh"): COT_SYSTEM_ZH,
@@ -78,16 +96,23 @@ class MathAgentService:
     def __init__(self, config: MathRuntimeConfig):
         self.config = config
 
-    def create_streaming_interface(self, mode: str = "llm", lang: str = "zh"):
+    def create_streaming_interface(self, mode: str = "direct", lang: str = "zh"):
         """返回统一流式接口对象。
 
         返回值始终兼容：
         - `await obj.ainvoke(messages)`
         - `async for chunk in obj.astream(messages): ...`
+
+        - ``direct``：返回原生 ``ChatOpenAI``，由调用方在 messages 中注入 system prompt；
+        - ``cot`` / ``tir``：返回 ``MathAgentStreamingAdapter``，system prompt 由
+          Qwen-Agent 内部使用，调用方不再注入。
         """
-        if mode == "llm":
+        runtime_mode = self.validate_runtime_mode(mode)
+
+        if runtime_mode == "direct":
             return self.create_chat_openai()
-        return MathAgentStreamingAdapter(service=self, mode=mode, lang=lang)
+
+        return MathAgentStreamingAdapter(service=self, mode=runtime_mode, lang=lang)
 
     def create_chat_openai(self) -> ChatOpenAI:
         """创建 OpenAI 兼容数学模型。"""
@@ -102,9 +127,15 @@ class MathAgentService:
         return ChatOpenAI(**kwargs)
 
     def create_qwen_agent(self, mode: str = "cot", lang: str = "zh"):
-        """创建 Qwen-Agent 数学 Agent。"""
-        if mode not in {"cot", "tir"}:
-            raise ValueError("mode must be 'cot', 'tir', or 'llm'")
+        """创建 Qwen-Agent 数学 Agent。
+
+        ``direct`` 不走 Qwen-Agent（它使用原生 ``ChatOpenAI``），因此传入
+        ``direct`` 或任何非法值时会抛 ``ValueError``；合法值仅为 ``cot`` / ``tir``。
+        """
+        runtime_mode = self.validate_runtime_mode(mode)
+
+        if runtime_mode not in {"cot", "tir"}:
+            raise ValueError("Qwen-Agent mode must be 'cot' or 'tir'")
         if lang not in {"zh", "en"}:
             raise ValueError("lang must be 'zh' or 'en'")
 
@@ -121,9 +152,9 @@ class MathAgentService:
             "api_key": self.config.api_key,
             "generate_cfg": generate_cfg,
         }
-        system_message = SYSTEM_PROMPTS[(mode, lang)]
+        system_message = SYSTEM_PROMPTS[(runtime_mode, lang)]
 
-        if mode == "cot":
+        if runtime_mode == "cot":
             return Assistant(
                 llm=llm_cfg,
                 name=self.config.model,
@@ -192,6 +223,46 @@ class MathAgentService:
             return response.get("content", "") or ""
 
         return ""
+
+    # ------------------------------------------------------------------
+    # 运行模式校验 / 系统提示词查询
+    # ------------------------------------------------------------------
+    @staticmethod
+    def validate_runtime_mode(mode: str | None) -> str:
+        """校验并归一化数学运行模式。
+
+        - ``None`` / 空串 → 默认 ``direct``；
+        - 命中 ``VALID_RUNTIME_MODES`` → 归一化（去空白 + 小写）后返回；
+        - 非法值（含已删除的 ``llm``）→ 直接抛 ``ValueError``，不静默 fallback。
+        """
+        runtime_mode = (mode or "direct").strip().lower()
+
+        if runtime_mode not in VALID_RUNTIME_MODES:
+            raise ValueError(
+                f"Invalid math runtime mode: {mode!r}. "
+                f"Allowed values are: {sorted(VALID_RUNTIME_MODES)}"
+            )
+
+        return runtime_mode
+
+    @staticmethod
+    def get_system_prompt(mode: str = "direct", lang: str = "zh") -> str:
+        """按 ``mode + lang`` 取数学系统提示词。
+
+        ``lang`` 不在 ``{zh, en}`` 时回退为 ``zh``，保证不抛异常。
+        """
+        runtime_mode = MathAgentService.validate_runtime_mode(mode)
+        runtime_lang = (lang or "zh").strip().lower()
+
+        if runtime_lang not in {"zh", "en"}:
+            runtime_lang = "zh"
+
+        return SYSTEM_PROMPTS[(runtime_mode, runtime_lang)]
+
+    @staticmethod
+    def is_direct_mode(mode: str | None) -> bool:
+        """是否为 ``direct`` 运行模式（非法值会抛 ``ValueError``）。"""
+        return MathAgentService.validate_runtime_mode(mode) == "direct"
 
 
 class MathAgentStreamingAdapter:

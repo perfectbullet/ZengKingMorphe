@@ -114,9 +114,6 @@ MATH_CUBE_DIAGONAL_HINT = """【对角线强制判定（必须遵守）】
 题目："""
 
 
-# Qwen Math 模型专用提示词（https://modelscope.cn/models/Qwen/Qwen3-14B-AWQ/summary）
-QWEN_MATH_SYSTEM_PROMPT = """请逐步推理，并将您的最终答案放在\\boxed{}内。"""
-
 # ❌ 未使用
 QWEN_MATH_SYSTEM_PROMPT_V2 = """你是一名的数学解题专家。按以下要求完成数学题目的求解：
 1.所有数学公式使用 LaTeX 格式；

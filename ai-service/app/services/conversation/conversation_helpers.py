@@ -21,7 +21,7 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.services.conversation.conversation_state import ConversationState
 from app.utils.common import detect_dominant_language
-from prompts.prompts import QWEN_MATH_SYSTEM_PROMPT
+from app.services.math_agent_service import MathAgentService
 
 logger = get_logger(__name__)
 
@@ -1192,29 +1192,36 @@ User question:
 def build_math_generation_messages(
     state: ConversationState,
     include_system_prompt: bool = True,
+    math_runtime_mode: str = "direct",
+    math_runtime_lang: str = "zh",
 ) -> List:
     """
     构建数学问题的模型消息。
 
-    ``llm`` 模式使用 QWEN_MATH_SYSTEM_PROMPT；``cot`` / ``tir`` 模式由
-    Qwen-Agent 自己的 Assistant / TIRMathAgent system_message 决定模式提示词，
-    这里不再额外注入 system prompt，避免两套模式提示互相叠加。
+    系统提示词统一来自 ``MathAgentService.get_system_prompt(mode, lang)``：
+    - ``direct`` 模式：``include_system_prompt=True``，注入对应语言的 direct system prompt；
+    - ``cot`` / ``tir`` 模式：``include_system_prompt=False``，模式提示词由 Qwen-Agent
+      自己的 Assistant / TIRMathAgent system_message 决定，这里不再额外注入，避免两套
+      模式提示互相叠加。
+
+    数学历史一律禁用（``history_msgs=[]``）。
 
     Args:
         state: Current conversation state
-        include_system_prompt: 是否注入通用数学 system prompt
+        include_system_prompt: 是否注入数学 system prompt
+        math_runtime_mode: 数学运行模式（direct / cot / tir），决定使用哪套提示词
+        math_runtime_lang: 提示词语言（zh / en）
 
     Returns:
         List of Message objects for math LLM
     """
-    # math_model = os.getenv("MATH_MODEL_NAME", "").lower()
-    # is_qwen_math = "qwen" in math_model
-
-    # raw_query = (state.get("user_query") or "").strip()
-
     messages = []
     if include_system_prompt:
-        messages.append(SystemMessage(content=QWEN_MATH_SYSTEM_PROMPT))
+        system_prompt = MathAgentService.get_system_prompt(
+            mode=math_runtime_mode,
+            lang=math_runtime_lang,
+        )
+        messages.append(SystemMessage(content=system_prompt))
 
     # 数学模型一律不携带历史对话：历史上下文会污染推理（如敏感词命中后的拒答
     # 话术、空 assistant 消息等被一并送入），导致数学模型 prompt 串入噪声。
@@ -1227,6 +1234,8 @@ def build_math_generation_messages(
     logger.info(
         "build_math_generation_messages [qwen_math]: "
         f"include_system_prompt={include_system_prompt}, "
+        f"math_runtime_mode={math_runtime_mode}, "
+        f"math_runtime_lang={math_runtime_lang}, "
         f"history_msgs={len(history_msgs)}, "
         f"math_history_disabled=True, "
         f"effective_query={effective_query!r}"

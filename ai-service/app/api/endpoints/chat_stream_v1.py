@@ -1437,9 +1437,10 @@ async def generate_openai_stream_v1(
                 # 数学模型推理流式输出
                 streaming_llm = current_state.get("streaming_llm")
                 messages = current_state.get("streaming_messages")
-                math_runtime_mode = current_state.get("math_runtime_mode") or getattr(
-                    streaming_llm, "mode", "llm"
-                )
+                # math_runtime_mode 已由 generate_answer 节点写入 state（值为
+                # direct/cot/tir）；不再从 ChatOpenAI 对象 getattr 一个不存在的 mode
+                # 属性，旧 ``llm`` 模式已彻底删除。
+                math_runtime_mode = current_state.get("math_runtime_mode") or "direct"
                 if not streaming_llm or not messages:
                     logger.error(
                         "streaming_llm or messages not configured for math_llm type"

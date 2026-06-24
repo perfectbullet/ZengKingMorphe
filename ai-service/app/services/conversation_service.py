@@ -192,7 +192,7 @@ class ConversationWorkflow:
         - MATH_LLM_ENABLED: 是否启用（默认 true）
         - MATH_MODEL_BASE_URL: API 地址
         - MATH_MODEL_NAME: 模型名（不设则通过 vLLM 自动发现）
-        - MATH_RUNTIME_MODE: llm / cot / tir
+        - MATH_RUNTIME_MODE: direct / cot / tir（旧 ``llm`` 已删除，配置 ``llm`` 会抛错）
         - MATH_RUNTIME_LANG: zh / en（不设时按 query 粗略推断）
         - MATH_TEMPERATURE / MATH_TOP_P: 非 Qwen3-32B 模型的采样参数；
           Qwen3-32B 始终使用服务端 generation_config.json
@@ -229,13 +229,10 @@ class ConversationWorkflow:
         if use_model_generation_defaults:
             math_temperature = None
             math_top_p = None
-        runtime_mode = os.getenv("MATH_RUNTIME_MODE", "llm").lower()
+        raw_runtime_mode = os.getenv("MATH_RUNTIME_MODE", "direct")
+        # 非法值（含已删除的 llm）直接抛 ValueError，让配置问题暴露，不静默 fallback。
+        runtime_mode = MathAgentService.validate_runtime_mode(raw_runtime_mode)
         runtime_lang = (os.getenv("MATH_RUNTIME_LANG") or "").strip().lower()
-        if runtime_mode not in {"llm", "cot", "tir"}:
-            logger.warning(
-                f"Invalid MATH_RUNTIME_MODE={runtime_mode}, fallback to llm"
-            )
-            runtime_mode = "llm"
 
         query_text = (
             state.get("rewritten_query")
@@ -266,6 +263,11 @@ class ConversationWorkflow:
             f"math_temperature={math_temperature} | math_top_p={math_top_p} | "
             f"math_max_token={math_max_token}"
         )
+
+        # 把运行模式/语言写入 state，供下游节点（conversation_nodes）构建数学消息时读取，
+        # 避免再从 ChatOpenAI 对象上 getattr 一个不存在的 mode 属性。
+        state["math_runtime_mode"] = runtime_mode
+        state["math_runtime_lang"] = runtime_lang
 
         return math_llm, model_id
 
