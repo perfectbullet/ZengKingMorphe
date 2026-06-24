@@ -1216,8 +1216,9 @@ def build_math_generation_messages(
     if include_system_prompt:
         messages.append(SystemMessage(content=QWEN_MATH_SYSTEM_PROMPT))
 
-    history_msgs = _build_conversation_history(state, max_messages=12)
-    messages.extend(history_msgs)
+    # 数学模型一律不携带历史对话：历史上下文会污染推理（如敏感词命中后的拒答
+    # 话术、空 assistant 消息等被一并送入），导致数学模型 prompt 串入噪声。
+    history_msgs: List = []
 
     effective_query = _select_llm_facing_query(state)
 
@@ -1227,6 +1228,7 @@ def build_math_generation_messages(
         "build_math_generation_messages [qwen_math]: "
         f"include_system_prompt={include_system_prompt}, "
         f"history_msgs={len(history_msgs)}, "
+        f"math_history_disabled=True, "
         f"effective_query={effective_query!r}"
     )
     return messages
