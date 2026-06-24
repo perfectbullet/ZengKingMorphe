@@ -113,3 +113,4 @@ ai-service/data/math_concepts/binomial_theorem.md
 .gitignore
 测试流式查询.json
 ai-service/test_raganything_wrapper_output.txt
+ai-service/result.json
