@@ -202,9 +202,8 @@ CHOICE_CONTEXT_RE = re.compile(
 )
 
 
-CHOICE_OPTION_RE = re.compile(
+CHOICE_OPTION_MARKER_RE = re.compile(
     r"""
-    (?P<prefix>^|[\n。！？；;，,：:]\s*|\s+)
     (?:
         (?P<label1>[A-Da-d])\s*选项
         |
@@ -216,39 +215,88 @@ CHOICE_OPTION_RE = re.compile(
 )
 
 
+def has_full_choice_option_markers(text: str) -> bool:
+    """文本中是否同时出现 A/B/C/D 四个“选项”口语化标记。"""
+    if not text:
+        return False
+
+    labels = set()
+
+    for match in CHOICE_OPTION_MARKER_RE.finditer(text):
+        label = (match.group("label1") or match.group("label2") or "").upper()
+        if label:
+            labels.add(label)
+
+    return {"A", "B", "C", "D"}.issubset(labels)
+
+
+def is_choice_context(text: str) -> bool:
+    """是否处于选择题语境：命中显式关键词，或同时出现 A/B/C/D 四个选项标记。"""
+    if not text:
+        return False
+
+    return bool(CHOICE_CONTEXT_RE.search(text)) or has_full_choice_option_markers(text)
+
+
+def _format_text_before_choice_marker(before: str) -> str:
+    """规范化某个“选项X”标记之前的文本片段，决定它如何收尾并换行。"""
+    if before == "":
+        return ""
+
+    stripped = before.rstrip()
+
+    # 处理：则选项A  ->  则：
+    if stripped.endswith("则"):
+        return stripped[:-1] + "则：\n"
+
+    # 处理：则，选项A / 则,选项A / 则：选项A / 则:选项A  ->  则：
+    for suffix in ("则，", "则,", "则：", "则:"):
+        if stripped.endswith(suffix):
+            return stripped[: -len(suffix)] + "则：\n"
+
+    # 前面已经是换行，不重复制造多余空行。
+    if stripped.endswith("\n"):
+        return stripped
+
+    # 普通情况：保留前面的标点或正文，然后换行。
+    return stripped + "\n"
+
+
 def normalize_choice_option_markers(text: str) -> str:
     if not text:
         return text
 
-    if not CHOICE_CONTEXT_RE.search(text):
+    if not is_choice_context(text):
         return text
 
-    def repl(match: re.Match) -> str:
-        prefix = match.group("prefix") or ""
+    result_parts = []
+    last_end = 0
+    matched = False
+
+    for match in CHOICE_OPTION_MARKER_RE.finditer(text):
         label = (match.group("label1") or match.group("label2") or "").upper()
-
         if not label:
-            return match.group(0)
+            continue
 
-        # 选项在文本开头时，不额外加前置换行。
-        if prefix == "":
-            return f"{label}. "
+        matched = True
 
-        # 如果前缀包含标点，则标点保留在上一行末尾，然后换行。
-        stripped = prefix.strip()
-        if stripped in {"。", "！", "？", "；", ";", "，", ",", "：", ":"}:
-            return f"{prefix.rstrip()}\n{label}. "
+        before = text[last_end : match.start()]
+        result_parts.append(_format_text_before_choice_marker(before))
+        result_parts.append(f"{label}. ")
 
-        # 如果前缀是换行，保留换行。
-        if "\n" in prefix:
-            return f"\n{label}. "
+        last_end = match.end()
 
-        # 普通空格前缀：在选择题语境中也统一换行。
-        return f"\n{label}. "
+    if not matched:
+        return text
 
-    normalized = CHOICE_OPTION_RE.sub(repl, text)
+    result_parts.append(text[last_end:])
 
-    return normalized.lstrip()
+    normalized = "".join(result_parts)
+
+    # 清理 3 个以上连续换行，避免异常空行。
+    normalized = re.sub(r"\n{3,}", "\n\n", normalized)
+
+    return normalized.strip()
 
 
 def clean_model_output(content: str) -> str:

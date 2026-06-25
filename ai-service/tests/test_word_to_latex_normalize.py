@@ -122,3 +122,77 @@ def test_do_not_normalize_choice_options_without_choice_context():
 def test_do_not_normalize_existing_choice_markers():
     text = "下列说法正确的是：A. $x>0$；B. $x<0$。"
     assert normalize_choice_option_markers(text) == text
+
+
+def test_normalize_choice_options_after_ze():
+    text = (
+        "(多选题)已知$b>0$，若对任意$x\\in (0, +\\infty)$，"
+        "不等式$ax^3 + 3x^2 - abx - 3b \\leq 0$恒成立，"
+        "则选项A：$a < 0$；选项B：$a^2 b = 3$；"
+        "选项C：$a^2 + 4b$的最小值为12；"
+        "选项D：$a^2 + ab + 3a + b$的最小值为$6 - 6\\sqrt{3}$。"
+    )
+
+    assert normalize_choice_option_markers(text) == (
+        "(多选题)已知$b>0$，若对任意$x\\in (0, +\\infty)$，"
+        "不等式$ax^3 + 3x^2 - abx - 3b \\leq 0$恒成立，则：\n"
+        "A. $a < 0$；\n"
+        "B. $a^2 b = 3$；\n"
+        "C. $a^2 + 4b$的最小值为12；\n"
+        "D. $a^2 + ab + 3a + b$的最小值为$6 - 6\\sqrt{3}$。"
+    )
+
+
+def test_normalize_choice_options_after_ze_colon():
+    text = "多选题：已知条件，则：选项A：$x>0$；选项B：$x<0$；选项C：$x=0$；选项D：$x\\ne0$。"
+
+    assert normalize_choice_option_markers(text) == (
+        "多选题：已知条件，则：\n"
+        "A. $x>0$；\n"
+        "B. $x<0$；\n"
+        "C. $x=0$；\n"
+        "D. $x\\ne0$。"
+    )
+
+
+def test_normalize_choice_options_by_full_abcd_markers_without_explicit_context():
+    text = "已知条件，则选项A：$x>0$；选项B：$x<0$；选项C：$x=0$；选项D：$x\\ne0$。"
+
+    assert normalize_choice_option_markers(text) == (
+        "已知条件，则：\n"
+        "A. $x>0$；\n"
+        "B. $x<0$；\n"
+        "C. $x=0$；\n"
+        "D. $x\\ne0$。"
+    )
+
+
+def test_do_not_normalize_partial_option_markers_without_choice_context():
+    # 仅出现部分选项标记（A、B），无选择题语境关键词，也不构成完整 A/B/C/D，应保持原样。
+    text = "这里只是提到了选项A和选项B，但不是数学题。"
+    assert normalize_choice_option_markers(text) == text
+
+
+def test_do_not_normalize_existing_structured_choice_markers():
+    text = "下列说法正确的是：A. $x>0$；B. $x<0$；C. $x=0$；D. $x\\ne0$。"
+    assert normalize_choice_option_markers(text) == text
+
+
+def test_normalize_only_remaining_option_a_when_bcd_already_structured():
+    text = (
+        "(多选题)已知$b>0$，若对任意$x\\in (0, +\\infty)$，"
+        "不等式$ax^3 + 3x^2 - abx - 3b \\leq 0$恒成立，"
+        "则选项A：$a < 0$；\n"
+        "B. $a^2 b = 3$；\n"
+        "C. $a^2 + 4b$的最小值为12；\n"
+        "D. $a^2 + ab + 3a + b$的最小值为$6 - 6\\sqrt{3}$。"
+    )
+
+    assert normalize_choice_option_markers(text) == (
+        "(多选题)已知$b>0$，若对任意$x\\in (0, +\\infty)$，"
+        "不等式$ax^3 + 3x^2 - abx - 3b \\leq 0$恒成立，则：\n"
+        "A. $a < 0$；\n"
+        "B. $a^2 b = 3$；\n"
+        "C. $a^2 + 4b$的最小值为12；\n"
+        "D. $a^2 + ab + 3a + b$的最小值为$6 - 6\\sqrt{3}$。"
+    )
