@@ -35,9 +35,7 @@ load_dotenv(AI_SERVICE_DIR / ".env", override=False)
 WORD_TO_LATEX_LLM_BASE_URL = os.getenv("MATH_MODEL_BASE_URL")
 WORD_TO_LATEX_LLM_MODEL = os.getenv("MATH_MODEL_NAME")
 WORD_TO_LATEX_LLM_API_KEY = (
-    os.getenv("LLM_API_KEY")
-    or os.getenv("OPENAI_API_KEY")
-    or "empty"
+    os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY") or "empty"
 )
 WORD_TO_LATEX_TIMEOUT = float(os.getenv("WORD_TO_LATEX_TIMEOUT", "30"))
 WORD_TO_LATEX_MAX_TOKENS = int(os.getenv("WORD_TO_LATEX_MAX_TOKENS", "1024"))
@@ -170,10 +168,7 @@ def normalize_spoken_subquestion_markers(text: str) -> str:
     def repl(match: re.Match) -> str:
         prefix = match.group("prefix") or ""
         raw_index = (
-            match.group("num1")
-            or match.group("ord")
-            or match.group("num2")
-            or ""
+            match.group("num1") or match.group("ord") or match.group("num2") or ""
         )
 
         index = _normalize_subquestion_index(raw_index)
@@ -260,7 +255,7 @@ def clean_model_output(content: str) -> str:
     cleaned = strip_code_fence(strip_think_tags(content)).strip()
     for prefix in ("输出：", "输出:", "结果：", "结果:"):
         if cleaned.startswith(prefix):
-            cleaned = cleaned[len(prefix):].strip()
+            cleaned = cleaned[len(prefix) :].strip()
 
     cleaned = cleaned.strip().strip('"').strip("'").strip()
     cleaned = normalize_spoken_subquestion_markers(cleaned)
@@ -296,10 +291,19 @@ async def word_to_latex(text: str) -> str:
             model=WORD_TO_LATEX_LLM_MODEL,
             messages=[
                 {"role": "system", "content": WORD_TO_LATEX_SYSTEM_PROMPT},
-                {"role": "user", "content": f"请转换下面的文本，并只返回转换后的完整文本：\n\n输入：{query}"},
+                {
+                    "role": "user",
+                    "content": f"请转换下面的文本，并只返回转换后的完整文本：\n\n输入：{query}",
+                },
             ],
-            temperature=0.0,
+            temperature=0.7,
+            top_p=0.8,
+            presence_penalty=0,
             max_tokens=WORD_TO_LATEX_MAX_TOKENS,
+            extra_body={
+                "top_k": 20,
+                "chat_template_kwargs": {"enable_thinking": False},
+            }            
         )
         content = response.choices[0].message.content or ""
         return clean_model_output(content)
@@ -327,7 +331,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output",
         type=Path,
-        default=REPO_ROOT / "data" / 'word2latex_prompt_sample.md',
+        default=REPO_ROOT / "data" / "word2latex_prompt_sample.md",
         help="输出 Markdown 路径，默认 data/output/word2latex_prompt_sample-时间戳.md。",
     )
     parser.add_argument(
@@ -493,8 +497,7 @@ async def main() -> None:
     reviewed_line_nos, drop_line_nos = load_review_line_nos(review_path)
     if reviewed_line_nos:
         samples = [
-            sample for sample in samples
-            if sample["line_no"] not in drop_line_nos
+            sample for sample in samples if sample["line_no"] not in drop_line_nos
         ]
         unreviewed_count = source_count - len(reviewed_line_nos)
         print(
