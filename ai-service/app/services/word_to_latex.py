@@ -119,12 +119,81 @@ def strip_code_fence(text: str) -> str:
     return text.strip("`").strip()
 
 
+SUBQUESTION_INDEX_MAP = {
+    "一": 1,
+    "二": 2,
+    "三": 3,
+    "第一": 1,
+    "第二": 2,
+    "第三": 3,
+    "1": 1,
+    "2": 2,
+    "3": 3,
+    "１": 1,
+    "２": 2,
+    "３": 3,
+}
+
+
+def _normalize_subquestion_index(raw: str):
+    return SUBQUESTION_INDEX_MAP.get(raw.strip())
+
+
+SUBQUESTION_SPOKEN_RE = re.compile(
+    r"""
+    (?P<prefix>^|[\n。！？；;，,、]\s*)
+    (?P<marker>
+        第\s*(?P<num1>[一二三123１２３])\s*(?:问|小题|小问)
+        |
+        (?P<ord>第一|第二|第三)\s*(?:问|小题|小问)
+        |
+        问题\s*(?P<num2>[一二三123１２３])
+    )
+    [，,、。．:\s]*
+    """,
+    re.VERBOSE,
+)
+
+
+def normalize_spoken_subquestion_markers(text: str) -> str:
+    if not text:
+        return text
+
+    def repl(match: re.Match) -> str:
+        prefix = match.group("prefix") or ""
+        raw_index = (
+            match.group("num1")
+            or match.group("ord")
+            or match.group("num2")
+            or ""
+        )
+
+        index = _normalize_subquestion_index(raw_index)
+        if index is None:
+            return match.group(0)
+
+        # 小问前的标点分两类：
+        # - 强分隔（句末标点 。！？；;）：保留原标点并换两行，作为新段落起点。
+        # - 弱分隔（逗号 ，, 、顿号 、）：句内停顿，原样保留、不换行。
+        # 例如：第一问求E的方程。第二问证明...  ->  (1)求E的方程。\n\n(2)证明...
+        #       $，第一小问：求周期。            ->  $，(1)：求周期。
+        if prefix and prefix.strip() in {"。", "！", "？", "；", ";"}:
+            prefix = prefix.rstrip() + "\n\n"
+
+        return f"{prefix}({index})"
+
+    return SUBQUESTION_SPOKEN_RE.sub(repl, text)
+
+
 def clean_model_output(content: str) -> str:
     cleaned = strip_code_fence(strip_think_tags(content)).strip()
     for prefix in ("输出：", "输出:", "结果：", "结果:"):
         if cleaned.startswith(prefix):
             cleaned = cleaned[len(prefix):].strip()
-    return cleaned.strip().strip('"').strip("'").strip()
+
+    cleaned = cleaned.strip().strip('"').strip("'").strip()
+    cleaned = normalize_spoken_subquestion_markers(cleaned)
+    return cleaned.strip()
 
 
 def create_client() -> AsyncOpenAI:
