@@ -1499,10 +1499,7 @@ async def generate_openai_stream_v1(
                                 state=current_state,
                             )
                             safe_write_math_debug(math_debug_path, math_debug_payload)
-                            logger.info(
-                                "[MathDebugDump] Created math debug json | path=%s",
-                                math_debug_path,
-                            )
+                            logger.info("[MathDebugDump] Created math debug json | path={}".format(math_debug_path))
                         except Exception:
                             logger.exception(
                                 "[MathDebugDump] Failed to initialize math debug dump"
