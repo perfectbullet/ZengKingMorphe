@@ -205,3 +205,14 @@ class ConversationState(TypedDict):
     # 过滤掉未声明字段，导致下游读到空值后 fallback 到默认中文，出现
     # “英文问、中英文混合答”这类语言飘移 Bug。设为 Optional 兼容初始未设置场景。
     prefer_zh_output: Optional[bool]
+    # ASR→LaTeX 分类后转换的决策与结果（由 post_classification_preprocess 节点写入）。
+    # 时机说明：原先在 preprocess_query 里靠 is_math_problem 启发式决定是否转换，
+    # 会漏掉“次品/测试/方法数”这类排列组合题；改为先由 classify_query_type 的 LLM
+    # 分类器判定为 math_problem 后，再在 post_classification_preprocess 调用
+    # word_to_latex，确保数学模型拿到的是转换后的题干。同样必须在 TypedDict 声明，
+    # 否则被 LangGraph schema 过滤后 chat_stream_v1 读不到 query_preprocessed。
+    asr_latex_should_run: Optional[bool]   # 分类后是否应当执行 ASR→LaTeX 转换
+    asr_latex_converted: Optional[bool]    # 是否实际完成了转换（query 被改写）
+    query_preprocessed: Optional[bool]     # user_query 是否被本节点改写（供前端 chunk 判定）
+    asr_latex_before: Optional[str]        # 转换前原文（审计/排查）
+    asr_latex_after: Optional[str]         # 转换后文本（审计/排查）

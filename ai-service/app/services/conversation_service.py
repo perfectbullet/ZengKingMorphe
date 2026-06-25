@@ -7,15 +7,19 @@
 - 双 LLM 架构（本地 Ollama + 远程 OpenAI 兼容 API）
 - 流式响应与性能监控
 
-工作流图（8 节点）：
+工作流图（9 节点）：
     load_employee_config → load_session_context → input_validation
-        → classify_query_type
+        → preprocess_query → classify_query_type → post_classification_preprocess
         → [条件分支: greeting/noise?]   → generate_answer
         → [条件分支: realtime?]          → web_search → generate_answer
-        → [条件分支: math?]              → generate_answer（数学模型）
+        → [条件分支: math?]              → generate_answer（数学模型；ASR→LaTeX 已在上一个节点完成）
         → [条件分支: rag (concept)?]     → evaluate_complexity → generate_answer（RAGAnything）
         → [条件分支: general?]           → generate_answer（通用 LLM，不走 RAG）
         → save_conversation → END
+
+注：post_classification_preprocess 负责“分类后”的 ASR→LaTeX 转换——先由
+classify_query_type 的 LLM 分类器判定是否为数学题，再统一调用 word_to_latex，
+避免原先 preprocess_query 中 is_math_problem 启发式漏判排列组合题。
 
 意图 → 回答路径的映射统一维护在
 ``app/services/conversation/intent_routing.py``（INTENT_TO_ANSWER_MODE）。
@@ -308,6 +312,7 @@ class ConversationWorkflow:
         graph.add_node("input_validation", self.nodes.validate_input)
         graph.add_node("preprocess_query", self.nodes.preprocess_query)
         graph.add_node("classify_query_type", self.nodes.classify_query_type)
+        graph.add_node("post_classification_preprocess", self.nodes.post_classification_preprocess)
         graph.add_node("evaluate_complexity", self.nodes.evaluate_complexity)
         graph.add_node("web_search", self.nodes.web_search)
         graph.add_node("generate_answer", self.nodes.generate_answer)
@@ -321,8 +326,13 @@ class ConversationWorkflow:
         graph.add_edge("load_session_context", "input_validation")
         graph.add_edge("input_validation", "preprocess_query")
         graph.add_edge("preprocess_query", "classify_query_type")
+        # 分类后插入 ASR→LaTeX 转换节点：先由 classify_query_type 的 LLM 分类器判定
+        # 是否为数学题，再在 post_classification_preprocess 里统一调用 word_to_latex，
+        # 取代原先 preprocess_query 中靠 is_math_problem 启发式决定是否转换的旧时机
+        # （漏判“次品 / 测试 / 方法数”等排列组合题）。条件路由也相应后移到该节点之后。
+        graph.add_edge("classify_query_type", "post_classification_preprocess")
 
-        # 查询分类后的条件路由。
+        # 查询分类后的条件路由（挂在 post_classification_preprocess 之后）。
         # path_map 的 key 必须与 ``intent_routing.ROUTE_BRANCH_*`` 一一对应，
         # 任何新增的分支都需要在这里登记，否则 LangGraph 会抛 KeyError。
         from app.services.conversation.intent_routing import (
@@ -333,7 +343,7 @@ class ConversationWorkflow:
             ROUTE_BRANCH_REALTIME,
         )
         graph.add_conditional_edges(
-            "classify_query_type",
+            "post_classification_preprocess",
             self.nodes.route_after_classification,
             {
                 ROUTE_BRANCH_GREETING: "generate_answer",   # 问候/噪声 → 直接回答

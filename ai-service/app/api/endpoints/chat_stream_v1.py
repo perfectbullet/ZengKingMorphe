@@ -734,8 +734,8 @@ async def generate_openai_stream_v1(
     chunk_sequence = 0
     raw_token_index = 0
 
-    # user_query chunk 延迟到 preprocess_query 节点之后保存，确保返回的是
-    # ASR→LaTeX 转换后的文本；若 workflow 在此前退出（敏感词 break / 异常），
+    # user_query chunk 延迟到 post_classification_preprocess 节点之后保存，确保
+    # 返回的是 ASR→LaTeX 转换后的文本；若 workflow 在此前退出（敏感词 break / 异常），
     # 由收尾兜底保存原文，保证前端一定能收到 user_query chunk。
     user_query_chunk_saved = False
 
@@ -802,7 +802,7 @@ async def generate_openai_stream_v1(
     ) -> None:
         """保存 user_query chunk（仅一次）。
 
-        display_user_query 为 preprocess_query 之后的展示文本（含 LaTeX）；
+        display_user_query 为 post_classification_preprocess 之后的展示文本（含 LaTeX）；
         original_user_message 始终保留原始 ASR 文本，便于排查；
         query_preprocessed 标识是否发生过实际转换。
         """
@@ -860,13 +860,19 @@ async def generate_openai_stream_v1(
             # 同步输出语言偏好（preprocess_query 节点会设置此值）
             prefer_zh_output = current_state.get("prefer_zh_output", prefer_zh_output)
 
-        # preprocess_query 完成后保存 user_query chunk（含 ASR→LaTeX 转换结果）。
+        # post_classification_preprocess 完成后保存 user_query chunk（含 ASR→LaTeX 转换结果）。
         # 必须在 current_state.update(state_update) 之后，确保取到转换后的 user_query。
-        if node_name == "preprocess_query" and not user_query_chunk_saved:
+        # 时机说明：ASR→LaTeX 现在发生在分类后（post_classification_preprocess），
+        # chunk 保存也后移到此处，保证前端拿到的是转换后的题干而非原始中文口语。
+        if node_name == "post_classification_preprocess" and not user_query_chunk_saved:
             display_user_query = current_state.get("user_query") or original_user_query
+            query_preprocessed = bool(
+                current_state.get("query_preprocessed")
+                or display_user_query != original_user_query
+            )
             await save_user_query_chunk_once(
                 display_user_query=display_user_query,
-                query_preprocessed=display_user_query != original_user_query,
+                query_preprocessed=query_preprocessed,
             )
 
         # 检测敏感词并提前终止：命中后不再进入 preprocess_query /
@@ -940,6 +946,25 @@ async def generate_openai_stream_v1(
 
         # 当到达 generate_answer 节点时，开始流式输出
         if node_name == "generate_answer":
+            # 兜底：异常路径导致 post_classification_preprocess 未触发 chunk 保存时，
+            # 在进入流式输出前补存一次，保证前端不会丢 user_query。正常路径不应走到这里。
+            if not user_query_chunk_saved:
+                display_user_query = current_state.get("user_query") or original_user_query
+                query_preprocessed = bool(
+                    current_state.get("query_preprocessed")
+                    or display_user_query != original_user_query
+                )
+                logger.warning(
+                    "user_query chunk fallback save before generate_answer | "
+                    "query_preprocessed=%s | display_user_query=%r",
+                    query_preprocessed,
+                    display_user_query[:200],
+                )
+                await save_user_query_chunk_once(
+                    display_user_query=display_user_query,
+                    query_preprocessed=query_preprocessed,
+                )
+
             streaming_type = current_state.get("streaming_type")
 
             # 调试：打印当前状态中的关键字段

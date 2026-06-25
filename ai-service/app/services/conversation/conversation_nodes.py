@@ -755,25 +755,30 @@ class ConversationNodes:
     # -------------------------------------------------------------------------
     async def preprocess_query(self, state: ConversationState) -> ConversationState:
         """
-        查询预处理节点 — 在分类之前完成清洗、语言偏好检测、ASR→LaTeX 转换。
+        查询预处理节点 — 仅在分类之前完成基础清洗与语言偏好检测。
 
-        将原先散落在端点层（chat_stream_v1.py）的三类预处理逻辑下沉到工作流节点：
+        注意：ASR→LaTeX 转换已从这里移除，改由 ``post_classification_preprocess``
+        节点在 ``classify_query_type`` 之后执行。原先依赖 ``is_math_problem``
+        启发式决定是否转换，会漏掉“次品 / 测试 / 方法数”这类排列组合题；现在先让
+        LLM 分类器判定为 math_problem，再统一转换，避免启发式漏判。
+
+        本节点只做：
         1. 查询清洗：移除前导标点符号
         2. 语言偏好：根据用户查询判断中/英文输出
-        3. 数学检测 + ASR→LaTeX：将口语数学表达式转换为 LaTeX 公式
 
         Args:
             state: Current conversation state
 
         Returns:
-            更新后的状态（user_query 已清洗/转换，prefer_zh_output 已设置）
+            更新后的状态（user_query 已清洗，prefer_zh_output 已设置）
         """
         async with time_node("preprocess_query", state):
             query = (state.get("user_query") or "").strip()
 
             # 1. 查询清洗（移除前导标点）
             cleaned = clean_user_query(query)
-            if cleaned != query:
+            query_changed = cleaned != query
+            if query_changed:
                 logger.info(
                     f"Query cleaned: before={query!r}, after={cleaned!r}"
                 )
@@ -783,26 +788,122 @@ class ConversationNodes:
             # 2. 输出语言偏好
             state["prefer_zh_output"] = prefer_zh_output(query)
 
-            # 3. 数学检测 + ASR→LaTeX 转换
-            if is_math_problem(query):
-                try:
-                    converted = await word_to_latex(query)
-                except Exception as exc:
-                    logger.warning(
-                        f"ASR→LaTeX failed, keep original query: "
-                        f"error={exc}, query={query!r}",
-                        exc_info=True,
-                    )
-                    converted = ""
-                if converted:
-                    logger.info(
-                        f"ASR→LaTeX: before={query!r}, after={converted!r}"
-                    )
-                    state["user_query"] = converted
-                else:
-                    logger.info(
-                        f"ASR→LaTeX skipped (no result): query={query!r}"
-                    )
+            logger.info(
+                "preprocess_query basic done | query_changed=%s | query=%r",
+                query_changed,
+                query[:200],
+            )
+
+        return state
+
+    async def post_classification_preprocess(self, state: ConversationState) -> ConversationState:
+        """
+        分类后预处理节点 — 在 ``classify_query_type`` 之后执行 ASR→LaTeX 转换。
+
+        设计动机：
+            原先 ASR→LaTeX 放在 ``preprocess_query`` 里，靠 ``is_math_problem``
+            启发式决定是否转换。但“次品 / 测试 / 方法数”这类排列组合题不带
+            “求 / 解 / 计算”等动词，会被启发式漏判，导致 LLM 分类器已经正确
+            识别为 math_problem、数学模型却仍拿到原始中文口语题干。
+
+            本节点改为读取分类结果再决定是否转换，彻底替代前置启发式判断，
+            且不再扩大 ``is_math_problem`` 正则。
+
+        职责：
+            1. 读取 ``classify_query_type`` 写入的 classification_label /
+               is_math_problem / answer_mode；
+            2. 判定是否需要 ASR→LaTeX 转换；
+            3. 命中则调用 ``word_to_latex``，成功后更新 ``state["user_query"]``；
+            4. 写入 asr_latex_* / query_preprocessed 状态字段，供前端 chunk
+               保存与 debug 使用。
+
+        容错原则：
+            - 转换失败 / 返回空 / 与原文相同，一律保留原 query，不中断主流程；
+            - 使用 ``logger.exception`` 打印堆栈，便于排查。
+
+        Args:
+            state: Current conversation state（已包含分类结果）
+
+        Returns:
+            更新后的状态（数学题的 user_query 已转换为 LaTeX 友好文本）
+        """
+        async with time_node("post_classification_preprocess", state):
+            query = (state.get("user_query") or "").strip()
+
+            classification_label = state.get("classification_label")
+            is_math = bool(state.get("is_math_problem", False))
+            answer_mode = state.get("answer_mode")
+
+            # 任一数学信号命中即转换：LLM 标签、启发式置位的 is_math_problem、
+            # 或路由表解析出的 answer_mode==math_llm。三者并存是为了兼容
+            # classify_query_type 内部不同路径写入的分类结论。
+            should_convert = (
+                classification_label == "math_problem"
+                or is_math
+                or answer_mode == AnswerMode.MATH_LLM.value
+            )
+
+            state["asr_latex_should_run"] = should_convert
+            state["asr_latex_converted"] = False
+            state["query_preprocessed"] = False
+
+            logger.info(
+                "ASR→LaTeX decision after classification | should_run=%s | "
+                "classification_label=%s | is_math_problem=%s | answer_mode=%s | query=%r",
+                should_convert,
+                classification_label,
+                is_math,
+                answer_mode,
+                query[:200],
+            )
+
+            if not should_convert:
+                logger.info(
+                    "ASR→LaTeX skipped after classification | not math problem | query=%r",
+                    query[:200],
+                )
+                return state
+
+            if not query:
+                logger.info("ASR→LaTeX skipped after classification | empty query")
+                return state
+
+            try:
+                converted = await word_to_latex(query)
+            except Exception:
+                logger.exception(
+                    "ASR→LaTeX failed after classification, keep original query | query=%r",
+                    query[:200],
+                )
+                return state
+
+            if not converted or not converted.strip():
+                logger.info(
+                    "ASR→LaTeX skipped after classification | empty converted result | query=%r",
+                    query[:200],
+                )
+                return state
+
+            converted = converted.strip()
+
+            if converted == query:
+                logger.info(
+                    "ASR→LaTeX no-op after classification | query unchanged | query=%r",
+                    query[:200],
+                )
+                return state
+
+            logger.info(
+                "ASR→LaTeX after classification: before=%r, after=%r",
+                query,
+                converted,
+            )
+
+            state["user_query"] = converted
+            state["asr_latex_converted"] = True
+            state["query_preprocessed"] = True
+            state["asr_latex_before"] = query
+            state["asr_latex_after"] = converted
 
         return state
 
