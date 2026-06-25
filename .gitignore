@@ -117,3 +117,4 @@ ai-service/result.json
 models/.msc
 models/README.md
 data/math_prompt_eval
+run_stream_test.sh
