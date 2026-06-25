@@ -185,6 +185,69 @@ def normalize_spoken_subquestion_markers(text: str) -> str:
     return SUBQUESTION_SPOKEN_RE.sub(repl, text)
 
 
+CHOICE_CONTEXT_RE = re.compile(
+    r"下列选项哪个正确|"
+    r"下列说法正确的是|"
+    r"下列结论正确的是|"
+    r"下列.*?正确的是|"
+    r"下列.*?错误的是|"
+    r"这是一道多选题|"
+    r"这是一道单选题|"
+    r"多选题|"
+    r"单选题|"
+    r"选择题"
+)
+
+
+CHOICE_OPTION_RE = re.compile(
+    r"""
+    (?P<prefix>^|[\n。！？；;，,：:]\s*|\s+)
+    (?:
+        (?P<label1>[A-Da-d])\s*选项
+        |
+        选项\s*(?P<label2>[A-Da-d])
+    )
+    [：:，,、\s]*
+    """,
+    re.VERBOSE,
+)
+
+
+def normalize_choice_option_markers(text: str) -> str:
+    if not text:
+        return text
+
+    if not CHOICE_CONTEXT_RE.search(text):
+        return text
+
+    def repl(match: re.Match) -> str:
+        prefix = match.group("prefix") or ""
+        label = (match.group("label1") or match.group("label2") or "").upper()
+
+        if not label:
+            return match.group(0)
+
+        # 选项在文本开头时，不额外加前置换行。
+        if prefix == "":
+            return f"{label}. "
+
+        # 如果前缀包含标点，则标点保留在上一行末尾，然后换行。
+        stripped = prefix.strip()
+        if stripped in {"。", "！", "？", "；", ";", "，", ",", "：", ":"}:
+            return f"{prefix.rstrip()}\n{label}. "
+
+        # 如果前缀是换行，保留换行。
+        if "\n" in prefix:
+            return f"\n{label}. "
+
+        # 普通空格前缀：在选择题语境中也统一换行。
+        return f"\n{label}. "
+
+    normalized = CHOICE_OPTION_RE.sub(repl, text)
+
+    return normalized.lstrip()
+
+
 def clean_model_output(content: str) -> str:
     cleaned = strip_code_fence(strip_think_tags(content)).strip()
     for prefix in ("输出：", "输出:", "结果：", "结果:"):
@@ -193,6 +256,7 @@ def clean_model_output(content: str) -> str:
 
     cleaned = cleaned.strip().strip('"').strip("'").strip()
     cleaned = normalize_spoken_subquestion_markers(cleaned)
+    cleaned = normalize_choice_option_markers(cleaned)
     return cleaned.strip()
 
 
