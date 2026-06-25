@@ -116,3 +116,4 @@ ai-service/test_raganything_wrapper_output.txt
 ai-service/result.json
 models/.msc
 models/README.md
+data/math_prompt_eval
