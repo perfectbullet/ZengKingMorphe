@@ -32,11 +32,8 @@ REPO_ROOT = AI_SERVICE_DIR.parent
 
 load_dotenv(AI_SERVICE_DIR / ".env", override=False)
 
-WORD_TO_LATEX_LLM_BASE_URL = os.getenv(
-    "LLM_BASE_URL",
-    "http://192.168.100.230:8200/v1",
-)
-WORD_TO_LATEX_LLM_MODEL = os.getenv("LLM_MODEL", "Qwen3-14B-AWQ")
+WORD_TO_LATEX_LLM_BASE_URL = os.getenv("MATH_MODEL_BASE_URL")
+WORD_TO_LATEX_LLM_MODEL = os.getenv("MATH_MODEL_NAME")
 WORD_TO_LATEX_LLM_API_KEY = (
     os.getenv("LLM_API_KEY")
     or os.getenv("OPENAI_API_KEY")
@@ -57,6 +54,7 @@ WORD_TO_LATEX_SYSTEM_PROMPT = r"""你是一个 ASR 数学文本转 LaTeX 的助�
 5. 数列An、数列an要转成带花括号的数列写法，例如：数列An -> 数列{$A_n$}，数列an -> 数列{$a_n$}。
 6. “B的下标n”转为 `$B_n$`。
 7. 如果输入不包含需要转换的数学表达，原样返回。
+8. 如果句子开头有`多选题`字样，把`多选题`用小括号包起来
 
 输出格式：
 只返回转换后的完整文本。
@@ -106,6 +104,11 @@ WORD_TO_LATEX_SYSTEM_PROMPT = r"""你是一个 ASR 数学文本转 LaTeX 的助�
 对任意的x属于零到正无穷的开区间
 输出：
 若对任意的 $x\in (0, + \infty)$
+
+示例 10：
+多选题：已知b大于零，对任意的x属于零到正无穷的开区间，
+输出：
+(多选题)已知$b>0$，若对任意的 $x\in (0, + \infty)$，
 """
 
 
