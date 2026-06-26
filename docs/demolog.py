@@ -54,7 +54,7 @@ def demo_exception_catch():
         1 / 0  # 触发除零异常
     except Exception as e:
         # 自动记录完整堆栈信息
-        logger.exception("发生除零异常：{}", e)
+        logger.exception(f"发生除零异常：{e}")
 
     # 方式2：装饰器自动捕获函数内异常
     @logger.catch

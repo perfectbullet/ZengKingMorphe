@@ -120,7 +120,7 @@ def safe_write_math_debug(path: Optional[Path], data: dict[str, Any]) -> None:
     try:
         atomic_write_json(path, data)
     except Exception:
-        logger.exception("[MathDebugDump] Failed to write debug json | path=%s", path)
+        logger.exception(f"[MathDebugDump] Failed to write debug json | path={path}")
 
 
 def build_base_debug_payload(

@@ -783,10 +783,8 @@ async def generate_openai_stream_v1(
         """客户端已断开则记录日志并返回 True，调用方据此尽早 return 结束生成器。"""
         if await client_disconnected():
             logger.info(
-                "[Stream] Client disconnected, stop streaming | stage=%s | chat_id=%s | session_id=%s",
-                stage,
-                chat_id,
-                session_id,
+                f"[Stream] Client disconnected, stop streaming | stage={stage} | "
+                f"chat_id={chat_id} | session_id={session_id}"
             )
             return True
         return False
@@ -946,12 +944,9 @@ async def generate_openai_stream_v1(
             )
             yield json.dumps(content_chunk_data)
             logger.info(
-                "Sensitive word detected | reject response emitted | "
-                "chat_id=%s | session_id=%s | user_id=%s | employee_id=%s",
-                chat_id,
-                session_id,
-                request.user_id,
-                request.employee_id,
+                f"Sensitive word detected | reject response emitted | "
+                f"chat_id={chat_id} | session_id={session_id} | "
+                f"user_id={request.user_id} | employee_id={request.employee_id}"
             )
             # 跳出 workflow 消费循环，由收尾段统一发送 finish chunk + 保存对话。
             break
@@ -969,10 +964,8 @@ async def generate_openai_stream_v1(
                     or display_user_query != original_user_query
                 )
                 logger.warning(
-                    "user_query chunk fallback save before generate_answer | "
-                    "query_preprocessed=%s | display_user_query=%r",
-                    query_preprocessed,
-                    display_user_query[:200],
+                    f"user_query chunk fallback save before generate_answer | "
+                    f"query_preprocessed={query_preprocessed} | display_user_query={display_user_query[:200]!r}"
                 )
                 await save_user_query_chunk_once(
                     display_user_query=display_user_query,
@@ -1651,10 +1644,8 @@ async def generate_openai_stream_v1(
                     )
                     safe_write_math_debug(math_debug_path, math_debug_payload)
                     logger.info(
-                        "[MathDebugDump] Completed math debug json | path=%s | output_chars=%s | duration_ms=%s",
-                        math_debug_path,
-                        len(_math_output_content),
-                        duration,
+                        f"[MathDebugDump] Completed math debug json | path={math_debug_path} | "
+                        f"output_chars={len(_math_output_content)} | duration_ms={duration}"
                     )
 
                 # 客户端断开后不再做最终 segment 的 boxed→语音转换（LLM 调用，开销大）
@@ -1888,8 +1879,6 @@ async def generate_openai_stream_v1(
         yield "[DONE]"
     except asyncio.CancelledError:
         logger.info(
-            "[Stream] Streaming task cancelled | chat_id=%s | session_id=%s",
-            chat_id,
-            session_id,
+            f"[Stream] Streaming task cancelled | chat_id={chat_id} | session_id={session_id}"
         )
         raise

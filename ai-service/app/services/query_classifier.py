@@ -510,7 +510,7 @@ class QueryClassifier:
             )
             return decision
         except Exception as e:
-            logger.warning("aneed_realtime failed: {}", e, exc_info=True)
+            logger.warning(f"aneed_realtime failed: {e}", exc_info=True)
             return False
 
     # 动态上下文相关性判定提示词：仅做 yes/no 二元判定，不做改写也不作答。
@@ -657,7 +657,7 @@ class QueryClassifier:
             )
             return decision, ("llm_yes" if decision else "llm_no")
         except Exception as e:
-            logger.warning("aclassify_context_dependence failed: {}", e, exc_info=True)
+            logger.warning(f"aclassify_context_dependence failed: {e}", exc_info=True)
             # LLM 异常：回退到"无关"，等价于"无历史"行为，保持稳定且不会引入污染。
             return False, "fallback"
 
@@ -733,7 +733,7 @@ class QueryClassifier:
             )
             return text
         except Exception as e:
-            logger.warning("agen_search_query failed: {}", e, exc_info=True)
+            logger.warning(f"agen_search_query failed: {e}", exc_info=True)
             return None
 
     async def aclassify(self, query: str, context_query: str | None = None) -> ClassificationResult:
@@ -775,7 +775,7 @@ class QueryClassifier:
             )
             return result
         except Exception as e:
-            logger.error("LLM classification failed: {}", e, exc_info=True)
+            logger.error(f"LLM classification failed: {e}", exc_info=True)
             return ClassificationResult(
                 label="other",
                 confidence="low",
@@ -813,7 +813,7 @@ class QueryClassifier:
             )
             return result
         except Exception as e:
-            logger.error("LLM classification failed: {}", e, exc_info=True)
+            logger.error(f"LLM classification failed: {e}", exc_info=True)
             return ClassificationResult(
                 label="other",
                 confidence="low",

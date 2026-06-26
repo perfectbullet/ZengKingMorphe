@@ -820,9 +820,7 @@ class ConversationNodes:
             state["prefer_zh_output"] = prefer_zh_output(query)
 
             logger.info(
-                "preprocess_query basic done | query_changed=%s | query=%r",
-                query_changed,
-                query[:200],
+                f"preprocess_query basic done | query_changed={query_changed} | query={query[:200]!r}"
             )
 
         return state
@@ -881,19 +879,14 @@ class ConversationNodes:
             state["query_preprocessed"] = False
 
             logger.info(
-                "ASR→LaTeX decision after classification | should_run=%s | "
-                "classification_label=%s | is_math_problem=%s | answer_mode=%s | query=%r",
-                should_convert,
-                classification_label,
-                is_math,
-                answer_mode,
-                query[:200],
+                f"ASR→LaTeX decision after classification | should_run={should_convert} | "
+                f"classification_label={classification_label} | is_math_problem={is_math} | "
+                f"answer_mode={answer_mode} | query={query[:200]!r}"
             )
 
             if not should_convert:
                 logger.info(
-                    "ASR→LaTeX skipped after classification | not math problem | query=%r",
-                    query[:200],
+                    f"ASR→LaTeX skipped after classification | not math problem | query={query[:200]!r}"
                 )
                 return state
 
@@ -905,7 +898,7 @@ class ConversationNodes:
                 converted = await word_to_latex(query)
             except Exception:
                 logger.exception(
-                    "ASR→LaTeX failed after classification, keep original query | query={query}"
+                    f"ASR→LaTeX failed after classification, keep original query | query={query[:200]!r}"
                 )
                 return state
 
@@ -919,8 +912,7 @@ class ConversationNodes:
 
             if converted == query:
                 logger.info(
-                    "ASR→LaTeX no-op after classification | query unchanged | query=%r",
-                    query[:200],
+                    f"ASR→LaTeX no-op after classification | query unchanged | query={query[:200]!r}"
                 )
                 return state
 
