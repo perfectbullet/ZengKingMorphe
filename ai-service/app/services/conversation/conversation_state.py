@@ -216,3 +216,15 @@ class ConversationState(TypedDict):
     query_preprocessed: Optional[bool]     # user_query 是否被本节点改写（供前端 chunk 判定）
     asr_latex_before: Optional[str]        # 转换前原文（审计/排查）
     asr_latex_after: Optional[str]         # 转换后文本（审计/排查）
+    # ── 分类 / 上下文消歧拆分后的中间状态 ──
+    # 上下文消歧现已从 classify_query_type 独立为 resolve_context_query 节点；
+    # 完整数学题不做上下文消歧，数学追问只用上下文不改写题干，非数学追问走普通 resolver。
+    # 这些字段记录拆分链路各阶段的中间结论，便于排查 / 测试断言。
+    raw_classification_label: Optional[str]      # 原始 query 的初步分类标签（classify_query_type）
+    raw_classification_confidence: Optional[str] # 原始 query 的初步分类置信度
+    raw_classification_reason: Optional[str]     # 原始 query 的初步分类理由
+    context_resolution_mode: Optional[str]       # none / skipped_complete_math / math_context_only / normal_resolver
+    context_resolution_skipped_reason: Optional[str]  # complete_math_problem / no_history / disabled / unrelated / empty_resolver_result
+    math_context_used: Optional[bool]            # 数学追问是否使用历史上下文
+    math_context_text: Optional[str]             # 数学追问使用的上下文文本（仅给 math prompt，不用于改写题干）
+    effective_query: Optional[str]               # 最终用于分类 / 生成的 query（数学题仍以 post_classification_preprocess 后的 user_query 为准）

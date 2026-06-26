@@ -1227,9 +1227,25 @@ def build_math_generation_messages(
     # 话术、空 assistant 消息等被一并送入），导致数学模型 prompt 串入噪声。
     history_msgs: List = []
 
-    effective_query = _select_llm_facing_query(state)
+    # 数学题统一以 state["user_query"] 为「当前问题」：post_classification_preprocess 会
+    # 把数学题 LaTeX 化后写回 state["user_query"]，所以这里读 user_query 才能拿到转换后题干。
+    # （数学题在 resolve_context_query 中均设置 rewritten_query == user_query，不会改写题干。）
+    effective_query = (state.get("user_query") or "").strip()
 
-    messages.append(HumanMessage(content=effective_query))
+    # 数学追问：把历史上下文作为「对话上下文」提供给数学模型，但不拼进当前问题、
+    # 也不参与 word_to_latex。完整数学题 math_context_used 为 False，不会注入。
+    math_context_text = state.get("math_context_text")
+    math_context_used = bool(state.get("math_context_used"))
+
+    if math_context_used and math_context_text:
+        user_content = (
+            f"[对话上下文]\n{math_context_text}\n\n"
+            f"[当前问题]\n{effective_query}"
+        )
+    else:
+        user_content = effective_query
+
+    messages.append(HumanMessage(content=user_content))
 
     logger.info(
         "build_math_generation_messages [qwen_math]: "
@@ -1238,6 +1254,7 @@ def build_math_generation_messages(
         f"math_runtime_lang={math_runtime_lang}, "
         f"history_msgs={len(history_msgs)}, "
         f"math_history_disabled=True, "
+        f"math_context_used={math_context_used}, "
         f"effective_query={effective_query!r}"
     )
     return messages

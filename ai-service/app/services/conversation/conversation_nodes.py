@@ -577,6 +577,51 @@ def _normalize_realtime_category(reason: str | None) -> str:
 
 
 # =============================================================================
+# Math query follow-up detection helpers
+# 用于 resolve_context_query 区分「完整数学题」「数学追问」「非数学问题」：
+#   - 完整数学题：跳过上下文消歧（不改写题干，避免普通 resolver 顺手把口语
+#     数学符号改写成 LaTeX，该转换统一由 post_classification_preprocess 完成）；
+#   - 数学追问（"第二问怎么做 / 上面那题为什么错"）：允许使用历史上下文，
+#     但不调用普通 resolver 改写题干，只把上下文提供给 math prompt；
+#   - 非数学追问：走普通 aresolve_standalone_query 生成 standalone query。
+# =============================================================================
+def _is_math_followup_query(query: str) -> bool:
+    """
+    判定一个 query 是否为「数学追问」而非「完整数学题」。
+
+    判据：
+    1. 命中追问标记词（第二问 / 上面 / 这个 / 继续 / 为什么 ...）；
+    2. 且问句较短（<= 80 字）——完整长题干即便含"第一问/第二问"也不当追问；
+    3. 长度 >= 80 且含完整题干标志词（已知/设/若/求/证明）时强制判为完整题，
+       覆盖短问句启发式可能误命中的情况。
+    """
+    q = (query or "").strip()
+    if not q:
+        return False
+
+    followup_markers = [
+        "第二问", "第三问", "第一问",
+        "上一问", "下一问", "刚才", "上面", "前面",
+        "这个", "这一步", "这里", "它", "继续",
+        "为什么", "哪里错", "怎么做", "怎么解",
+        "答案不对", "重新解", "接着",
+    ]
+
+    # 完整长题干里也可能出现"第一问/第二问"，所以长度足够长时不要当追问。
+    if len(q) >= 80 and any(x in q for x in ["已知", "设", "若", "求", "证明"]):
+        return False
+
+    return len(q) <= 80 and any(marker in q for marker in followup_markers)
+
+
+def _is_complete_math_query(query: str, is_math: bool) -> bool:
+    """判定是否为「完整数学题」：is_math 命中且不是数学追问。"""
+    if not is_math:
+        return False
+    return not _is_math_followup_query(query)
+
+
+# =============================================================================
 # Base class for node implementations
 # =============================================================================
 class ConversationNodes:
@@ -933,30 +978,32 @@ class ConversationNodes:
     # -------------------------------------------------------------------------
     async def classify_query_type(self, state: ConversationState) -> ConversationState:
         """
-        Query Classification - 使用 LLM 进行细粒度查询分类并路由。
+        查询初步分类 — 仅对原始 query 做一次 LLM 分类，不涉及上下文消歧。
 
-        使用 QueryClassifier 进行分类，支持 9 种类别：
-        - math_problem, concept_explain, greeting, english_query
-        - realtime_query, general_knowledge, chit_chat, noise, other
+        重构说明（上下文消歧已拆出为独立节点 resolve_context_query）：
+            旧版 classify_query_type 同时承担「分类 + 上下文消歧 + 二次分类 +
+            路由字段设置」，职责过重，且会让完整数学题进入普通 resolver 被
+            顺手改写（如「a 向量」→「$\\vec{a}$」），数学格式转换本应统一由
+            post_classification_preprocess 完成。
 
-        分类结果映射到 workflow state：
-        - greeting → intent="greeting", complexity_score=0.0
-        - realtime_query → is_realtime_query=True
-        - math_problem → is_math_problem=True
-        - noise → 返回友好提示后结束
-        - 其他 → 继续正常流程
+            本节点现在只做：
+              1. 取原始 user_query 与上一轮 user query 作为 context；
+              2. 调一次 classifier.aclassify 得到初步分类；
+              3. 写入 raw_classification_*（原始分类结论），并临时写入
+                 classification_* 供兼容（最终由 finalize_classification 覆盖）。
+
+            明确不做：上下文相关性判定、aresolve_standalone_query、
+            query 改写、二次分类、answer_mode / intent / is_math_problem 设置。
 
         Args:
             state: Current conversation state
 
         Returns:
-            Updated state with query_type classification
+            更新后的状态（已写入原始分类结论）
         """
         async with time_node("classify_query_type", state):
-            # 1.基础变量初始化
             query = state["user_query"].strip()
             context_messages = (state.get("context") or {}).get("messages") or []
-            # 获取上一轮用户问题
             last_user_query = next(
                 (
                     (m.get("content") or "").strip()
@@ -965,21 +1012,80 @@ class ConversationNodes:
                 ),
                 "",
             )
-            # 2.格式化对话上下文
+
+            classifier = get_query_classifier()
+            raw_result = await classifier.aclassify(
+                query, context_query=last_user_query or None
+            )
+
+            # 原始分类结论（最终分类结论，供 finalize_classification 复用 / 重建）
+            state["raw_classification_label"] = raw_result.label
+            state["raw_classification_confidence"] = raw_result.confidence
+            state["raw_classification_reason"] = raw_result.reason
+            # 兼容写入：让中间节点（resolve_context_query）能直接读 classification_label；
+            # 最终分类结论由 finalize_classification 覆盖。
+            state["classification_label"] = raw_result.label
+            state["classification_confidence"] = raw_result.confidence
+            state["classification_reason"] = raw_result.reason
+
+            logger.info(
+                f"Raw query classification: label={raw_result.label}, "
+                f"confidence={raw_result.confidence}, reason={raw_result.reason}, "
+                f"query={query[:80]!r}"
+            )
+
+        return state
+
+    async def resolve_context_query(self, state: ConversationState) -> ConversationState:
+        """
+        上下文消歧决策 — 独立判断本轮 query 是否需要上下文消歧，并据此改写。
+
+        三条分支（基于 classify_query_type 的原始分类结论 + 数学启发式）：
+          1. 完整数学题：跳过消歧。不调用 aclassify_context_dependence /
+             aresolve_standalone_query，不改写题干。数学格式转换统一交给
+             post_classification_preprocess，避免普通 resolver 顺手把
+             「a 向量」改写成 LaTeX。
+          2. 数学追问（「第二问怎么做 / 上面那题为什么错」）：允许使用历史上下文，
+             但不调用普通 resolver 改写题干，只把上下文存入 math_context_text，
+             供 math prompt 作为「对话上下文」使用。
+          3. 非数学问题：走普通上下文消歧 —— 先 aclassify_context_dependence
+             判定 related，related 时 aresolve_standalone_query 生成 standalone query。
+
+        写入字段：
+          - context_dependence / context_dependence_reason（兼容既有下游）
+          - context_resolution_mode / context_resolution_skipped_reason（拆分后新增）
+          - math_context_used / math_context_text（数学追问专用）
+          - rewritten_query / query_rewritten / effective_query
+
+        Args:
+            state: Current conversation state（已含原始分类结论）
+
+        Returns:
+            更新后的状态（已决定是否消歧并改写）
+        """
+        async with time_node("resolve_context_query", state):
+            query = (state.get("user_query") or "").strip()
+            raw_label = (
+                state.get("raw_classification_label")
+                or state.get("classification_label")
+            )
+            context_messages = (state.get("context") or {}).get("messages") or []
+            session_id = state.get("session_id")
+
+            # 格式化对话上下文（与旧 classify_query_type 一致：上下文不足 2 轮时
+            # 从 DB 补全持久化历史，确保 resolver 能看到完整上下文）
             dialog_text = format_dialog_for_resolver(context_messages)
-            # 统计上下文用户消息数量
             session_user_count = sum(
                 1
                 for m in context_messages
                 if m.get("role") == "user" and (m.get("content") or "").strip()
             )
-            # 上下文不足2轮时，从DB补全历史对话
-            if state.get("session_id") and session_user_count < 2:
+            if session_id and session_user_count < 2:
                 try:
                     db = await get_database()
                     recent_turns = (
                         await db.conversations.find(
-                            {"session_id": state.get("session_id", "")},
+                            {"session_id": session_id},
                             {"_id": 0, "user_query": 1, "ai_response": 1},
                         )
                         .sort("created_at", 1)
@@ -991,89 +1097,171 @@ class ConversationNodes:
                     )
                 except Exception as e:
                     logger.warning(
-                        f"Failed to merge persisted dialog for resolver: session_id={state.get('session_id')}, error={e}",
+                        f"Failed to merge persisted dialog for resolver: session_id={session_id}, error={e}",
                         exc_info=True,
                     )
-            # 3.意图分类器初始化 + 原始意图预判 + 上下文相关性判定（并行）
-            #
-            # 性能优化（与原 3 节合并）：
-            #   - 原实现把 ``aclassify`` 与 ``aclassify_context_dependence`` 串行调用，
-            #     两次小模型推理叠加约 2s。两者输入彼此独立（前者用 query+last_user_query，
-            #     后者用 query+dialog_text），完全可以 ``asyncio.gather`` 并行；
-            #   - 仅当 ``dynamic_context_memory_enabled`` 启用且 ``dialog_text`` 非空时
-            #     才需要真正发起依赖判定 LLM 调用，其余分支直接拿到 ``unrelated``，
-            #     避免无意义的 LLM 等待；
-            #   - 异常处理在原 helper 内部已退化为 ``False / "fallback"``，并行化不会
-            #     放大故障范围。
+
             classifier = get_query_classifier()
             dynamic_ctx_enabled = bool(
                 getattr(settings, "dynamic_context_memory_enabled", True)
             )
-            classify_task = asyncio.create_task(
-                classifier.aclassify(query, context_query=last_user_query or None)
+
+            is_math_label = raw_label == "math_problem"
+            math_heuristic_hit = is_math_problem(query)
+            is_math = is_math_label or math_heuristic_hit
+
+            math_followup = _is_math_followup_query(query)
+            complete_math = _is_complete_math_query(query, is_math)
+
+            # 默认值：未消歧时 effective_query == 原始 query
+            state["rewritten_query"] = query
+            state["query_rewritten"] = False
+            state["effective_query"] = query
+            state["math_context_used"] = False
+            state["math_context_text"] = None
+
+            # ── 分支 1：完整数学题 → 跳过上下文消歧 ──
+            if complete_math:
+                state["context_dependence"] = "unrelated"
+                state["context_dependence_reason"] = "skip_complete_math_problem"
+                state["context_resolution_mode"] = "skipped_complete_math"
+                state["context_resolution_skipped_reason"] = "complete_math_problem"
+                state["rewritten_query"] = query
+                state["query_rewritten"] = False
+                state["effective_query"] = query
+
+                logger.info(
+                    f"Context resolution skipped for complete math problem: "
+                    f"query={query[:80]!r}, raw_label={raw_label}, "
+                    f"math_heuristic_hit={math_heuristic_hit}"
+                )
+                return state
+
+            # ── 分支 2：数学追问 → 用上下文但不调用普通 resolver 改写题干 ──
+            if is_math and math_followup:
+                has_ctx = bool(dialog_text.strip())
+                state["context_dependence"] = "related" if has_ctx else "unrelated"
+                state["context_dependence_reason"] = "math_followup_context_only"
+                state["context_resolution_mode"] = "math_context_only"
+                state["math_context_used"] = has_ctx
+                state["math_context_text"] = dialog_text if has_ctx else None
+                state["rewritten_query"] = query
+                state["query_rewritten"] = False
+                state["effective_query"] = query
+
+                logger.info(
+                    f"Math follow-up uses context without normal resolver: "
+                    f"has_context={has_ctx}, query={query[:80]!r}"
+                )
+                return state
+
+            # ── 分支 3：非数学问题 → 走普通上下文消歧 ──
+            if not dynamic_ctx_enabled:
+                state["context_dependence"] = "unrelated"
+                state["context_dependence_reason"] = "disabled"
+                state["context_resolution_mode"] = "none"
+                state["context_resolution_skipped_reason"] = "disabled"
+                state["effective_query"] = query
+                logger.info(
+                    f"Dynamic context memory disabled, skip resolution | query={query[:80]!r}"
+                )
+                return state
+
+            if not dialog_text.strip():
+                state["context_dependence"] = "unrelated"
+                state["context_dependence_reason"] = "no_history"
+                state["context_resolution_mode"] = "none"
+                state["context_resolution_skipped_reason"] = "no_history"
+                state["effective_query"] = query
+                logger.info(
+                    f"Context resolution skipped (no history) | query={query[:80]!r}"
+                )
+                return state
+
+            is_related, judge_reason = await classifier.aclassify_context_dependence(
+                query, dialog_text
+            )
+            state["context_dependence"] = "related" if is_related else "unrelated"
+            state["context_dependence_reason"] = judge_reason
+
+            if not is_related:
+                state["context_resolution_mode"] = "none"
+                state["context_resolution_skipped_reason"] = "unrelated"
+                state["effective_query"] = query
+                logger.info(
+                    f"Context resolution skipped (unrelated) | reason={judge_reason} | "
+                    f"query={query[:80]!r}"
+                )
+                return state
+
+            resolved = await classifier.aresolve_standalone_query(query, dialog_text)
+            if not (resolved or "").strip():
+                resolved = query
+                state["context_resolution_skipped_reason"] = "empty_resolver_result"
+
+            resolved = resolved.strip()
+            state["rewritten_query"] = resolved
+            state["query_rewritten"] = resolved != query
+            state["effective_query"] = resolved
+            state["context_resolution_mode"] = "normal_resolver"
+
+            logger.info(
+                f"Standalone query resolution: original={query[:80]!r}, "
+                f"resolved={resolved[:80]!r}, query_rewritten={resolved != query}, "
+                f"context_dependence={state.get('context_dependence')}"
             )
 
-            need_llm_dependence = dynamic_ctx_enabled and bool(dialog_text.strip())
-            if need_llm_dependence:
-                dependence_task = asyncio.create_task(
-                    classifier.aclassify_context_dependence(query, dialog_text)
-                )
-                original_ctx_result, (is_related, judge_reason) = await asyncio.gather(
-                    classify_task, dependence_task
-                )
-                context_dependence = "related" if is_related else "unrelated"
-                ctx_reason = judge_reason
-            else:
-                original_ctx_result = await classify_task
-                if not dynamic_ctx_enabled:
-                    context_dependence = "related"
-                    ctx_reason = "disabled"
-                else:
-                    # 无历史就没有"相关"可言；标记为 unrelated，下游一律不去拼历史。
-                    context_dependence = "unrelated"
-                    ctx_reason = "no_history"
+        return state
 
-            # 高置信度非实时查询，保留原始意图
+    async def finalize_classification(self, state: ConversationState) -> ConversationState:
+        """
+        最终分类 — 基于 effective_query 做最终分类、启发式补位、noise gate、
+        answer_mode 与 intent 设置。
+
+        本节点承接 resolve_context_query 写入的 effective_query / raw_classification_*，
+        把旧 classify_query_type 中「消歧之后」的所有逻辑迁移至此：
+          - resolved == query 时复用原始分类，否则对 resolved 二次分类；
+          - 短问句 realtime 意图恢复 / 高置信度 rewrite drift 防护；
+          - realtime 启发式升级 + 二元 LLM 兜底；
+          - math / concept 启发式补位；
+          - noise preset gate；
+          - target_year；
+          - classification_* / answer_mode / intent / is_math_problem / sources 写入；
+          - 日历直出答案兜底。
+
+        明确不做：aresolve_standalone_query（已在 resolve_context_query 完成）、
+        word_to_latex（统一在 post_classification_preprocess）。
+
+        Args:
+            state: Current conversation state（已含原始分类 + 消歧结果）
+
+        Returns:
+            更新后的状态（已写入最终分类结论与路由字段）
+        """
+        async with time_node("finalize_classification", state):
+            classifier = get_query_classifier()
+            query = (state.get("user_query") or "").strip()
+            resolved = (
+                state.get("effective_query")
+                or state.get("rewritten_query")
+                or query
+            ).strip()
+
+            # 从原始分类结论重建 ClassificationResult（供 drift 防护等逻辑复用）
+            original_ctx_result = ClassificationResult(
+                label=state.get("raw_classification_label") or "other",
+                confidence=state.get("raw_classification_confidence") or "medium",
+                reason=state.get("raw_classification_reason") or "raw",
+            )
+
+            # 高置信度非实时查询，保留原始意图（防止后续启发式 / 二次分类把它带偏）
             preserve_original_intent = (
                 original_ctx_result.label != "realtime_query"
                 and original_ctx_result.confidence == "high"
                 and len(query) >= 8
             )
-            state["context_dependence"] = context_dependence
-            state["context_dependence_reason"] = ctx_reason
-            logger.info(
-                f"Dynamic context memory: dependence={context_dependence}, reason={ctx_reason}, "
-                f"dialog_empty={not dialog_text.strip()}, query={query[:60]!r}"
-            )
 
-            # 4.上下文消歧，改写问句
-            #   只有当 dependence == "related" 时才进行消歧；否则保持原句，避免把
-            #   历史话题硬塞进改写，污染下游分类与 RAG 检索。
-            resolved = query
-            if context_dependence == "related" and dialog_text.strip():
-                resolved = await classifier.aresolve_standalone_query(
-                    query, dialog_text
-                )
-                if not (resolved or "").strip():
-                    resolved = query
-            resolved = resolved.strip()
-            state["rewritten_query"] = resolved
-            state["query_rewritten"] = resolved != query
-            # 显式记录改写结果，便于排查"代词追问被错判为 unrelated"或"改写器未触发"。
-            logger.info(
-                f"Standalone query resolution: original={query[:80]!r}, "
-                f"resolved={resolved[:80]!r}, query_rewritten={resolved != query}, "
-                f"context_dependence={context_dependence}"
-            )
-
-            # 5.对改写后的问句分类
-            #
-            # 性能优化：当 ``resolved == query``（无消歧改写发生）时，第二次
-            # ``aclassify`` 与第一次 ``aclassify(query, last_user_query)`` 的输入
-            # 实际等价（同一句话；上下文判定为 unrelated 时 LLM 已确认上一轮语境
-            # 不会改变本句的语义类别）——直接复用 ``original_ctx_result`` 即可，
-            # 节省一次 ~1.6s 的 14B 模型 RTT。仅在真的发生改写时才需要再次分类，
-            # 用来检测"改写偏移"（rewrite drift），保留下游既有的偏移修正逻辑。
+            # 二次分类：resolved == query 时复用原始分类，省一次小模型 RTT
             if resolved == query:
                 result_llm = original_ctx_result
                 logger.info(
@@ -1082,6 +1270,7 @@ class ConversationNodes:
                 )
             else:
                 result_llm = await classifier.aclassify(resolved, context_query=None)
+
             # 短问句场景：恢复原始实时查询意图
             if (
                 result_llm.label != "realtime_query"
@@ -1106,7 +1295,7 @@ class ConversationNodes:
                     f"query={query[:80]}, resolved={resolved[:80]}"
                 )
                 result_llm = original_ctx_result
-            # 6.启发式规则：升级为实时查询
+            # 启发式规则：升级为实时查询
             boost = heuristic_realtime_category(resolved)
             if (
                 boost is not None
@@ -1125,7 +1314,7 @@ class ConversationNodes:
             else:
                 result = result_llm
 
-            # 6.5 二元 LLM 兜底：主分类未识别为 realtime 但置信度不 high 时，
+            # 二元 LLM 兜底：主分类未识别为 realtime 但置信度不 high 时，
             # 用一次"是否需要联网/最新信息"的 yes/no LLM 校验把漏检拉回 realtime_query。
             # 设计要点：
             # - 通过 settings.realtime_query_llm_fallback_enabled 开关控制（可在 .env 关闭）；
@@ -1151,20 +1340,12 @@ class ConversationNodes:
                     reason="general",
                 )
 
-            # 6.6 数学题 / 教材概念题 启发式补位
+            # 数学题 / 教材概念题 启发式补位
             #
-            # 背景：qwen3:14b 这类小分类器对没有"求/解/计算"动词的几何应用题
-            # （"已知圆锥的底面半径为 1，高为 2，则圆锥的侧面积为多少?"），
-            # 以及长篇教材式提问（"在数列的学习中…请分别说明…推导方法…比较异同"）
-            # 存在系统性漏判，会落到 ``general_knowledge / chit_chat / other`` 这类兜底
-            # 标签上，导致原本应走数学模型的题目被通用 LLM 接住、原本应走 RAG 的教材
-            # 题被通用 LLM 直答。
-            #
-            # 设计要点（与 realtime 启发式同思路）：
-            # - 只对 LLM 弱标签（``HEURISTIC_PROMOTABLE_LABELS``）补位，保护 LLM 已识别准确的强分类；
-            # - 数学题启发式优先（"已知…为多少" 这种模式比"教学语境"更具体）；
-            # - 启发式自身彼此互斥（math 启发式内部已经把 ``请讲解 / 推导方法 / 异同``
-            #   这类元语言信号当作排除项），不会把 Q4 类教材题误升为数学题。
+            # 背景：qwen3:14b 这类小分类器对没有"求/解/计算"动词的几何应用题，
+            # 以及长篇教材式提问存在系统性漏判，会落到 general_knowledge / chit_chat /
+            # other 这类兜底标签上。这里只对 LLM 弱标签（HEURISTIC_PROMOTABLE_LABELS）
+            # 补位，保护 LLM 已识别准确的强分类。
             if result.label in HEURISTIC_PROMOTABLE_LABELS:
                 if is_math_problem(resolved):
                     logger.info(
@@ -1194,16 +1375,9 @@ class ConversationNodes:
                 f"reason={result.reason}, query={resolved[:50]}"
             )
 
-            # 6.7 噪声预设话术安全护栏（"抱歉，我没有听清您的问题"路径）
-            #
-            # 背景：小分类器对短/口语化输入误判率高，命中 noise 后**完全跳过 LLM**
-            # 直接返回预设话术，会让用户在数字人侧误以为"麦克风/ASR 故障"。
-            # 这里在分类结果之上加三道独立闸门（置信度 / 长度 / 启发式），任一不过
-            # 即把标签降级为 "other"（→ GENERAL_LLM 由 LLM 自己兜住）。
-            #
-            # 维护原则：闸门规则集中在 ``intent_routing.apply_noise_preset_gate``，
-            # 这里只负责"传配置 + 写日志 + 改 result"，不在节点里重写规则；
-            # 通过 ``settings.noise_preset_response_enabled=False`` 可一键回滚整条路径。
+            # 噪声预设话术安全护栏（"抱歉，我没有听清您的问题"路径）
+            # 维护原则：闸门规则集中在 intent_routing.apply_noise_preset_gate，
+            # 这里只负责"传配置 + 写日志 + 改 result"，不在节点里重写规则。
             gated_label, downgrade_reason = apply_noise_preset_gate(
                 result.label,
                 result.confidence,
@@ -1229,27 +1403,23 @@ class ConversationNodes:
                     reason=f"noise_gate:{downgrade_reason}",
                 )
 
-            # 7.解析目标年份，存入状态：用于后续生成阶段保持“今年/明年/去年”一致。
+            # 解析目标年份，存入状态：用于后续生成阶段保持"今年/明年/去年"一致。
             target_year = resolve_target_year_from_query(resolved)
             if target_year is not None:
                 state["target_year"] = target_year
 
-            # 8.保存分类结果到状态
+            # 保存最终分类结果到状态
             state["classification_label"] = result.label
             state["classification_confidence"] = result.confidence
             state["classification_reason"] = result.reason
 
-            # 8.5 由分类标签解析出 answer_mode（数据驱动，禁止在此处写硬编码 if）
-            #     - 路由表集中维护在 intent_routing.INTENT_TO_ANSWER_MODE；
-            #     - 下游 route_after_classification 与 generate_answer 仅依赖
-            #       state["answer_mode"]，不再叠加 is_realtime / is_math_problem
-            #       等一堆复合条件来决策；
-            #     - 未识别标签自动落到 GENERAL_LLM，避免进入 RAG / 数学模型等带外
-            #       依赖的路径。
+            # 由分类标签解析出 answer_mode（数据驱动，禁止在此处写硬编码 if）：
+            # 路由表集中维护在 intent_routing.INTENT_TO_ANSWER_MODE，未识别标签自动
+            # 落到 GENERAL_LLM，避免进入 RAG / 数学模型等带外依赖的路径。
             answer_mode = resolve_answer_mode(result.label)
             state["answer_mode"] = answer_mode.value
 
-            # 9.根据分类标签设置状态
+            # 根据分类标签设置状态
             match result.label:
                 # 问候语
                 case "greeting":
@@ -1257,7 +1427,6 @@ class ConversationNodes:
                     state["complexity_score"] = 0.0
                     state["complexity_reason"] = "greeting"
                     state["is_realtime_query"] = False
-                    # 10. 添加问候语来源
                     state["sources"].append(
                         {
                             "type": "text",
@@ -1294,8 +1463,8 @@ class ConversationNodes:
                     state["is_realtime_query"] = False
                     state["intent"] = "general_query"
 
-            # 10.日历日期直出答案（优先原问句，再用改写后问句）避免把“习俗/由来”等非日期问题误转为日期回答。
-            # `language_hint_query` 始终传入用户原始问句，避免改写后的查询语言污染输出语言判定
+            # 日历日期直出答案（优先原问句，再用改写后问句）避免把"习俗/由来"等非日期问题误转为日期回答。
+            # language_hint_query 始终传入用户原始问句，避免改写后的查询语言污染输出语言判定
             # （例如：英文问句被消歧/改写为中文，造成英文问、中文答的混语回复）。
             prefer_zh_output = resolve_prefer_zh_output(state)
             direct = calendar_direct_text_answer(

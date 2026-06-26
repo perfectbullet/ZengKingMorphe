@@ -9,7 +9,7 @@
 
 工作流图（9 节点）：
     load_employee_config → load_session_context → input_validation
-        → preprocess_query → classify_query_type → post_classification_preprocess
+        → preprocess_query → classify_query_type → resolve_context_query → finalize_classification → post_classification_preprocess
         → [条件分支: greeting/noise?]   → generate_answer
         → [条件分支: realtime?]          → web_search → generate_answer
         → [条件分支: math?]              → generate_answer（数学模型；ASR→LaTeX 已在上一个节点完成）
@@ -312,6 +312,8 @@ class ConversationWorkflow:
         graph.add_node("input_validation", self.nodes.validate_input)
         graph.add_node("preprocess_query", self.nodes.preprocess_query)
         graph.add_node("classify_query_type", self.nodes.classify_query_type)
+        graph.add_node("resolve_context_query", self.nodes.resolve_context_query)
+        graph.add_node("finalize_classification", self.nodes.finalize_classification)
         graph.add_node("post_classification_preprocess", self.nodes.post_classification_preprocess)
         graph.add_node("evaluate_complexity", self.nodes.evaluate_complexity)
         graph.add_node("web_search", self.nodes.web_search)
@@ -326,11 +328,16 @@ class ConversationWorkflow:
         graph.add_edge("load_session_context", "input_validation")
         graph.add_edge("input_validation", "preprocess_query")
         graph.add_edge("preprocess_query", "classify_query_type")
-        # 分类后插入 ASR→LaTeX 转换节点：先由 classify_query_type 的 LLM 分类器判定
-        # 是否为数学题，再在 post_classification_preprocess 里统一调用 word_to_latex，
-        # 取代原先 preprocess_query 中靠 is_math_problem 启发式决定是否转换的旧时机
-        # （漏判“次品 / 测试 / 方法数”等排列组合题）。条件路由也相应后移到该节点之后。
-        graph.add_edge("classify_query_type", "post_classification_preprocess")
+        # 上下文消歧已从 classify_query_type 拆出为独立链路：
+        #   classify_query_type（仅初步分类，不改写 query）
+        #   → resolve_context_query（上下文消歧决策：完整数学题跳过 / 数学追问只取上下文
+        #     不改写题干 / 非数学走普通 resolver）
+        #   → finalize_classification（最终分类 + 启发式 + noise gate + answer_mode）
+        #   → post_classification_preprocess（数学格式转换 word_to_latex 的唯一位置）
+        # 条件路由挂在 post_classification_preprocess 之后。
+        graph.add_edge("classify_query_type", "resolve_context_query")
+        graph.add_edge("resolve_context_query", "finalize_classification")
+        graph.add_edge("finalize_classification", "post_classification_preprocess")
 
         # 查询分类后的条件路由（挂在 post_classification_preprocess 之后）。
         # path_map 的 key 必须与 ``intent_routing.ROUTE_BRANCH_*`` 一一对应，

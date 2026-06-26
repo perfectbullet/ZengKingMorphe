@@ -515,6 +515,15 @@ _STATE_DEFAULTS: ConversationState = {
     "query_preprocessed": False,
     "asr_latex_before": None,
     "asr_latex_after": None,
+    # ── 分类 / 上下文消歧拆分后的中间状态 ──
+    "raw_classification_label": None,
+    "raw_classification_confidence": None,
+    "raw_classification_reason": None,
+    "context_resolution_mode": None,
+    "context_resolution_skipped_reason": None,
+    "math_context_used": False,
+    "math_context_text": None,
+    "effective_query": None,
 }
 
 # 启动时校验：_STATE_DEFAULTS 必须覆盖 ConversationState 的全部字段
