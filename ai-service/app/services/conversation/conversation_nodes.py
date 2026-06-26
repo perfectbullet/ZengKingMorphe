@@ -14,6 +14,7 @@ LangGraph 对话工作流节点实现。
 已移除节点：intent_recognition, knowledge_retrieval, grade_documents,
            compress_context, match_faq, rewrite_query
 """
+
 import asyncio
 import hashlib
 import time
@@ -89,7 +90,9 @@ from app.utils.common import has_language_drift
 logger = get_logger(__name__)
 
 # 启发式联网补位：不覆盖问候、噪声、数学题；也不重复覆盖已是实时的分支
-_REALTIME_HEURISTIC_SKIP_LABELS = frozenset({"greeting", "noise", "math_problem", "realtime_query"})
+_REALTIME_HEURISTIC_SKIP_LABELS = frozenset(
+    {"greeting", "noise", "math_problem", "realtime_query"}
+)
 
 # =============================================================================
 # Employee Config Resolvers
@@ -243,7 +246,9 @@ def _extract_traffic_location(query: str) -> str | None:
     m = re.search(r"([\u4e00-\u9fffA-Za-z]{2,20})(?:堵不堵|拥堵|路况|交通)", q)
     if m:
         loc = m.group(1).strip()
-        loc = re.sub(r"^(请问|我想了解一下|想了解一下|帮我查一下|查一下|今天|今日|现在)", "", loc).strip()
+        loc = re.sub(
+            r"^(请问|我想了解一下|想了解一下|帮我查一下|查一下|今天|今日|现在)", "", loc
+        ).strip()
         loc = re.sub(r"(今天|今日|现在)$", "", loc).strip()
         if loc:
             return loc
@@ -317,7 +322,9 @@ def _wind_direction_label(deg: float | int | None, prefer_zh_output: bool) -> st
     return (sectors_zh if prefer_zh_output else sectors_en)[idx]
 
 
-async def _open_meteo_weather_fallback(query: str, prefer_zh_output: bool = True) -> dict | None:
+async def _open_meteo_weather_fallback(
+    query: str, prefer_zh_output: bool = True
+) -> dict | None:
     """
     免费结构化天气源（Open-Meteo）查询。
 
@@ -341,7 +348,12 @@ async def _open_meteo_weather_fallback(query: str, prefer_zh_output: bool = True
     async with httpx.AsyncClient(timeout=timeout) as client:
         geo_resp = await client.get(
             "https://geocoding-api.open-meteo.com/v1/search",
-            params={"name": loc, "count": 1, "language": geocode_lang, "format": "json"},
+            params={
+                "name": loc,
+                "count": 1,
+                "language": geocode_lang,
+                "format": "json",
+            },
         )
         if geo_resp.status_code != 200:
             return None
@@ -465,8 +477,12 @@ async def _duckduckgo_traffic_fallback(query: str) -> list[dict]:
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
             "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         }
-        async with httpx.AsyncClient(timeout=timeout, headers=headers, follow_redirects=True) as client:
-            resp = await client.get("https://duckduckgo.com/html/", params={"q": search_q})
+        async with httpx.AsyncClient(
+            timeout=timeout, headers=headers, follow_redirects=True
+        ) as client:
+            resp = await client.get(
+                "https://duckduckgo.com/html/", params={"q": search_q}
+            )
             if resp.status_code != 200:
                 return []
             soup = BeautifulSoup(resp.text, "html.parser")
@@ -506,7 +522,7 @@ def _traffic_congestion_estimate(now: datetime) -> tuple[str, str]:
     # 早晚高峰
     if is_workday and (7 <= h <= 9 or 17 <= h <= 19):
         return "较拥堵", "工作日通勤高峰"
-     # 工作日白天
+    # 工作日白天
     if is_workday and (10 <= h <= 16):
         return "中等拥堵", "工作日白天车流较大"
     # 工作日其他时间
@@ -552,7 +568,12 @@ def _normalize_realtime_category(reason: str | None) -> str:
         "堵车": "traffic",
         "拥堵": "traffic",
     }
-    return aliases.get(r, r if r in {"weather", "time", "news", "market", "traffic", "general"} else "general")
+    return aliases.get(
+        r,
+        r
+        if r in {"weather", "time", "news", "market", "traffic", "general"}
+        else "general",
+    )
 
 
 # =============================================================================
@@ -598,10 +619,14 @@ class ConversationNodes:
         """
         async with time_node("load_employee_config", state):
             db = await get_database()
-            employee = await db.digital_employee_configs.find_one({"employee_id": state["employee_id"]})
+            employee = await db.digital_employee_configs.find_one(
+                {"employee_id": state["employee_id"]}
+            )
 
             if not employee:
-                error_msg = f"Employee config not found: employee_id={state['employee_id']}"
+                error_msg = (
+                    f"Employee config not found: employee_id={state['employee_id']}"
+                )
                 logger.error(f"{error_msg}", exc_info=False)
                 raise ValueError(error_msg)
 
@@ -609,7 +634,9 @@ class ConversationNodes:
 
             # EmployeeSyncService 把 knowledge_kb_ids 等运行时设置写到 digital_employee_settings 集合，
             # 这里合并进来供下游统一从 employee_config 读取，避免路由因找不到 kb_ids 而误降级。
-            setting_doc = await db.digital_employee_settings.find_one({"employee_id": state["employee_id"]})
+            setting_doc = await db.digital_employee_settings.find_one(
+                {"employee_id": state["employee_id"]}
+            )
             if setting_doc:
                 setting_doc.pop("_id", None)
                 employee["setting"] = setting_doc
@@ -645,18 +672,20 @@ class ConversationNodes:
         async with time_node("load_session_context", state):
             try:
                 db = await get_database()
-                session = await db.sessions.find_one({"session_id": state["session_id"]})
+                session = await db.sessions.find_one(
+                    {"session_id": state["session_id"]}
+                )
 
                 if session:
                     # Load recent messages (last 10 for context)
                     state["context"] = {
                         "messages": session.get("context_messages", [])[-10:],
-                        "message_count": session.get("message_count", 0)
+                        "message_count": session.get("message_count", 0),
                     }
                     # Update activity timestamp
                     await db.sessions.update_one(
                         {"session_id": state["session_id"]},
-                        {"$set": {"last_activity": datetime.now()}}
+                        {"$set": {"last_activity": datetime.now()}},
                     )
                 else:
                     # Create new session
@@ -665,7 +694,7 @@ class ConversationNodes:
                         user_id=state["user_id"],
                         employee_id=state["employee_id"],
                         status="active",
-                        message_count=0
+                        message_count=0,
                     )
                     await db.sessions.insert_one(session_model.model_dump())
                     state["context"] = {"messages": [], "message_count": 0}
@@ -716,11 +745,12 @@ class ConversationNodes:
                 db = get_database()
                 if sensitive_ids:
                     cursor = db.thesaurus_sensitive.find(
-                        {"thesaurus_id": {"$in": sensitive_ids}},
-                        {"word": 1, "_id": 0}
+                        {"thesaurus_id": {"$in": sensitive_ids}}, {"word": 1, "_id": 0}
                     )
                     sensitive_docs = await cursor.to_list(length=None)
-                    employee_words = [doc.get("word", "") for doc in sensitive_docs if doc.get("word")]
+                    employee_words = [
+                        doc.get("word", "") for doc in sensitive_docs if doc.get("word")
+                    ]
                     sensitive_words.update(employee_words)
                     employee_words_lower = {w.lower() for w in employee_words if w}
 
@@ -728,14 +758,17 @@ class ConversationNodes:
             check_words_lower = DEFAULT_SENSITIVE_WORDS_LOWER | employee_words_lower
             query_lower = query.lower()
             has_sensitive = any(
-                sensitive_term_matches_query(query_lower, word) for word in check_words_lower
+                sensitive_term_matches_query(query_lower, word)
+                for word in check_words_lower
             )
 
             state["has_sensitive"] = has_sensitive
 
             # DEBUG: 输出敏感词检测结果
             matched_words = [
-                w for w in sensitive_words if sensitive_term_matches_query(query_lower, w.lower())
+                w
+                for w in sensitive_words
+                if sensitive_term_matches_query(query_lower, w.lower())
             ]
             logger.info(
                 f"[DEBUG] Sensitive check | query={query[:50]} | "
@@ -779,9 +812,7 @@ class ConversationNodes:
             cleaned = clean_user_query(query)
             query_changed = cleaned != query
             if query_changed:
-                logger.info(
-                    f"Query cleaned: before={query!r}, after={cleaned!r}"
-                )
+                logger.info(f"Query cleaned: before={query!r}, after={cleaned!r}")
                 state["user_query"] = cleaned
                 query = cleaned
 
@@ -796,7 +827,9 @@ class ConversationNodes:
 
         return state
 
-    async def post_classification_preprocess(self, state: ConversationState) -> ConversationState:
+    async def post_classification_preprocess(
+        self, state: ConversationState
+    ) -> ConversationState:
         """
         分类后预处理节点 — 在 ``classify_query_type`` 之后执行 ASR→LaTeX 转换。
 
@@ -872,15 +905,13 @@ class ConversationNodes:
                 converted = await word_to_latex(query)
             except Exception:
                 logger.exception(
-                    "ASR→LaTeX failed after classification, keep original query | query=%r",
-                    query[:200],
+                    "ASR→LaTeX failed after classification, keep original query | query={query}"
                 )
                 return state
 
             if not converted or not converted.strip():
                 logger.info(
-                    "ASR→LaTeX skipped after classification | empty converted result | query=%r",
-                    query[:200],
+                    f"ASR→LaTeX skipped after classification | empty converted result | query={query}"
                 )
                 return state
 
@@ -894,9 +925,7 @@ class ConversationNodes:
                 return state
 
             logger.info(
-                "ASR→LaTeX after classification: before=%r, after=%r",
-                query,
-                converted,
+                f"ASR→LaTeX after classification: before={query}, after={converted}"
             )
 
             state["user_query"] = converted
@@ -948,16 +977,23 @@ class ConversationNodes:
             dialog_text = format_dialog_for_resolver(context_messages)
             # 统计上下文用户消息数量
             session_user_count = sum(
-                1 for m in context_messages if m.get("role") == "user" and (m.get("content") or "").strip()
+                1
+                for m in context_messages
+                if m.get("role") == "user" and (m.get("content") or "").strip()
             )
             # 上下文不足2轮时，从DB补全历史对话
             if state.get("session_id") and session_user_count < 2:
                 try:
                     db = await get_database()
-                    recent_turns = await db.conversations.find(
-                        {"session_id": state.get("session_id", "")},
-                        {"_id": 0, "user_query": 1, "ai_response": 1},
-                    ).sort("created_at", 1).limit(30).to_list(length=30)
+                    recent_turns = (
+                        await db.conversations.find(
+                            {"session_id": state.get("session_id", "")},
+                            {"_id": 0, "user_query": 1, "ai_response": 1},
+                        )
+                        .sort("created_at", 1)
+                        .limit(30)
+                        .to_list(length=30)
+                    )
                     dialog_text = augment_dialog_with_persisted_turns(
                         dialog_text, list(recent_turns), query
                     )
@@ -978,7 +1014,9 @@ class ConversationNodes:
             #   - 异常处理在原 helper 内部已退化为 ``False / "fallback"``，并行化不会
             #     放大故障范围。
             classifier = get_query_classifier()
-            dynamic_ctx_enabled = bool(getattr(settings, "dynamic_context_memory_enabled", True))
+            dynamic_ctx_enabled = bool(
+                getattr(settings, "dynamic_context_memory_enabled", True)
+            )
             classify_task = asyncio.create_task(
                 classifier.aclassify(query, context_query=last_user_query or None)
             )
@@ -1021,7 +1059,9 @@ class ConversationNodes:
             #   历史话题硬塞进改写，污染下游分类与 RAG 检索。
             resolved = query
             if context_dependence == "related" and dialog_text.strip():
-                resolved = await classifier.aresolve_standalone_query(query, dialog_text)
+                resolved = await classifier.aresolve_standalone_query(
+                    query, dialog_text
+                )
                 if not (resolved or "").strip():
                     resolved = query
             resolved = resolved.strip()
@@ -1176,7 +1216,9 @@ class ConversationNodes:
                 result.label,
                 result.confidence,
                 resolved,
-                noise_preset_enabled=getattr(settings, "noise_preset_response_enabled", True),
+                noise_preset_enabled=getattr(
+                    settings, "noise_preset_response_enabled", True
+                ),
                 min_confidence=getattr(settings, "noise_preset_min_confidence", "high"),
                 max_query_length=getattr(settings, "noise_preset_max_query_length", 12),
             )
@@ -1224,16 +1266,20 @@ class ConversationNodes:
                     state["complexity_reason"] = "greeting"
                     state["is_realtime_query"] = False
                     # 10. 添加问候语来源
-                    state["sources"].append({
-                        "type": "text",
-                        "from": "greeting",
-                        "text": query,
-                        "citations": []
-                    })
+                    state["sources"].append(
+                        {
+                            "type": "text",
+                            "from": "greeting",
+                            "text": query,
+                            "citations": [],
+                        }
+                    )
                 # 实时查询
                 case "realtime_query":
                     state["is_realtime_query"] = True
-                    state["realtime_category"] = _normalize_realtime_category(result.reason)
+                    state["realtime_category"] = _normalize_realtime_category(
+                        result.reason
+                    )
                     state["realtime_detect_reason"] = f"llm:{result.confidence}"
                     state["intent"] = "general_query"
                 # 数学题
@@ -1243,12 +1289,14 @@ class ConversationNodes:
                 # 无效噪声
                 case "noise":
                     state["intent"] = "noise"
-                    state["sources"].append({
-                        "type": "text",
-                        "from": "noise_response",
-                        "text": NOISE_PRESET_RESPONSE_TEXT,
-                        "citations": []
-                    })
+                    state["sources"].append(
+                        {
+                            "type": "text",
+                            "from": "noise_response",
+                            "text": NOISE_PRESET_RESPONSE_TEXT,
+                            "citations": [],
+                        }
+                    )
                 # 默认通用查询（含 concept_explain / english_query / general_knowledge / chit_chat / other）
                 case _:
                     state["is_realtime_query"] = False
@@ -1345,8 +1393,8 @@ class ConversationNodes:
             state["complexity_reason"] = "default"
 
             # 非混合模式：跳过复杂度评估
-            routing_mode = getattr(settings, 'llm_routing_mode', 'local_only')
-            if routing_mode != 'hybrid':
+            routing_mode = getattr(settings, "llm_routing_mode", "local_only")
+            if routing_mode != "hybrid":
                 logger.debug(
                     f"Complexity evaluation skipped (routing_mode={routing_mode})"
                 )
@@ -1360,7 +1408,9 @@ class ConversationNodes:
 
             # 根据查询特征优化 reason 分类
             reason = "heuristic"
-            if any(kw in query for kw in ["集合", "函数", "定理", "公式", "定义", "什么是"]):
+            if any(
+                kw in query for kw in ["集合", "函数", "定理", "公式", "定义", "什么是"]
+            ):
                 reason = "数学概念"
             elif any(kw in query for kw in ["证明", "推导", "为什么"]):
                 reason = "数学推理"
@@ -1370,9 +1420,7 @@ class ConversationNodes:
             state["complexity_score"] = score
             state["complexity_reason"] = reason
 
-            logger.info(
-                f"Complexity evaluated (heuristic): {score}/10 - {reason}"
-            )
+            logger.info(f"Complexity evaluated (heuristic): {score}/10 - {reason}")
 
         return state
 
@@ -1419,7 +1467,9 @@ class ConversationNodes:
                 employee_config = state.get("employee_config", {})
                 capabilities = employee_config.get("capabilities", {})
                 if not capabilities.get("web_search_enabled", True):
-                    logger.info(f"Web search disabled for employee: {state.get('employee_id')}")
+                    logger.info(
+                        f"Web search disabled for employee: {state.get('employee_id')}"
+                    )
                     state["web_search_results"] = []
                     state["web_search_used"] = False
                     state["web_search_error"] = None
@@ -1427,7 +1477,9 @@ class ConversationNodes:
 
                 # 日历问题：优先本地推算，避免分类器把 reason 标成 general 仍去联网抄错误示例
                 if state.get("is_realtime_query"):
-                    q_cal = (state.get("rewritten_query") or state.get("user_query") or "").strip()
+                    q_cal = (
+                        state.get("rewritten_query") or state.get("user_query") or ""
+                    ).strip()
                     direct_cal = calendar_direct_text_answer(
                         q_cal,
                         resolve_prefer_zh_output(state),
@@ -1468,17 +1520,23 @@ class ConversationNodes:
                         state["web_search_results"] = [structured]
                         state["web_search_used"] = True
                         state["web_search_error"] = None
-                        state["sources"].append({
-                            "type": "text",
-                            "from": "web_search",
-                            "text": state.get("rewritten_query", state["user_query"]),
-                            "citations": [{
-                                "title": structured.get("title", ""),
-                                "url": structured.get("url", ""),
-                                "score": structured.get("score", 0.0),
-                                "snippet": structured.get("content", "")[:300],
-                            }],
-                        })
+                        state["sources"].append(
+                            {
+                                "type": "text",
+                                "from": "web_search",
+                                "text": state.get(
+                                    "rewritten_query", state["user_query"]
+                                ),
+                                "citations": [
+                                    {
+                                        "title": structured.get("title", ""),
+                                        "url": structured.get("url", ""),
+                                        "score": structured.get("score", 0.0),
+                                        "snippet": structured.get("content", "")[:300],
+                                    }
+                                ],
+                            }
+                        )
                         logger.info(
                             "Weather query handled by Open-Meteo (primary structured source); "
                             f"skipping Tavily. query={query[:80]}"
@@ -1492,7 +1550,9 @@ class ConversationNodes:
                 # 「当前北京时间/几点几分」：爬虫摘要常混入错误时区≈±8 小时，
                 # 用 Asia/Shanghai 服务端时刻作为权威源，跳过 Tavily（与结构化天气同源思路）。
                 if state.get("realtime_category") == "time":
-                    q_time = (state.get("rewritten_query") or state.get("user_query") or "").strip()
+                    q_time = (
+                        state.get("rewritten_query") or state.get("user_query") or ""
+                    ).strip()
                     _pref_zh = resolve_prefer_zh_output(state)
                     if skip_web_use_authoritative_beijing_wall_clock(
                         q_time, prefer_zh_output=_pref_zh
@@ -1504,12 +1564,18 @@ class ConversationNodes:
                         state["web_search_results"] = [_clean]
                         state["web_search_used"] = True
                         state["web_search_error"] = None
-                        state["sources"].append({
-                            "type": "text",
-                            "from": "web_search",
-                            "text": state.get("rewritten_query", state["user_query"]),
-                            "citations": [citation_dict_from_wall_clock_record(_rec)],
-                        })
+                        state["sources"].append(
+                            {
+                                "type": "text",
+                                "from": "web_search",
+                                "text": state.get(
+                                    "rewritten_query", state["user_query"]
+                                ),
+                                "citations": [
+                                    citation_dict_from_wall_clock_record(_rec)
+                                ],
+                            }
+                        )
                         logger.info(
                             "Web search skipped: authoritative Beijing wall clock, "
                             f"query={q_time[:80]}"
@@ -1518,9 +1584,14 @@ class ConversationNodes:
 
                 now = datetime.now()
                 realtime_category = state.get("realtime_category", "") or "general"
-                policy = DEFAULT_POLICIES.get(realtime_category, DEFAULT_POLICIES["general"])
+                policy = DEFAULT_POLICIES.get(
+                    realtime_category, DEFAULT_POLICIES["general"]
+                )
                 if realtime_category == "market":
-                    _mh = (getattr(settings, "web_search_market_anchor_hint_zh", None) or "").strip()
+                    _mh = (
+                        getattr(settings, "web_search_market_anchor_hint_zh", None)
+                        or ""
+                    ).strip()
                     if _mh:
                         policy = RecencyPolicy(
                             max_age_days=policy.max_age_days,
@@ -1538,9 +1609,8 @@ class ConversationNodes:
                 # 语言一致性守门（避免英文问句被改写成中文短语后污染 Tavily 召回，
                 # 进而让下游 LLM 看到外文 context 跟着语言飘移）：改写产物的主导
                 # 语言必须与原 query 一致，否则回退原 query。复用 has_language_drift。
-                if (
-                    state.get("is_realtime_query")
-                    and getattr(settings, "realtime_query_search_rewrite_enabled", False)
+                if state.get("is_realtime_query") and getattr(
+                    settings, "realtime_query_search_rewrite_enabled", False
                 ):
                     rewritten = await get_query_classifier().agen_search_query(
                         query, hint=realtime_category
@@ -1570,7 +1640,9 @@ class ConversationNodes:
                     search_depth=_tavily_depth,
                     tavily_api_key=settings.tavily_api_key,
                 )
-                search_results = await web_search_tool.ainvoke({"query": anchored_query})
+                search_results = await web_search_tool.ainvoke(
+                    {"query": anchored_query}
+                )
                 # 锚定查询可能过窄：实时查询无结果时，用原始查询重试一次（通用回退）。
                 if (
                     state.get("is_realtime_query")
@@ -1587,8 +1659,12 @@ class ConversationNodes:
                 ):
                     loc = _extract_traffic_location(query) or "当地"
                     focused_query = f"{loc} 实时路况 拥堵 情况"
-                    logger.info(f"Web search retry with traffic-focused query: {focused_query}")
-                    search_results = await web_search_tool.ainvoke({"query": focused_query})
+                    logger.info(
+                        f"Web search retry with traffic-focused query: {focused_query}"
+                    )
+                    search_results = await web_search_tool.ainvoke(
+                        {"query": focused_query}
+                    )
                 # 重试仍无结果：启用 DuckDuckGo 兜底搜索
                 if (
                     state.get("is_realtime_query")
@@ -1601,7 +1677,8 @@ class ConversationNodes:
 
                 if realtime_category == "market":
                     _mtpl = (
-                        getattr(settings, "web_search_market_secondary_query_zh", None) or ""
+                        getattr(settings, "web_search_market_secondary_query_zh", None)
+                        or ""
                     ).strip()
                     if _mtpl:
                         try:
@@ -1618,7 +1695,9 @@ class ConversationNodes:
                         try:
                             extra_mk = await web_search_tool.ainvoke({"query": q_mk})
                             primary_mk = (
-                                search_results if isinstance(search_results, list) else []
+                                search_results
+                                if isinstance(search_results, list)
+                                else []
                             )
                             search_results = merge_tavily_result_lists(
                                 primary_mk,
@@ -1636,8 +1715,14 @@ class ConversationNodes:
                     if not isinstance(search_results, list):
                         # 处理非列表返回值（可能是错误字符串）
                         results_str = str(search_results)
-                        if "401" in results_str or "Unauthorized" in results_str or "authentication" in results_str.lower():
-                            api_error_message = "当前无法进行网络检索（API Key 可能过期或无效）"
+                        if (
+                            "401" in results_str
+                            or "Unauthorized" in results_str
+                            or "authentication" in results_str.lower()
+                        ):
+                            api_error_message = (
+                                "当前无法进行网络检索（API Key 可能过期或无效）"
+                            )
                             logger.warning(
                                 f"Web search API error: error_type={type(search_results).__name__}, "
                                 f"error={results_str[:200]}"
@@ -1647,8 +1732,14 @@ class ConversationNodes:
                         for result in search_results:
                             if not isinstance(result, dict):
                                 result_str = str(result)
-                                if "401" in result_str or "Unauthorized" in result_str or "authentication" in result_str.lower():
-                                    api_error_message = "当前无法进行网络检索（API Key 可能过期或无效）"
+                                if (
+                                    "401" in result_str
+                                    or "Unauthorized" in result_str
+                                    or "authentication" in result_str.lower()
+                                ):
+                                    api_error_message = (
+                                        "当前无法进行网络检索（API Key 可能过期或无效）"
+                                    )
                                     logger.warning(
                                         f"Web search API error in result: error={result_str[:200]}"
                                     )
@@ -1657,9 +1748,11 @@ class ConversationNodes:
                         # 只有没有 API 错误时才格式化结果
                         if not api_error_message:
                             selected_results = (
-                                search_results[:settings.web_search_max_results]
+                                search_results[: settings.web_search_max_results]
                                 if used_duck_fallback
-                                else filter_and_sort_by_recency(search_results, now, policy)[:settings.web_search_max_results]
+                                else filter_and_sort_by_recency(
+                                    search_results, now, policy
+                                )[: settings.web_search_max_results]
                             )
                             for i, result in enumerate(selected_results, 1):
                                 if not isinstance(result, dict):
@@ -1669,13 +1762,15 @@ class ConversationNodes:
                                     )
                                     continue
 
-                                formatted_results.append({
-                                    "rank": i,
-                                    "title": result.get("title", ""),
-                                    "url": result.get("url", ""),
-                                    "content": result.get("content", "")[:2000],
-                                    "score": result.get("score", 0.0)
-                                })
+                                formatted_results.append(
+                                    {
+                                        "rank": i,
+                                        "title": result.get("title", ""),
+                                        "url": result.get("url", ""),
+                                        "content": result.get("content", "")[:2000],
+                                        "score": result.get("score", 0.0),
+                                    }
+                                )
 
                 state["web_search_results"] = formatted_results
                 state["web_search_used"] = len(formatted_results) > 0
@@ -1701,19 +1796,23 @@ class ConversationNodes:
                 if formatted_results:
                     citations = []
                     for result in formatted_results[:3]:  # 最多3个
-                        citations.append({
-                            "title": result.get("title", ""),
-                            "url": result.get("url", ""),
-                            "score": result.get("score", 0.0),
-                            "snippet": result.get("content", "")[:300]
-                        })
+                        citations.append(
+                            {
+                                "title": result.get("title", ""),
+                                "url": result.get("url", ""),
+                                "score": result.get("score", 0.0),
+                                "snippet": result.get("content", "")[:300],
+                            }
+                        )
 
-                    state["sources"].append({
-                        "type": "text",
-                        "from": "web_search",
-                        "text": state.get("rewritten_query", state["user_query"]),
-                        "citations": citations
-                    })
+                    state["sources"].append(
+                        {
+                            "type": "text",
+                            "from": "web_search",
+                            "text": state.get("rewritten_query", state["user_query"]),
+                            "citations": citations,
+                        }
+                    )
 
                 logger.info(
                     f"Web search completed: results_count={len(formatted_results)}, "
@@ -1761,15 +1860,27 @@ class ConversationNodes:
             # 避免 LLM 因资料无关而输出"无法回答"。当前仅 traffic 提供先验；
             # 下游 prompt 由 build_generation_messages 读取 state["traffic_estimate"] 拼接，
             # 不构成强约束（LLM 仍优先采用真实命中的 web 数据）。
-            if state.get("realtime_category") == "traffic" and not state.get("traffic_estimate"):
+            if state.get("realtime_category") == "traffic" and not state.get(
+                "traffic_estimate"
+            ):
                 _now = datetime.now()
                 _lvl, _reason = _traffic_congestion_estimate(_now)
                 state["traffic_estimate"] = {
                     "level": _lvl,
                     "reason": _reason,
                     "now_iso": _now.strftime("%Y-%m-%d %H:%M"),
-                    "weekday_zh": ["周一", "周二", "周三", "周四", "周五", "周六", "周日"][_now.weekday()],
-                    "weekday_en": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][_now.weekday()],
+                    "weekday_zh": [
+                        "周一",
+                        "周二",
+                        "周三",
+                        "周四",
+                        "周五",
+                        "周六",
+                        "周日",
+                    ][_now.weekday()],
+                    "weekday_en": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][
+                        _now.weekday()
+                    ],
                 }
 
             # 噪声输入：使用预设的友好响应，不需要调用 LLM
@@ -1779,7 +1890,11 @@ class ConversationNodes:
             # 不再使用"听清/听见"等会让用户误认作 ASR 故障的字眼。
             if intent == "noise":
                 noise_source = next(
-                    (s for s in state.get("sources", []) if s.get("from") == "noise_response"),
+                    (
+                        s
+                        for s in state.get("sources", [])
+                        if s.get("from") == "noise_response"
+                    ),
                     None,
                 )
                 preset_text = (
@@ -1796,7 +1911,9 @@ class ConversationNodes:
             if state.get("is_realtime_query"):
                 direct = state.get("direct_text_answer")
                 if not direct:
-                    q_cal = (state.get("rewritten_query") or state.get("user_query") or "").strip()
+                    q_cal = (
+                        state.get("rewritten_query") or state.get("user_query") or ""
+                    ).strip()
                     direct = calendar_direct_text_answer(
                         q_cal,
                         resolve_prefer_zh_output(state),
@@ -1837,7 +1954,9 @@ class ConversationNodes:
                         (float(r.get("score", 0.0) or 0.0) for r in web_results),
                         default=0.0,
                     )
-                    threshold = float(getattr(settings, "realtime_traffic_min_web_score", 0.5))
+                    threshold = float(
+                        getattr(settings, "realtime_traffic_min_web_score", 0.5)
+                    )
                     if max_score < threshold:
                         web_unreliable = True
                         logger.info(
@@ -1876,8 +1995,24 @@ class ConversationNodes:
                                 "level": _lvl,
                                 "reason": _reason,
                                 "now_iso": _now.strftime("%Y-%m-%d %H:%M"),
-                                "weekday_zh": ["周一", "周二", "周三", "周四", "周五", "周六", "周日"][_now.weekday()],
-                                "weekday_en": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][_now.weekday()],
+                                "weekday_zh": [
+                                    "周一",
+                                    "周二",
+                                    "周三",
+                                    "周四",
+                                    "周五",
+                                    "周六",
+                                    "周日",
+                                ][_now.weekday()],
+                                "weekday_en": [
+                                    "Mon",
+                                    "Tue",
+                                    "Wed",
+                                    "Thu",
+                                    "Fri",
+                                    "Sat",
+                                    "Sun",
+                                ][_now.weekday()],
                             }
                             state["traffic_estimate"] = est
                         prefer_zh = prefer_zh_unreliable
@@ -1915,7 +2050,9 @@ class ConversationNodes:
             elif web_search_used:
                 web_results = state.get("web_search_results", [])
                 if web_results:
-                    avg_web_score = sum(r.get("score", 0.5) for r in web_results) / len(web_results)
+                    avg_web_score = sum(r.get("score", 0.5) for r in web_results) / len(
+                        web_results
+                    )
                     confidence = max(0.75, avg_web_score)
             else:  # normal query with RAGAnything
                 confidence = 0.8
@@ -1937,19 +2074,26 @@ class ConversationNodes:
             else:
                 effective_mode = answer_mode
 
-            if state.get("is_math_problem", False) or effective_mode == AnswerMode.MATH_LLM.value:
+            if (
+                state.get("is_math_problem", False)
+                or effective_mode == AnswerMode.MATH_LLM.value
+            ):
                 # 数学题：数学模型推理，明确不走 RAG
                 streaming_llm, model_name = self.workflow.get_math_streaming_llm(state)
 
                 # 运行模式/语言来自 state（由 conversation_service.get_math_streaming_llm
                 # 写入），不再从 ChatOpenAI 对象上 getattr 一个并不存在的 mode 属性。
                 math_runtime_mode = state.get("math_runtime_mode") or "direct"
-                math_runtime_mode = MathAgentService.validate_runtime_mode(math_runtime_mode)
+                math_runtime_mode = MathAgentService.validate_runtime_mode(
+                    math_runtime_mode
+                )
                 math_runtime_lang = state.get("math_runtime_lang") or "zh"
 
                 messages = build_math_generation_messages(
                     state,
-                    include_system_prompt=MathAgentService.is_direct_mode(math_runtime_mode),
+                    include_system_prompt=MathAgentService.is_direct_mode(
+                        math_runtime_mode
+                    ),
                     math_runtime_mode=math_runtime_mode,
                     math_runtime_lang=math_runtime_lang,
                 )
@@ -2000,7 +2144,9 @@ class ConversationNodes:
                     # 「请问您指的是哪方面的应用？」这类失忆式回答。
                     # rewritten_query 缺失或为空时回退到原始 user_query，向后兼容老路径。
                     rewritten_for_rag = (state.get("rewritten_query") or "").strip()
-                    state["raganything_query"] = rewritten_for_rag or state["user_query"]
+                    state["raganything_query"] = (
+                        rewritten_for_rag or state["user_query"]
+                    )
                     state["raganything_mode"] = "hybrid"
 
                     logger.info(
@@ -2073,8 +2219,8 @@ class ConversationNodes:
                     conversation_id=conv_id,
                     session_id=state["session_id"],
                     user_id=state["user_id"],
-                    user_name=state.get('user_name', ''),
-                    head_url=state.get('head_url', ''),
+                    user_name=state.get("user_name", ""),
+                    head_url=state.get("head_url", ""),
                     employee_id=state["employee_id"],
                     employee_name=employee_config.get("name", ""),
                     user_query=state["user_query"],
@@ -2089,7 +2235,7 @@ class ConversationNodes:
                             "rank": result.get("rank"),
                             "title": result.get("title"),
                             "url": result.get("url"),
-                            "score": result.get("score", 0.0)
+                            "score": result.get("score", 0.0),
                         }
                         for result in state.get("web_search_results", [])[:5]
                     ],
@@ -2097,13 +2243,13 @@ class ConversationNodes:
                         {
                             "doc_id": doc.get("doc_id"),
                             "kb_id": doc.get("kb_id"),
-                            "score": doc.get("rrf_score", 0.0)
+                            "score": doc.get("rrf_score", 0.0),
                         }
                         for doc in state.get("retrieved_docs", [])[:3]
                     ],
                     relevance_score=state.get("relevance_score", 0.0),
                     confidence=state.get("confidence", 0.0),
-                    response_time_ms=total_time_ms
+                    response_time_ms=total_time_ms,
                 )
 
                 await db.conversations.insert_one(conversation.model_dump())
@@ -2116,13 +2262,16 @@ class ConversationNodes:
                             "context_messages": {
                                 "$each": [
                                     {"role": "user", "content": state["user_query"]},
-                                    {"role": "assistant", "content": state["final_answer"]}
+                                    {
+                                        "role": "assistant",
+                                        "content": state["final_answer"],
+                                    },
                                 ],
-                                "$slice": -20  # Keep last 20 messages
+                                "$slice": -20,  # Keep last 20 messages
                             }
                         },
-                        "$inc": {"message_count": 1}
-                    }
+                        "$inc": {"message_count": 1},
+                    },
                 )
 
                 # Log timing summary

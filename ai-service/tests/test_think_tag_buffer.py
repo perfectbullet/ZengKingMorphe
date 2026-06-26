@@ -123,5 +123,103 @@ def test_empty_token():
     assert result == "content"
 
 
+# =============================================================================
+# think 单段计时测试
+# =============================================================================
+
+
+class FakeClock:
+    """可控时钟，用于单元测试 wall-clock 计时。"""
+
+    def __init__(self):
+        self.t = 0.0
+
+    def __call__(self):
+        return self.t
+
+    def advance(self, seconds: float):
+        self.t += seconds
+
+
+def test_think_timing_without_think():
+    """无 think 标签时，think_time_ms 为 0。"""
+    clock = FakeClock()
+    buffer = ThinkTagBuffer(time_fn=clock)
+
+    assert buffer.add("hello") == "hello"
+    clock.advance(1.0)
+    assert buffer.add(" world") == " world"
+
+    meta = buffer.get_timing_metadata()
+
+    assert meta["has_think"] is False
+    assert meta["think_time_ms"] == 0
+    assert meta["closed"] is False
+
+
+def test_think_timing_single_closed_block():
+    """正常闭合的单段 think，think_time_ms 为首 <think> 到首 </think> 的时长。"""
+    clock = FakeClock()
+    buffer = ThinkTagBuffer(time_fn=clock)
+
+    assert buffer.add("before") == "before"
+
+    buffer.add("<think>")
+    clock.advance(1.25)
+    buffer.add("reasoning")
+    clock.advance(0.75)
+    buffer.add("</think>")
+
+    assert buffer.add("after") == "after"
+
+    meta = buffer.get_timing_metadata()
+
+    assert meta["has_think"] is True
+    assert meta["think_time_ms"] == 2000
+    assert meta["closed"] is True
+
+
+def test_think_timing_split_tags():
+    """标签被切分时也能正确计时（开始=完整识别 <think>，结束=完整识别 </think>）。"""
+    clock = FakeClock()
+    buffer = ThinkTagBuffer(time_fn=clock)
+
+    buffer.add("<th")
+    clock.advance(0.1)
+    buffer.add("ink")
+    clock.advance(0.1)
+    buffer.add(">")
+
+    clock.advance(3.0)
+
+    buffer.add("</")
+    clock.advance(0.1)
+    buffer.add("think")
+    clock.advance(0.1)
+    buffer.add(">")
+
+    meta = buffer.get_timing_metadata()
+
+    assert meta["has_think"] is True
+    assert meta["think_time_ms"] == 3200
+    assert meta["closed"] is True
+
+
+def test_think_timing_unclosed_block():
+    """未闭合 think，think_time_ms 为 None。"""
+    clock = FakeClock()
+    buffer = ThinkTagBuffer(time_fn=clock)
+
+    buffer.add("<think>")
+    clock.advance(2.5)
+    buffer.add("reasoning without close")
+
+    meta = buffer.get_timing_metadata()
+
+    assert meta["has_think"] is True
+    assert meta["think_time_ms"] is None
+    assert meta["closed"] is False
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

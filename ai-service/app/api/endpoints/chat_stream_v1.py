@@ -76,6 +76,7 @@ CHUNK_TYPE_ERROR = "error"
 # 工具函数
 # =============================================================================
 
+
 def _build_history_prefix_for_query(
     context_messages: list,
     prefer_zh_output: bool,
@@ -184,9 +185,11 @@ def _build_history_prefix_for_query(
         "and your previous steps. If information is still missing, ask for the missing details.\n\n"
     )
 
+
 # =============================================================================
 # 来源归因
 # =============================================================================
+
 
 def format_sources(
     retrieved_docs: list[dict],
@@ -248,6 +251,7 @@ def format_sources(
 # 公式转语音
 # =============================================================================
 
+
 def _has_math_symbols_simple(text: str) -> bool:
     """
     检查文本是否包含非 LaTeX 定界符的数学符号。
@@ -299,7 +303,9 @@ async def _process_segment_for_output(
             logger.info(
                 f"[{log_prefix} 公式转换] 转换后长度={len(voice_content)}, 转换后={repr(voice_content)}"
             )
-        elif enable_math_sentence_conversion and _has_math_symbols_simple(display_content):
+        elif enable_math_sentence_conversion and _has_math_symbols_simple(
+            display_content
+        ):
             logger.info(
                 f"[{log_prefix} 数学句子转换] 转换前长度={len(display_content)}, 转换前={repr(display_content)}"
             )
@@ -503,6 +509,12 @@ _STATE_DEFAULTS: ConversationState = {
     "team_id": None,
     # ── 输出语言偏好 ──
     "prefer_zh_output": True,
+    # ── ASR→LaTeX 分类后转换状态 ──
+    "asr_latex_should_run": False,
+    "asr_latex_converted": False,
+    "query_preprocessed": False,
+    "asr_latex_before": None,
+    "asr_latex_after": None,
 }
 
 # 启动时校验：_STATE_DEFAULTS 必须覆盖 ConversationState 的全部字段
@@ -949,7 +961,9 @@ async def generate_openai_stream_v1(
             # 兜底：异常路径导致 post_classification_preprocess 未触发 chunk 保存时，
             # 在进入流式输出前补存一次，保证前端不会丢 user_query。正常路径不应走到这里。
             if not user_query_chunk_saved:
-                display_user_query = current_state.get("user_query") or original_user_query
+                display_user_query = (
+                    current_state.get("user_query") or original_user_query
+                )
                 query_preprocessed = bool(
                     current_state.get("query_preprocessed")
                     or display_user_query != original_user_query
@@ -1524,7 +1538,9 @@ async def generate_openai_stream_v1(
                                 state=current_state,
                             )
                             safe_write_math_debug(math_debug_path, math_debug_payload)
-                            logger.info(f"[MathDebugDump] Created math debug json | path={math_debug_path}")
+                            logger.info(
+                                f"[MathDebugDump] Created math debug json | path={math_debug_path}"
+                            )
                         except Exception:
                             logger.exception(
                                 "[MathDebugDump] Failed to initialize math debug dump"
@@ -1556,9 +1572,7 @@ async def generate_openai_stream_v1(
                             # 过滤 think 标签
                             # print(f'token={token!r}|', end='') # 本行日志疯狂打印，不要随意开启
                             filtered_token = think_tag_buffer.add(token)
-                            if not filtered_token:
-                                full_answer += token
-                            else:
+                            if filtered_token:
                                 full_answer += filtered_token
                                 segment = sentence_buffer.add(filtered_token)
                                 if segment:
@@ -1601,9 +1615,7 @@ async def generate_openai_stream_v1(
                         math_debug_payload = mark_cancelled(
                             math_debug_payload,
                             output_content="".join(math_output_parts),
-                            duration_ms=int(
-                                (time.perf_counter() - start_time) * 1000
-                            ),
+                            duration_ms=int((time.perf_counter() - start_time) * 1000),
                         )
                         safe_write_math_debug(math_debug_path, math_debug_payload)
                     raise
@@ -1619,9 +1631,7 @@ async def generate_openai_stream_v1(
                             math_debug_payload,
                             exc=e,
                             output_content="".join(math_output_parts),
-                            duration_ms=int(
-                                (time.perf_counter() - start_time) * 1000
-                            ),
+                            duration_ms=int((time.perf_counter() - start_time) * 1000),
                         )
                         safe_write_math_debug(math_debug_path, math_debug_payload)
                     raise
@@ -1835,6 +1845,10 @@ async def generate_openai_stream_v1(
         final_user_query = current_state.get("user_query") or original_user_query
         _update_finish_chunk_metadata(
             finish_chunk_data, final_state, final_user_query, model_name, sources
+        )
+
+        finish_chunk_data.setdefault("metadata", {})["think_timing"] = (
+            think_tag_buffer.get_timing_metadata()
         )
 
         chunk_sequence += 1

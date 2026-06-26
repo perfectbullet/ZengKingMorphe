@@ -1,6 +1,7 @@
 """ThinkTagBuffer 用于过滤流式文本中的 <think>...</think> 内容。"""
 
-from typing import Optional
+import time
+from typing import Callable, Optional
 
 
 class ThinkTagBuffer:
@@ -28,6 +29,7 @@ class ThinkTagBuffer:
         *,
         collect_think: bool = False,
         strip_think_content: bool = False,
+        time_fn: Callable[[], float] = time.perf_counter,
     ):
         self.state = self.STATE_OUTSIDE
         self.detection_buffer = ""
@@ -40,6 +42,13 @@ class ThinkTagBuffer:
         self.strip_think_content = strip_think_content
         self.think_blocks: list[str] = []
         self._current_think_parts: list[str] = []
+
+        # 单段 think 计时：只记录第一次完整 <think...> 到第一次完整 </think>
+        self._time_fn = time_fn
+        self._has_think = False
+        self._think_closed = False
+        self._think_start_time: Optional[float] = None
+        self._think_end_time: Optional[float] = None
 
     def add(self, token: str) -> Optional[str]:
         """添加一个流式 token，返回过滤后的可见文本。
@@ -206,12 +215,20 @@ class ThinkTagBuffer:
 
     def _enter_think(self) -> None:
         """进入 think 内容区。"""
+        if not self._has_think:
+            self._has_think = True
+            self._think_start_time = self._time_fn()
+
         self.state = self.STATE_INSIDE
         self.detection_buffer = ""
         self._current_think_parts = []
 
     def _exit_think(self) -> None:
         """退出 think 内容区。"""
+        if self._has_think and not self._think_closed:
+            self._think_end_time = self._time_fn()
+            self._think_closed = True
+
         if self.collect_think:
             content = "".join(self._current_think_parts)
             if self.strip_think_content:
@@ -274,3 +291,31 @@ class ThinkTagBuffer:
     def get_think_content(self, sep: str = "\n\n") -> str:
         """将已经收集到的 think 内容拼接为字符串。"""
         return sep.join(self.think_blocks)
+
+    def get_timing_metadata(self) -> dict:
+        """返回 think 单段计时 metadata。
+
+        计时口径：
+        - 第一次完整识别到 <think...> 时开始；
+        - 第一次完整识别到 </think> 时结束；
+        - 不考虑多个 think block；
+        - 未闭合时 think_time_ms 返回 None。
+        """
+        if self._think_start_time is not None and self._think_end_time is not None:
+            think_time_ms = int(
+                max(0.0, self._think_end_time - self._think_start_time) * 1000
+            )
+        elif self._has_think:
+            think_time_ms = None
+        else:
+            think_time_ms = 0
+
+        return {
+            "has_think": self._has_think,
+            "think_time_ms": think_time_ms,
+            "closed": self._think_closed,
+            "definition": (
+                "server wall-clock elapsed time between completed <think...> tag "
+                "and completed </think> tag"
+            ),
+        }

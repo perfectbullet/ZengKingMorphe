@@ -32,8 +32,8 @@ REPO_ROOT = AI_SERVICE_DIR.parent
 
 load_dotenv(AI_SERVICE_DIR / ".env", override=False)
 
-WORD_TO_LATEX_LLM_BASE_URL = os.getenv("MATH_MODEL_BASE_URL")
-WORD_TO_LATEX_LLM_MODEL = os.getenv("MATH_MODEL_NAME")
+WORD_TO_LATEX_LLM_BASE_URL = os.getenv("LLM_BASE_URL")
+WORD_TO_LATEX_LLM_MODEL = os.getenv("LLM_MODEL")
 WORD_TO_LATEX_LLM_API_KEY = (
     os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY") or "empty"
 )
@@ -89,21 +89,11 @@ WORD_TO_LATEX_SYSTEM_PROMPT = r"""你是一个 ASR 数学文本转 LaTeX 的助�
 函数$f(x)=a^{x-2}+2,\quad a>0$
 
 示例 7：
-输入：不等式 \\( ax^2 + bx + 2 > 0 \\) 的解集是 \\(-\\frac{2}{3}\\) 到 \\(\\frac{1}{2}\\) 的开区间，则 \\(a + b\\) 的值为多少？
-输出：
-不等式$ax^2 + bx + 2 > 0$的解集是$-\frac{2}{3}<x<\frac{1}{2}$，则$a+b$的值为多少？
-
-示例 8：
-输入：已知函数 \\( f(x) = c \\cdot x^3 + 4 \\)，其中 \\( c > 2 \\) 且 \\( c \\neq 1 \\)
-输出：
-已知函数$f(x)=c x^3+4$（$c>2$ 且 $c\neq 1$）
-
-示例 9：
 对任意的x属于零到正无穷的开区间
 输出：
 若对任意的 $x\in (0, + \infty)$
 
-示例 10：
+示例 8：
 多选题：已知b大于零，对任意的x属于零到正无穷的开区间，
 输出：
 (多选题)已知$b>0$，若对任意的 $x\in (0, + \infty)$，
