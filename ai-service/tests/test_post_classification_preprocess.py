@@ -156,3 +156,40 @@ async def test_post_classification_preprocess_noop_when_unchanged(monkeypatch, n
     assert new_state["asr_latex_converted"] is False
     assert new_state["query_preprocessed"] is False
     assert new_state["user_query"] == original_query
+
+
+@pytest.mark.asyncio
+async def test_post_classification_preprocess_normalizes_latex_dollar_spaces(monkeypatch, nodes):
+    """word_to_latex 偶发输出 `$ C $` 这类定界符内侧带空格的公式，节点应兜底规范化。
+
+    前端要求行内公式必须是 `$xxxx$`，不接受 `$ xxxx $`。
+    """
+
+    async def fake_word_to_latex(query):
+        return (
+            r"已知椭圆 $ C: \frac{x^{2}}{a^{2}} + \frac{y^{2}}{b^{2}} = 1 $"
+            r"（其中 $ a > b > 0 $），且过点 $ A(2,1) $。"
+        )
+
+    monkeypatch.setattr(WORD_TO_LATEX_PATH, fake_word_to_latex)
+
+    state = {
+        "user_query": "已知椭圆 C...",
+        "classification_label": "math_problem",
+        "is_math_problem": True,
+        "answer_mode": AnswerMode.MATH_LLM.value,
+    }
+
+    result = await nodes.post_classification_preprocess(state)
+
+    user_query = result["user_query"]
+    # 不允许出现定界符内侧带空格的形式
+    assert "$ C" not in user_query
+    assert "C $" not in user_query
+    assert "$ C:" not in user_query
+    # 必须规范化为紧贴定界符的形式
+    assert "$C:" in user_query
+    assert "$a > b > 0$" in user_query
+    assert "$A(2,1)$" in user_query
+    # 转换信号字段应正常写入
+    assert result["asr_latex_converted"] is True

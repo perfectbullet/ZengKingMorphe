@@ -40,13 +40,14 @@ _normalize_latex_delimiters = normalize_latex_delimiters
 
 def clean_latex_formula_spaces(text: str) -> str:
     """
-    移除 LaTeX 公式定界符内侧的空格。
+    移除 LaTeX 公式定界符内侧的 whitespace。
 
     处理规则：
-    - `$ text $` → `$text$`
-    - `$$ text $$` → `$$text$$`
-    - 仅移除紧邻定界符的空格，保留公式内部空格
-    - 保留外部空格（如 "formula $x^2$ and"）
+    - 行内公式 `$ text $` → `$text$`：清除所有 whitespace（含 \\n / \\t / 全角空格）
+    - 块级公式 `$$ text $$` → `$$text$$`：仅清除普通空格，保留 \\n / \\t
+      （`$$\\n...\\n$$` 是合法且常见的多行格式，不应被破坏）
+    - 仅移除紧邻定界符内侧的 whitespace，保留公式内部正常空格
+    - 保留公式外部空格（如 "formula $x^2$ and"）
 
     Examples:
         >>> clean_latex_formula_spaces("$ S_n = a_1 \\cdot q^{n-1} $")
@@ -84,7 +85,7 @@ def clean_latex_formula_spaces(text: str) -> str:
                 result.append('$$')
                 just_entered_formula = True
             elif formula_delimiter == '$$':
-                # 退出公式前，移除尾部空格
+                # 块级公式退出前：仅移除尾部普通空格；保留 \n / \t（合法多行格式）
                 while result and result[-1] == ' ':
                     result.pop()
                 in_formula = False
@@ -103,8 +104,8 @@ def clean_latex_formula_spaces(text: str) -> str:
                 result.append('$')
                 just_entered_formula = True
             elif formula_delimiter == '$':
-                # 退出公式前，移除尾部空格
-                while result and result[-1] == ' ':
+                # 行内公式退出前：移除尾部所有 whitespace（ASR 产物需彻底清理）
+                while result and result[-1].isspace():
                     result.pop()
                 in_formula = False
                 formula_delimiter = None
@@ -113,11 +114,16 @@ def clean_latex_formula_spaces(text: str) -> str:
             i += 1
             continue
 
-        # 刚进入公式时跳过前导空格
-        if in_formula and just_entered_formula and text[i] == ' ':
-            i += 1
-            while i < len(text) and text[i] == ' ':
-                i += 1
+        # 刚进入公式时跳过前导 whitespace：
+        # - 行内 $...$：跳过所有 whitespace（ASR 产物需彻底清理）
+        # - 块级 $$...$$：仅跳过普通空格，保留 \n / \t（合法的多行格式）
+        if in_formula and just_entered_formula and text[i].isspace():
+            if formula_delimiter == '$$':
+                while i < len(text) and text[i] == ' ':
+                    i += 1
+            else:
+                while i < len(text) and text[i].isspace():
+                    i += 1
             just_entered_formula = False
             continue
 

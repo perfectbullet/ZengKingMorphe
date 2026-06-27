@@ -86,6 +86,7 @@ from app.services.wall_clock_authority import (
     skip_web_use_authoritative_beijing_wall_clock,
 )
 from app.utils.common import has_language_drift
+from app.utils.latex import normalize_latex_formulas
 
 logger = get_logger(__name__)
 
@@ -949,11 +950,20 @@ class ConversationNodes:
 
             if not converted or not converted.strip():
                 logger.info(
-                    f"ASR→LaTeX skipped after classification | empty converted result | query={query}"
+                    f"ASR→LaTeX skipped after classification | empty converted result | query={query[:200]!r}"
                 )
                 return state
 
-            converted = converted.strip()
+            # word_to_latex 偶发输出 `$ C $` 这类定界符内侧带空格的行内公式，
+            # 这里统一用 normalize_latex_formulas 兜底清理（内部已调用
+            # clean_latex_formula_spaces，故此处不再单独调用，避免重复处理）。
+            converted = normalize_latex_formulas(converted.strip())
+
+            if not converted:
+                logger.info(
+                    f"ASR→LaTeX skipped after classification | empty normalized result | query={query[:200]!r}"
+                )
+                return state
 
             if converted == query:
                 logger.info(
