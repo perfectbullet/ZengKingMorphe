@@ -1,0 +1,52 @@
+services:
+  qwen3-32b-awq:
+    image: vllm/vllm-openai:v0.19.0
+    container_name: qwen3-32b-awq
+    restart: unless-stopped
+
+    ports:
+      - "8200:8200"
+
+    volumes:
+      - /data/metahuman_work/models:/models:ro
+      - ~/.cache/huggingface:/root/.cache/huggingface
+
+    environment:
+      NVIDIA_VISIBLE_DEVICES: "0,1"
+      CUDA_VISIBLE_DEVICES: "0,1"
+      NCCL_DEBUG: "WARN"
+      NCCL_IB_DISABLE: "1"
+
+    gpus: all
+    ipc: host
+
+    command:
+      - /models/Qwen3-32B-AWQ
+
+      - --served-model-name
+      - Qwen3-32B-AWQ
+
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8200"
+
+      - --tensor-parallel-size
+      - "2"
+
+      - --dtype
+      - half
+
+      - --gpu-memory-utilization
+      - "0.90"
+
+      - --max-model-len
+      - "32768"
+
+      - --max-num-seqs
+      - "8"
+
+      - --max-num-batched-tokens
+      - "8192"
+
+      - --enable-prefix-caching

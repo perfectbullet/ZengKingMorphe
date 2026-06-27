@@ -14,20 +14,14 @@ What it measures:
 - Per-request JSONL and summary CSV
 
 Example:
-  python bench_vllm_openai.py \
-    --base-url http://192.168.100.230:8200/v1 \
-    --model Qwen3-32B \
-    --concurrency 1 \
-    --requests 10 \
-    --max-tokens 512
 
 Concurrent test:
-  python bench_vllm_openai.py \
-    --base-url http://192.168.100.203:8200/v1 \
-    --model Qwen3-32B \
-    --concurrency 4 \
-    --requests 40 \
-    --max-tokens 16384
+python bench_vllm_openai.py \
+--base-url http://192.168.100.201:8200/v1 \
+--model Qwen3-32B-AWQ \
+--concurrency 4 \
+--requests 40 \
+--max-tokens 30720
 """
 
 from __future__ import annotations
@@ -50,11 +44,7 @@ from typing import Any, Optional
 from openai import AsyncOpenAI
 
 
-DEFAULT_PROMPT = r"""已知椭圆$C: \frac{x^{2}}{a^{2}} + \frac{y^{2}}{b^{2}} = 1$，其中$a > b > 0$，它的离心率是$\frac{\sqrt{2}}{2}$，并且过点$A(2, 1)$。
-
-(1)求$C$的方程。
-
-(2)点$M$、$N$在$C$上，且$AM$垂直于$AN$，$AD$垂直于$MN$，$D$为垂足，证明存在定点$Q$使得$DQ$为定值。"""
+DEFAULT_PROMPT = r"""求解不等式$x^{2}-5x+6<0$的解。"""
 
 
 @dataclass
