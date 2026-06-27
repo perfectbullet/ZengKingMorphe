@@ -4,7 +4,7 @@ LaTeX 公式处理工具集。
 提供 LaTeX 公式的规范化、清理和转义功能。
 """
 import re
-from typing import List, Optional
+from typing import Optional
 
 def normalize_latex_delimiters(text: str) -> str:
     r"""
@@ -130,76 +130,6 @@ def clean_latex_formula_spaces(text: str) -> str:
         just_entered_formula = False
         result.append(text[i])
         i += 1
-
-    return ''.join(result)
-
-def escape_latex_backslashes(text: str) -> str:
-    """
-    在 LaTeX 公式内部将单反斜杠转义为双反斜杠。
-
-    仅处理 $...$ 或 $$...$$ 定界符内的内容。
-
-    Examples:
-        >>> escape_latex_backslashes("$S_n = a_1 \\frac{1-q^n}{1-q}$")
-        '$S_n = a_1 \\\\frac{1-q^n}{1-q}$'
-        >>> escape_latex_backslashes("公式 $x^2$ 和 $$y+z$$")
-        '公式 $x^2$ 和 $$y+z$$'
-
-    Args:
-        text: 包含 LaTeX 公式的文本
-
-    Returns:
-        公式内反斜杠已转义的文本
-    """
-    result: List[str] = []
-    i = 0
-    in_formula = False
-    formula_delimiter: Optional[str] = None
-
-    while i < len(text):
-        # 跳过转义的美元符号 \$
-        if i < len(text) - 1 and text[i] == '\\' and text[i + 1] == '$':
-            result.append('\\$')
-            i += 2
-            continue
-
-        # 处理 $$ 定界符
-        if text[i:i+2] == '$$':
-            if not in_formula:
-                in_formula = True
-                formula_delimiter = '$$'
-                result.append('$$')
-            elif formula_delimiter == '$$':
-                in_formula = False
-                formula_delimiter = None
-                result.append('$$')
-            i += 2
-            continue
-
-        # 处理 $ 定界符
-        if text[i] == '$':
-            if not in_formula:
-                in_formula = True
-                formula_delimiter = '$'
-                result.append('$')
-            elif formula_delimiter == '$':
-                in_formula = False
-                formula_delimiter = None
-                result.append('$')
-            i += 1
-            continue
-
-        # 在公式内部转义反斜杠
-        if in_formula and text[i] == '\\':
-            if i + 1 < len(text) and text[i + 1] == '\\':
-                result.append('\\\\')
-                i += 2
-            else:
-                result.append('\\\\')
-                i += 1
-        else:
-            result.append(text[i])
-            i += 1
 
     return ''.join(result)
 
