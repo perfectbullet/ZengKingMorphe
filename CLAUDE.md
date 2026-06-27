@@ -42,7 +42,7 @@ docker-compose up -d elasticsearch chroma
 ## Critical Constraints (MUST follow)
 
 - **Python**: ALL commands use conda env `morphe` (`/home/zj/miniconda3/envs/morphe/bin/python`)
-- **Logging**: MUST use f-string + Loguru for every `logger.*(...)` call. DO NOT use logger parameter interpolation such as `logger.info("x=%s", x)`, `logger.info("x={}", x)`, or keyword interpolation. Always write `logger.info(f"x={x}")`. Preserve `exc_info=True` for error logs. Preserve truncation for user queries / long content. This rule is mandatory and must not be weakened or removed.
+- **Logging**: MUST use f-string + Loguru for every `logger.*(...)` call. DO NOT use logger parameter interpolation such as `logger.info("x=%s", x)`, `logger.info("x={}", x)`, or keyword interpolation. Always write `logger.info(f"x={x}")`. Preserve `exc_info=True` for error logs. This rule is mandatory and must not be weakened or removed.
 - **Config**: New external service configs use `os.getenv()` in the service file directly, NOT in `config.py` Settings. Keep `config.py` for core services only.
 - **Streaming**: Only streaming responses exist. No non-streaming chat endpoint.
 - **Env files**: `.env-local` (local dev, gitignored) / `.env` (Docker/prod)
@@ -57,15 +57,15 @@ All Python logger calls in this repository MUST use f-strings. This is a hard ru
 Allowed:
 
 ````python
-logger.info(f"query_changed={query_changed} | query={query[:200]!r}")
+logger.info(f"query_changed={query_changed} | query={query!r}")
 logger.error(f"failed | error={e}", exc_info=True)
-logger.exception(f"failed | query={query[:200]!r}")
+logger.exception(f"failed | query={query!r}")
 ````
 
 Forbidden:
 
 ````python
-logger.info("query_changed=%s | query=%r", query_changed, query[:200])
+logger.info("query_changed=%s | query=%r", query_changed, query)
 logger.info("value={}", value)
 logger.info("value={value}", value=value)
 ````
@@ -75,7 +75,6 @@ When converting a parameterized call:
 - `logger.info("x=%s", x)` → `logger.info(f"x={x}")`
 - `logger.info("x=%r", x)` → `logger.info(f"x={x!r}")` (keep `!r` semantics)
 - Preserve `exc_info=True` on `error` / `warning` / `exception` calls.
-- Preserve existing truncation (e.g. `query[:200]`, `content[:500]`); do not log full user queries / long content.
 
 Do not weaken, remove, or bypass this rule in future changes.
 
