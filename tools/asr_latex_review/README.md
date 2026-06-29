@@ -1,6 +1,6 @@
 # ASR -> LaTeX 人工标注工具
 
-这是一个独立的本地 FastAPI 工具，用于逐条查看和修订 ASR 转 LaTeX 的 JSONL 数据。页面展示 `before`、`after` 和 KaTeX 渲染预览，并可将记录标记为未判断、`correct` 或 `incorrect`。
+这是一个独立的本地 FastAPI 工具，用于逐条查看和修订 ASR 转 LaTeX 的 JSONL 数据。页面展示 `before`、`after` 和 KaTeX 渲染预览，并可将记录标记为未判断、`correct`、`incorrect` 或 `before_incomplete`。
 
 ## 启动
 
@@ -23,7 +23,8 @@ python tools/asr_latex_review/app.py \
 
 - `null`：未判断，也是缺少该字段时的默认值；
 - `correct`：转换正确；
-- `incorrect`：转换错误。
+- `incorrect`：转换错误；
+- `before_incomplete`：`before` 内容不完整。
 
 ## 保存和备份
 

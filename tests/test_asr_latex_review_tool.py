@@ -122,6 +122,15 @@ def test_api_updates_normalizes_and_preserves_id(tmp_path: Path) -> None:
             assert loaded.status_code == 200
             assert loaded.json()["records"][0]["id"] == "OLD-ID"
 
+            write_jsonl(
+                path,
+                [{"id": "EXTERNAL-ID", "before": "外部更新", "after": "转换"}],
+            )
+            reloaded = await client.get("/api/records?status=all")
+            assert reloaded.status_code == 200
+            assert reloaded.json()["records"][0]["id"] == "EXTERNAL-ID"
+            assert reloaded.json()["records"][0]["before"] == "外部更新"
+
             updated = await client.post(
                 "/api/records/0",
                 json={
@@ -147,6 +156,25 @@ def test_api_updates_normalizes_and_preserves_id(tmp_path: Path) -> None:
             assert cleared.status_code == 200
             assert cleared.json()["record"]["id"] is None
 
+            marked_incomplete = await client.post(
+                "/api/records/0",
+                json={
+                    "after": "再次转换",
+                    "review_status": "before_incomplete",
+                },
+            )
+            assert marked_incomplete.status_code == 200
+            assert (
+                marked_incomplete.json()["record"]["review_status"]
+                == "before_incomplete"
+            )
+
+            incomplete_records = await client.get(
+                "/api/records?status=before_incomplete"
+            )
+            assert incomplete_records.status_code == 200
+            assert len(incomplete_records.json()["records"]) == 1
+
     asyncio.run(exercise_api())
 
     saved_record = json.loads(path.read_text(encoding="utf-8"))
@@ -159,12 +187,16 @@ def test_filter_records_supports_all_statuses() -> None:
         {"review_status": None, "value": 1},
         {"review_status": "correct", "value": 2},
         {"review_status": "incorrect", "value": 3},
+        {"review_status": "before_incomplete", "value": 4},
     ]
 
     assert filter_records(records, "all") == records
     assert [record["value"] for record in filter_records(records, "unreviewed")] == [1]
     assert [record["value"] for record in filter_records(records, "correct")] == [2]
     assert [record["value"] for record in filter_records(records, "incorrect")] == [3]
+    assert [
+        record["value"] for record in filter_records(records, "before_incomplete")
+    ] == [4]
 
     with pytest.raises(ValueError, match="不支持的过滤状态"):
         filter_records(records, "invalid")
@@ -176,11 +208,13 @@ def test_build_stats() -> None:
         {"review_status": "correct"},
         {"review_status": "correct"},
         {"review_status": "incorrect"},
+        {"review_status": "before_incomplete"},
     ]
 
     assert build_stats(records) == {
-        "total": 4,
+        "total": 5,
         "unreviewed": 1,
         "correct": 2,
         "incorrect": 1,
+        "before_incomplete": 1,
     }

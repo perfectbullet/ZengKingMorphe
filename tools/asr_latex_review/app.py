@@ -19,8 +19,14 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 
-REVIEW_STATUSES = {None, "correct", "incorrect"}
-FILTER_STATUSES = {"all", "unreviewed", "correct", "incorrect"}
+REVIEW_STATUSES = {None, "correct", "incorrect", "before_incomplete"}
+FILTER_STATUSES = {
+    "all",
+    "unreviewed",
+    "correct",
+    "incorrect",
+    "before_incomplete",
+}
 
 
 def load_records(jsonl_path: Path) -> list[dict]:
@@ -101,15 +107,20 @@ def save_records_atomic(jsonl_path: Path, records: list[dict]) -> None:
 
 def build_stats(records: list[dict]) -> dict:
     """Build review counters for the complete data set."""
+    unreviewed = sum(record.get("review_status") is None for record in records)
     correct = sum(record.get("review_status") == "correct" for record in records)
     incorrect = sum(
         record.get("review_status") == "incorrect" for record in records
     )
+    before_incomplete = sum(
+        record.get("review_status") == "before_incomplete" for record in records
+    )
     return {
         "total": len(records),
-        "unreviewed": len(records) - correct - incorrect,
+        "unreviewed": unreviewed,
         "correct": correct,
         "incorrect": incorrect,
+        "before_incomplete": before_incomplete,
     }
 
 
@@ -174,6 +185,7 @@ def _page_html(jsonl_path: Path) -> str:
     .status-badge.unreviewed {{ color: #435661; border-color: #c6d2d8; background: #edf2f4; }}
     .status-badge.correct {{ color: #176b4d; border-color: #a9d5c2; background: #e7f5ee; }}
     .status-badge.incorrect {{ color: #a93226; border-color: #e3b5b0; background: #faecea; }}
+    .status-badge.before-incomplete {{ color: #8a5a12; border-color: #e3c58d; background: #fff5df; }}
     .empty-list {{ padding: 24px 12px; text-align: center; color: #71818a; font-size: 13px; }}
     .main-panel {{ flex: 1; min-width: 0; overflow-y: auto; padding: 18px 22px 30px; }}
     .detail-header {{ display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 14px; }}
@@ -181,10 +193,11 @@ def _page_html(jsonl_path: Path) -> str:
     .meta-badge {{ color: #344952; border-color: #cbd7dc; background: white; }}
     .meta-badge.status-correct {{ color: #176b4d; border-color: #a9d5c2; background: #e7f5ee; }}
     .meta-badge.status-incorrect {{ color: #a93226; border-color: #e3b5b0; background: #faecea; }}
+    .meta-badge.status-before-incomplete {{ color: #8a5a12; border-color: #e3c58d; background: #fff5df; }}
     .position {{ color: #52636d; font-size: 13px; font-variant-numeric: tabular-nums; }}
-    .id-editor {{ display: grid; grid-template-columns: auto minmax(180px, 420px); align-items: center; gap: 10px; margin-bottom: 14px; }}
-    .id-editor label {{ color: #344952; font-size: 13px; font-weight: 700; }}
-    .id-editor input {{ width: 100%; min-height: 38px; padding: 7px 10px; border: 1px solid #9aa8b0; border-radius: 6px; font: inherit; }}
+    .id-editor {{ display: inline-flex; align-items: center; gap: 10px; width: auto; max-width: 100%; margin: 0 0 14px; padding: 10px 12px; border: 1px solid #ced7dc; border-radius: 8px; background: white; }}
+    .id-editor label {{ flex: 0 0 auto; color: #344952; font-size: 13px; font-weight: 700; }}
+    .id-editor input {{ width: 360px; max-width: calc(100vw - 520px); min-height: 36px; padding: 7px 10px; border: 1px solid #9aa8b0; border-radius: 6px; font: inherit; }}
     .id-editor input:focus, textarea:focus {{ border-color: #28789b; outline: 2px solid #d9edf5; }}
     .workspace {{ display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }}
     section {{ min-width: 0; padding: 16px; border: 1px solid #ced7dc; border-radius: 8px; background: white; }}
@@ -196,7 +209,7 @@ def _page_html(jsonl_path: Path) -> str:
     #message {{ min-height: 24px; margin: 10px 0 0; color: #176b4d; }}
     #message.error {{ color: #a93226; }}
     @media (max-width: 900px) {{ .sidebar {{ flex-basis: 320px; }} .workspace {{ grid-template-columns: 1fr; }} section.full {{ grid-column: auto; }} }}
-    @media (max-width: 680px) {{ body {{ overflow: auto; }} .app-layout {{ display: block; }} .sidebar {{ width: 100%; height: 45vh; border-right: 0; border-bottom: 1px solid #c9d2d8; }} .main-panel {{ overflow: visible; padding: 14px; }} }}
+    @media (max-width: 680px) {{ body {{ overflow: auto; }} .app-layout {{ display: block; }} .sidebar {{ width: 100%; height: 45vh; border-right: 0; border-bottom: 1px solid #c9d2d8; }} .main-panel {{ overflow: visible; padding: 14px; }} .id-editor {{ display: flex; width: 100%; }} .id-editor input {{ flex: 1; width: auto; max-width: none; }} }}
   </style>
 </head>
 <body>
@@ -207,10 +220,12 @@ def _page_html(jsonl_path: Path) -> str:
         <div class="stats">
           <span>total: <b id="total">0</b></span><span>unreviewed: <b id="unreviewed">0</b></span>
           <span>correct: <b id="correct">0</b></span><span>incorrect: <b id="incorrect">0</b></span>
+          <span>before 不完整: <b id="before_incomplete">0</b></span>
         </div>
         <div id="filters" class="filters">
           <button data-filter="all" class="active">全部</button><button data-filter="unreviewed">未判断</button>
           <button data-filter="correct">correct</button><button data-filter="incorrect">incorrect</button>
+          <button data-filter="before_incomplete">before 不完整</button>
         </div>
       </div>
       <div id="record-list" class="record-list"></div>
@@ -239,7 +254,9 @@ def _page_html(jsonl_path: Path) -> str:
         <div class="actions"><button id="previous">上一条</button><button id="next">下一条</button></div>
         <div class="status-actions">
           <button data-status="">未判断</button><button data-status="correct">correct</button>
-          <button data-status="incorrect">incorrect</button><button id="save" class="primary">保存</button>
+          <button data-status="incorrect">incorrect</button>
+          <button data-status="before_incomplete">before 不完整</button>
+          <button id="save" class="primary">保存</button>
         </div>
       </div>
       <p id="message"></p>
@@ -249,8 +266,8 @@ def _page_html(jsonl_path: Path) -> str:
     const state = {{ records: [], stats: {{}}, currentPosition: 0, filter: "all" }};
     const $ = (id) => document.getElementById(id);
 
-    function statusLabel(value) {{ return value === null ? "未判断" : value; }}
-    function statusClass(value) {{ return value === "correct" ? "correct" : value === "incorrect" ? "incorrect" : "unreviewed"; }}
+    function statusLabel(value) {{ return value === null ? "未判断" : value === "before_incomplete" ? "before 不完整" : value; }}
+    function statusClass(value) {{ return value === "correct" ? "correct" : value === "incorrect" ? "incorrect" : value === "before_incomplete" ? "before-incomplete" : "unreviewed"; }}
     function idLabel(value) {{ return typeof value === "string" && value.trim() ? value : "未设置"; }}
     function current() {{ return state.records[state.currentPosition] || null; }}
     function setMessage(text, isError = false) {{ $("message").textContent = text; $("message").classList.toggle("error", isError); }}
@@ -274,7 +291,7 @@ def _page_html(jsonl_path: Path) -> str:
         }});
       }}
     }}
-    function renderStats() {{ ["total", "unreviewed", "correct", "incorrect"].forEach(k => $(k).textContent = state.stats[k] ?? 0); }}
+    function renderStats() {{ ["total", "unreviewed", "correct", "incorrect", "before_incomplete"].forEach(k => $(k).textContent = state.stats[k] ?? 0); }}
     function renderSidebar() {{
       const list = $("record-list");
       list.replaceChildren();
@@ -378,16 +395,23 @@ def create_app(jsonl_path: Path) -> FastAPI:
         status: str = Query(default="all"),
     ) -> dict[str, Any]:
         try:
-            indexed_records = [
-                {**record, "index": index}
-                for index, record in enumerate(app.state.records)
-            ]
+            with app.state.save_lock:
+                app.state.records = load_records(app.state.jsonl_path)
+                indexed_records = [
+                    {**record, "index": index}
+                    for index, record in enumerate(app.state.records)
+                ]
+                stats = build_stats(app.state.records)
+            indexed_records.sort(
+                key=lambda record: str(record.get("time") or ""),
+                reverse=True,
+            )
             visible_records = filter_records(indexed_records, status)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {
             "records": visible_records,
-            "stats": build_stats(app.state.records),
+            "stats": stats,
         }
 
     @app.post("/api/records/{index}")
