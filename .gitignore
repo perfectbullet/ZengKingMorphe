@@ -122,3 +122,4 @@ asr_to_latex_after_20260622_012245.jsonl
 vllm-3090-deployment/bench_results/*
 vllm-3090-deployment/qwen3_openai_sdk_test_outputs/*
 tools/asr_latex_review/*.bak
+tools/asr_latex_review/asr_to_latex_after_20260629.jsonl

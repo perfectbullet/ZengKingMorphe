@@ -331,7 +331,7 @@ async def word_to_latex(text: str) -> str:
                 {"role": "system", "content": WORD_TO_LATEX_SYSTEM_PROMPT},
                 {
                     "role": "user",
-                    "content": f"请转换下面的文本，并只返回转换后的完整文本：\n\n输入：{query}",
+                    "content": query,
                 },
             ],
             temperature=0.7,

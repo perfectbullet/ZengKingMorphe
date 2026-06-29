@@ -940,13 +940,18 @@ class ConversationNodes:
                 logger.info("ASR→LaTeX skipped after classification | empty query")
                 return state
 
+            word_to_latex_started_at = time.perf_counter()
             try:
                 converted = await word_to_latex(query)
             except Exception:
+                duration = time.perf_counter() - word_to_latex_started_at
                 logger.exception(
-                    f"ASR→LaTeX failed after classification, keep original query | query={query[:200]!r}"
+                    f"ASR→LaTeX failed after classification, keep original query | "
+                    f"duration={duration:.3f}s | query={query[:200]!r}"
                 )
                 return state
+
+            duration = time.perf_counter() - word_to_latex_started_at
 
             if not converted or not converted.strip():
                 logger.info(
@@ -972,7 +977,7 @@ class ConversationNodes:
                 return state
 
             logger.info(
-                f"ASR→LaTeX after classification: before={query}, after={converted}"
+                f"ASR→LaTeX after classification: before={query}, after={converted}, duration={duration:.3f}s"
             )
 
             state["user_query"] = converted
