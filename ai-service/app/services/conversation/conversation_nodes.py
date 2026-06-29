@@ -17,8 +17,11 @@ LangGraph 对话工作流节点实现。
 
 import asyncio
 import hashlib
+import json
+import os
 import time
 from datetime import datetime
+from pathlib import Path
 import re
 
 import httpx
@@ -89,6 +92,38 @@ from app.utils.common import has_language_drift
 from app.utils.latex import normalize_latex_formulas
 
 logger = get_logger(__name__)
+
+ASR_LATEX_REVIEW_JSONL_PATH = (
+    Path(__file__).resolve().parents[4]
+    / "tools"
+    / "asr_latex_review"
+    / "asr_to_latex_after_20260629.jsonl"
+)
+
+
+def _append_asr_latex_review_record(
+    before: str,
+    after: str,
+    duration: float,
+) -> None:
+    record = {
+        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "type": "ASR→LaTeX after classification",
+        "duration": f"{duration:.3f}s",
+        "before": before,
+        "after": after,
+    }
+    line = (json.dumps(record, ensure_ascii=False) + "\n").encode("utf-8")
+    ASR_LATEX_REVIEW_JSONL_PATH.parent.mkdir(parents=True, exist_ok=True)
+    file_descriptor = os.open(
+        ASR_LATEX_REVIEW_JSONL_PATH,
+        os.O_APPEND | os.O_CREAT | os.O_WRONLY,
+        0o644,
+    )
+    try:
+        os.write(file_descriptor, line)
+    finally:
+        os.close(file_descriptor)
 
 # 启发式联网补位：不覆盖问候、噪声、数学题；也不重复覆盖已是实时的分支
 _REALTIME_HEURISTIC_SKIP_LABELS = frozenset(
@@ -979,6 +1014,10 @@ class ConversationNodes:
             logger.info(
                 f"ASR→LaTeX after classification: before={query}, after={converted}, duration={duration:.3f}s"
             )
+            try:
+                _append_asr_latex_review_record(query, converted, duration)
+            except Exception:
+                logger.exception("Failed to append ASR→LaTeX review record")
 
             state["user_query"] = converted
             state["asr_latex_converted"] = True
