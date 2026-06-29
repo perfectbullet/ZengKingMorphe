@@ -52,6 +52,8 @@ class RequestResult:
     request_id: int
     ok: bool
     error: str
+    query: str
+    output: str
 
     concurrency: int
     model: str
@@ -136,6 +138,7 @@ async def one_stream_request(
         end = start
 
         output_chars = 0
+        output_parts: list[str] = []
         chunks = 0
         usage: Optional[Any] = None
 
@@ -169,6 +172,7 @@ async def one_stream_request(
 
                 chunks += 1
                 output_chars += len(content)
+                output_parts.append(content)
 
                 if args.print_output and request_id == 0:
                     print(content, end="", flush=True)
@@ -203,6 +207,8 @@ async def one_stream_request(
                 request_id=request_id,
                 ok=True,
                 error="",
+                query=prompt,
+                output="".join(output_parts),
                 concurrency=args.concurrency,
                 model=args.model,
                 stream=True,
@@ -227,6 +233,8 @@ async def one_stream_request(
                 request_id=request_id,
                 ok=False,
                 error=f"{type(exc).__name__}: {exc}",
+                query=prompt,
+                output="".join(output_parts),
                 concurrency=args.concurrency,
                 model=args.model,
                 stream=True,
@@ -257,6 +265,7 @@ async def one_non_stream_request(
     async with semaphore:
         start = time.perf_counter()
         output_chars = 0
+        content = ""
 
         try:
             resp = await client.chat.completions.create(
@@ -297,6 +306,8 @@ async def one_non_stream_request(
                 request_id=request_id,
                 ok=True,
                 error="",
+                query=prompt,
+                output=content,
                 concurrency=args.concurrency,
                 model=args.model,
                 stream=False,
@@ -321,6 +332,8 @@ async def one_non_stream_request(
                 request_id=request_id,
                 ok=False,
                 error=f"{type(exc).__name__}: {exc}",
+                query=prompt,
+                output=content,
                 concurrency=args.concurrency,
                 model=args.model,
                 stream=False,

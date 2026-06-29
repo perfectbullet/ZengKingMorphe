@@ -35,18 +35,15 @@ services:
       - "2"
 
       - --dtype
-      - half
+      - auto
 
       - --gpu-memory-utilization
       - "0.90"
 
       - --max-model-len
-      - "32768"
+      - "40960"
 
       - --max-num-seqs
-      - "8"
-
-      - --max-num-batched-tokens
-      - "8192"
-
-      - --enable-prefix-caching
+      - "4"
+      - --quantization
+      - awq_marlin
