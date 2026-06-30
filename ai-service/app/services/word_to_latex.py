@@ -53,6 +53,7 @@ WORD_TO_LATEX_SYSTEM_PROMPT = r"""你是一个 ASR 数学文本转 LaTeX 的助�
 6. “B的下标n”转为 `$B_n$`。
 7. 如果输入不包含需要转换的数学表达，原样返回。
 8. 如果句子开头有`多选题`字样，把`多选题`用小括号包起来
+9. 选择题选项标记不要当作数学变量处理。`A选项`、`a选项`、`选项A`、`选项a` 应统一转换为 `A. `；`B/C/D` 同理。不要输出 `$a$选项`、`$b$选项` 这类格式。
 
 输出格式：
 只返回转换后的完整文本。
@@ -97,6 +98,15 @@ WORD_TO_LATEX_SYSTEM_PROMPT = r"""你是一个 ASR 数学文本转 LaTeX 的助�
 多选题：已知b大于零，对任意的x属于零到正无穷的开区间，
 输出：
 (多选题)已知$b>0$，若对任意的 $x\in (0, + \infty)$，
+
+示例 9：
+输入：多选题：若f(x)等于x平方，则a选项f(x)为偶函数。b选项f(0)=1。c选项f(x)大于0。d选项f(x)有零点。
+输出：
+(多选题)若$f(x)=x^{2}$，则：
+A. $f(x)$为偶函数。
+B. $f(0)=1$。
+C. $f(x)>0$。
+D. $f(x)$有零点。
 """
 
 
@@ -195,7 +205,11 @@ CHOICE_CONTEXT_RE = re.compile(
 CHOICE_OPTION_MARKER_RE = re.compile(
     r"""
     (?:
+        \$\s*(?P<label_math1>[A-Da-d])\s*\$\s*选项
+        |
         (?P<label1>[A-Da-d])\s*选项
+        |
+        选项\s*\$\s*(?P<label_math2>[A-Da-d])\s*\$
         |
         选项\s*(?P<label2>[A-Da-d])
     )
@@ -213,7 +227,13 @@ def has_full_choice_option_markers(text: str) -> bool:
     labels = set()
 
     for match in CHOICE_OPTION_MARKER_RE.finditer(text):
-        label = (match.group("label1") or match.group("label2") or "").upper()
+        label = (
+            match.group("label_math1")
+            or match.group("label1")
+            or match.group("label_math2")
+            or match.group("label2")
+            or ""
+        ).upper()
         if label:
             labels.add(label)
 
@@ -264,7 +284,13 @@ def normalize_choice_option_markers(text: str) -> str:
     matched = False
 
     for match in CHOICE_OPTION_MARKER_RE.finditer(text):
-        label = (match.group("label1") or match.group("label2") or "").upper()
+        label = (
+            match.group("label_math1")
+            or match.group("label1")
+            or match.group("label_math2")
+            or match.group("label2")
+            or ""
+        ).upper()
         if not label:
             continue
 
@@ -321,7 +347,11 @@ def create_client() -> AsyncOpenAI:
 async def word_to_latex(text: str) -> str:
     if not text or not text.strip():
         return ""
-    query = text.strip()
+    # 输入侧预规范化：送入 LLM 之前先把 a选项 / b选项 / 选项A 这类口语化标记
+    # 转成 A. / B.，降低模型把 a/b/c/d 当作数学变量而输出 $a$选项 的概率。
+    # normalize_choice_option_markers 内部带 is_choice_context 判断，非选择题
+    # 语境不会改动原文。
+    query = normalize_choice_option_markers(text.strip())
 
     client = create_client()
     try:
