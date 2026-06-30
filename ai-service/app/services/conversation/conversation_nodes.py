@@ -1012,7 +1012,7 @@ class ConversationNodes:
                 return state
 
             logger.info(
-                f"ASR→LaTeX after classification: before={query}, after={converted}, duration={duration:.3f}s"
+                f"ASR→LaTeX after classification: \n\nbefore={query}, \n\nafter={converted}, \n\nduration={duration:.3f}s"
             )
             try:
                 _append_asr_latex_review_record(query, converted, duration)
