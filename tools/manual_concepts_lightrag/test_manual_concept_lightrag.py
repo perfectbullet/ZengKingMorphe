@@ -34,6 +34,15 @@ from loguru import logger
 # 项目根目录：子项目根 = 脚本所在目录（tools/manual_concepts_lightrag）
 # ---------------------------------------------------------------------------
 PROJECT_ROOT = Path(__file__).resolve().parent
+REPO_ROOT = PROJECT_ROOT.parent.parent
+DEFAULT_CONFIG_PATH = (
+    REPO_ROOT
+    / "ai-service"
+    / "data"
+    / "math_concepts"
+    / "05_selective3_math_concepts_definition_blocks_with_concept_name_20260630.jsonl"
+)
+DEFAULT_ENTITY_WHITELIST_PATH = PROJECT_ROOT / "entity_whitelist_draft.txt"
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -99,6 +108,18 @@ def load_concept_items(config_path: Path) -> list[dict]:
         raise TypeError(f"配置文件既不是 list 也不是 dict | type={type(raw).__name__}")
     logger.info(f"config={config_path} | concept_count={len(items)}")
     return items
+
+
+def load_entity_whitelist(path: Path | None) -> set[str]:
+    """读取实体白名单；跳过空行和以 # 开头的注释。"""
+    if path is None:
+        return set()
+    with path.open(encoding="utf-8") as source:
+        return {
+            line.strip()
+            for line in source
+            if line.strip() and not line.lstrip().startswith("#")
+        }
 
 
 HEADING_RE = re.compile(r"^\s*#\s+(.+?)\s*$", re.MULTILINE)
@@ -206,14 +227,6 @@ def build_embedding_func(emb: dict) -> EmbeddingFunc:
     )
 
 
-ENTITY_TYPES_GUIDANCE = (
-    "实体类型应包含：数学概念、定理、公式、变量、推导步骤，"
-    "以及 MANUAL_MATH_CONCEPT（手动导入的数学概念，其 entity_type 必须为 MANUAL_MATH_CONCEPT）。"
-    "MANUAL_MATH_CONCEPT 实体代表一篇手动导入的数学概念 Markdown 全文，"
-    "回答该概念时应优先读取对应 Markdown 原文，不得补充文档外内容。"
-)
-
-
 def build_rag(working_dir: Path, llm: dict, emb: dict) -> LightRAG:
     working_dir.mkdir(parents=True, exist_ok=True)
     rag = LightRAG(
@@ -222,7 +235,7 @@ def build_rag(working_dir: Path, llm: dict, emb: dict) -> LightRAG:
         enable_llm_cache_for_entity_extract=False,
         addon_params={
             "language": "Chinese",
-            "entity_types_guidance": ENTITY_TYPES_GUIDANCE,
+            "entity_types": ["MANUAL_MATH_CONCEPT"],
         },
         llm_model_func=build_llm_model_func(llm),
         embedding_func=build_embedding_func(emb),
@@ -233,12 +246,18 @@ def build_rag(working_dir: Path, llm: dict, emb: dict) -> LightRAG:
 # ===========================================================================
 # 映射构建
 # ===========================================================================
-def build_mappings(items: list[dict]) -> tuple[dict[str, dict], dict[str, dict]]:
+def build_mappings(
+    items: list[dict],
+    whitelist: set[str] | None = None,
+    include_non_correct: bool = False,
+) -> tuple[dict[str, dict], dict[str, dict]]:
     """返回 (file_path -> metadata, concept_name -> metadata)。"""
     mapping_by_file: dict[str, dict] = {}
     mapping_by_name: dict[str, dict] = {}
     for raw in items:
         if not isinstance(raw, dict):
+            continue
+        if raw.get("review_status") != "correct" and not include_non_correct:
             continue
         md_path_raw = raw.get("md_path")
         md_path = resolve_path(md_path_raw) if md_path_raw else None
@@ -259,6 +278,9 @@ def build_mappings(items: list[dict]) -> tuple[dict[str, dict], dict[str, dict]]
                 name = Path(md_path_raw).stem
             elif raw.get("doc_id"):
                 name = raw["doc_id"]
+
+        if whitelist is not None and name not in whitelist:
+            continue
 
         entry = {
             **raw,
@@ -352,66 +374,35 @@ def detect_hit(
     mapping_by_name: dict[str, dict],
     query: str = "",
 ) -> tuple[bool, list[str], dict | None]:
-    """返回 (是否命中, 命中原因列表, 匹配到的 concept metadata)。
-    file_path 支持按 <SEP> 拆分（LightRAG 多来源合并）；matched 优先 concept_name 出现在 query 的候选。"""
+    """仅依据映射中的手动数学概念实体判定命中。"""
     reasons: list[str] = []
     data = result.get("data") or {}
     entities = data.get("entities") or []
-    relationships = data.get("relationships") or []
-    chunks = data.get("chunks") or []
-    references = data.get("references") or []
-
     matched: dict | None = None
-    manual_candidates: list[dict] = []   # entity_type==MANUAL_MATH_CONCEPT 且 name 在 mapping
-    name_candidates: list[dict] = []     # entity_name 命中 mapping（不限类型）
+    manual_candidates: list[dict] = []
+    auxiliary_candidates: list[dict] = []
 
-    def _split_fp(fp: Any) -> list[str]:
-        # LightRAG 多来源合并会把多个 file_path 用 <SEP> 拼接，拆分后逐个匹配
-        if not (fp and isinstance(fp, str)):
-            return []
-        return [p.strip() for p in fp.split("<SEP>") if p.strip()]
-
-    # 1) 实体层面：entity_type / source_type / entity_name
     for e in entities:
         name = e.get("entity_name")
+        if not name or name not in mapping_by_name:
+            continue
         if e.get("entity_type") == "MANUAL_MATH_CONCEPT":
             reasons.append(f"entity_type==MANUAL_MATH_CONCEPT | entity_name={name}")
-            if name and name in mapping_by_name:
-                manual_candidates.append(mapping_by_name[name])
-        if e.get("source_type") == "manual_math_concept":
+            manual_candidates.append(mapping_by_name[name])
+        elif e.get("source_type") == "manual_math_concept":
             reasons.append(f"source_type==manual_math_concept | entity_name={name}")
-        if name and name in mapping_by_name:
-            reasons.append(f"entity_name 命中 concept_name mapping | name={name}")
-            name_candidates.append(mapping_by_name[name])
-
-    # 2) 任意对象的 file_path（按 <SEP> 拆分）作为命中信号
-    def _scan_fp(obj: dict, label: str) -> None:
-        for part in _split_fp(obj.get("file_path")):
-            if "manual_math_concepts/" in part:
-                reasons.append(f"{label} file_path 命中 manual_math_concepts/ | file_path={part}")
-            if part in mapping_by_file:
-                reasons.append(f"{label} file_path 命中 mapping | file_path={part}")
-
-    for e in entities:
-        _scan_fp(e, "entity")
-    for r in relationships:
-        _scan_fp(r, "relationship")
-    for c in chunks:
-        _scan_fp(c, "chunk")
-    for r in references:
-        _scan_fp(r, "reference")
+            auxiliary_candidates.append(mapping_by_name[name])
 
     # 3) 确定 matched 优先级：
     #   a) MANUAL_MATH_CONCEPT 且 concept_name 出现在 query
-    #   b) 任意候选 且 concept_name 出现在 query
+    #   b) source_type 辅助候选且 concept_name 出现在 query
     #   c) MANUAL_MATH_CONCEPT 候选首个
-    #   d) 任意 name 候选首个
-    #   e) file_path 命中 mapping 的首个（兜底）
+    #   d) source_type 辅助候选首个
     def _concept_in_query(c: dict | None) -> bool:
         cn = (c or {}).get("concept_name") or ""
         return bool(cn) and cn in query
 
-    for pool in (manual_candidates, name_candidates):
+    for pool in (manual_candidates, auxiliary_candidates):
         for c in pool:
             if _concept_in_query(c):
                 matched = c
@@ -419,20 +410,9 @@ def detect_hit(
         if matched:
             break
     if not matched:
-        for pool in (manual_candidates, name_candidates):
+        for pool in (manual_candidates, auxiliary_candidates):
             if pool:
                 matched = pool[0]
-                break
-    if not matched:
-        for objs in (entities, relationships, chunks, references):
-            for obj in objs:
-                for part in _split_fp(obj.get("file_path")):
-                    if part in mapping_by_file:
-                        matched = mapping_by_file[part]
-                        break
-                if matched:
-                    break
-            if matched:
                 break
 
     # 去重
@@ -443,7 +423,7 @@ def detect_hit(
             seen.add(r)
             deduped.append(r)
 
-    return (len(deduped) > 0), deduped, matched
+    return matched is not None, deduped, matched
 
 
 # ===========================================================================
@@ -500,7 +480,23 @@ async def run(args: argparse.Namespace) -> int:
     )
 
     items = load_concept_items(config_path)
-    mapping_by_file, mapping_by_name = build_mappings(items)
+    whitelist: set[str] | None = None
+    if args.disable_whitelist:
+        logger.warning("entity whitelist disabled by --disable-whitelist")
+    else:
+        whitelist_path = resolve_path(args.entity_whitelist)
+        if not whitelist_path.exists():
+            logger.error(f"entity whitelist 不存在 | path={whitelist_path}")
+            return 1
+        whitelist = load_entity_whitelist(whitelist_path)
+        logger.info(
+            f"entity whitelist loaded | path={whitelist_path} | count={len(whitelist)}"
+        )
+    mapping_by_file, mapping_by_name = build_mappings(
+        items,
+        whitelist=whitelist,
+        include_non_correct=args.include_non_correct,
+    )
 
     llm = resolve_llm_config()
     emb = resolve_embedding_config(llm["base_url"], llm["api_key"])
@@ -565,24 +561,26 @@ async def run(args: argparse.Namespace) -> int:
         logger.warning("未命中手动概念，可尝试 --mode hybrid / --mode mix / --mode global")
         return 0
 
-    # 严格回答：优先 md_path 文件，其次 md_content 内联（jsonl 常见）
+    # 严格回答：优先整条记录的 md_content，其次读取 md_path 文件。
     if args.answer:
+        md_content = (
+            (matched or {}).get("md_content")
+            or (matched or {}).get("content")
+            or (matched or {}).get("markdown")
+            or (matched or {}).get("text")
+        )
         md_path_raw = matched.get("md_path") if matched else None
         md_path = resolve_path(md_path_raw) if md_path_raw else None
-        if md_path and md_path.exists():
+        if md_content:
+            logger.info(
+                f"generate strict answer | source=inline_md_content | chars={len(md_content)}"
+            )
+        elif md_path and md_path.exists():
             md_content = md_path.read_text(encoding="utf-8")
             logger.info(f"generate strict answer | md_path={md_path} | chars={len(md_content)}")
         else:
-            md_content = (
-                (matched or {}).get("md_content")
-                or (matched or {}).get("content")
-                or (matched or {}).get("markdown")
-                or (matched or {}).get("text")
-            )
-            if not md_content:
-                logger.error(f"--answer 无法获取 Markdown 内容 | md_path={md_path_raw}")
-                return 1
-            logger.info(f"generate strict answer | source=inline_md_content | chars={len(md_content)}")
+            logger.error(f"--answer 无法获取 Markdown 内容 | md_path={md_path_raw}")
+            return 1
         answer = await generate_strict_answer(llm, args.query, md_content)
         print("\n===== STRICT ANSWER =====")
         print(answer)
@@ -595,7 +593,11 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="测试手动数学概念在 LightRAG 中的结构化召回与严格回答"
     )
-    p.add_argument("--config", required=True, help="math_concepts_content_list.json 路径")
+    p.add_argument(
+        "--config",
+        default=str(DEFAULT_CONFIG_PATH),
+        help="概念 JSONL/JSON 配置路径",
+    )
     p.add_argument(
         "--working-dir",
         required=True,
@@ -619,6 +621,21 @@ def parse_args() -> argparse.Namespace:
         "--answer",
         action="store_true",
         help="命中后读取整篇 Markdown，使用严格 prompt 生成回答",
+    )
+    p.add_argument(
+        "--include-non-correct",
+        action="store_true",
+        help="查询映射同时包含 review_status 不是 correct 的记录",
+    )
+    p.add_argument(
+        "--entity-whitelist",
+        default=str(DEFAULT_ENTITY_WHITELIST_PATH),
+        help="实体白名单路径",
+    )
+    p.add_argument(
+        "--disable-whitelist",
+        action="store_true",
+        help="临时关闭查询映射的白名单过滤",
     )
     p.add_argument("--dump", default=None, help="将结构化召回结果 dump 到 JSON 文件")
     p.add_argument(

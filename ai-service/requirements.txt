@@ -137,6 +137,8 @@ pydantic-settings==2.12.0
 pydantic_core==2.41.5
 pydub==0.25.1
 Pygments==2.20.0
+# lightrag-hku server (WebUI auth) 依赖 PyJWT；环境若误装同名老 jwt 包会导致 jwt.encode 缺失、/auth-status 500
+PyJWT>=2.8.0,<3.0.0
 pylatexenc==2.10
 pymilvus==2.6.11
 pymongo==4.16.0

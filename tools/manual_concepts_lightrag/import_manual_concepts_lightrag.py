@@ -2,16 +2,14 @@
 """
 import_manual_concepts_lightrag.py
 ==================================
-手动数学概念 -> LightRAG 导入脚本（最小闭环 v1）。
+手动教材数学概念 -> LightRAG 导入脚本。
 
 核心流程：
-1. 读取 --config 指定的 math_concepts_content_list.json
-2. 读取每个 md_path 对应的 Markdown 全文
-3. 初始化 LightRAG（enable_llm_cache=False, enable_llm_cache_for_entity_extract=False）
-4. 若传入 --replace，先 rag.adelete_by_doc_id(doc_id)（失败仅 WARN）
-5. rag.ainsert(input=md_content, ids=doc_id, file_paths=file_path) 插入全文
-6. rag.acreate_entity 创建 MANUAL_MATH_CONCEPT 实体；失败则回退 aedit_entity
-7. rag.finalize_storages()
+1. 读取 JSONL / JSON 配置，每条记录视为一个教材数学概念
+2. 默认仅处理 review_status=correct 且 concept_name 位于白名单的记录
+3. 插入 Markdown 全文供 chunk 检索
+4. 清理图中非白名单实体
+5. 以 concept_name 手动 upsert MANUAL_MATH_CONCEPT 实体
 
 注意：本脚本是独立验证脚本，不依赖也不修改 ai-service 业务代码（conversation_nodes.py 等）。
 """
@@ -34,6 +32,15 @@ from loguru import logger
 # 项目根目录：子项目根 = 脚本所在目录（tools/manual_concepts_lightrag）
 # ---------------------------------------------------------------------------
 PROJECT_ROOT = Path(__file__).resolve().parent
+REPO_ROOT = PROJECT_ROOT.parent.parent
+DEFAULT_CONFIG_PATH = (
+    REPO_ROOT
+    / "ai-service"
+    / "data"
+    / "math_concepts"
+    / "05_selective3_math_concepts_definition_blocks_with_concept_name_20260630.jsonl"
+)
+DEFAULT_ENTITY_WHITELIST_PATH = PROJECT_ROOT / "entity_whitelist_draft.txt"
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -108,6 +115,37 @@ def load_concept_items(config_path: Path) -> list[dict]:
 
     logger.info(f"config={config_path} | concept_count={len(items)}")
     return items
+
+
+def load_entity_whitelist(path: Path | None) -> set[str]:
+    """读取实体白名单；跳过空行和以 # 开头的注释。"""
+    if path is None:
+        return set()
+    whitelist: set[str] = set()
+    with path.open(encoding="utf-8") as source:
+        for line in source:
+            name = line.strip()
+            if not name or name.startswith("#"):
+                continue
+            whitelist.add(name)
+    return whitelist
+
+
+def write_entity_whitelist(path: Path, items: list[dict]) -> int:
+    """按配置中的 concept_name 顺序生成白名单草案。"""
+    names: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("concept_name") or item.get("name") or "").strip()
+        if name and name not in seen:
+            seen.add(name)
+            names.append(name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    content = ["# 高中数学选择性必修第三册：教材概念实体白名单草案", *names]
+    path.write_text("\n".join(content) + "\n", encoding="utf-8")
+    return len(names)
 
 
 HEADING_RE = re.compile(r"^\s*#\s+(.+?)\s*$", re.MULTILINE)
@@ -257,12 +295,16 @@ def build_embedding_func(emb: dict) -> EmbeddingFunc:
 # ---------------------------------------------------------------------------
 # LightRAG 构建
 # ---------------------------------------------------------------------------
-ENTITY_TYPES_GUIDANCE = (
-    "实体类型应包含：数学概念、定理、公式、变量、推导步骤，"
-    "以及 MANUAL_MATH_CONCEPT（手动导入的数学概念，其 entity_type 必须为 MANUAL_MATH_CONCEPT）。"
-    "MANUAL_MATH_CONCEPT 实体代表一篇手动导入的数学概念 Markdown 全文，"
-    "回答该概念时应优先读取对应 Markdown 原文，不得补充文档外内容。"
-)
+# 当前 LightRAG 版本的 extract_entities 固定读取 lightrag.prompt.PROMPTS，
+# addon_params 没有自定义抽取 prompt key。保留这份策略常量用于将来升级；当前
+# 主要约束由 entity_types、concept_name 白名单和导入后实体清理共同完成。
+STRICT_ENTITY_EXTRACTION_PROMPT = """你是教材数学概念抽取器。
+只允许抽取输入文本明确出现的教材数学概念，实体类型只能是 MANUAL_MATH_CONCEPT。
+如果已知文本对应一个 concept_name，应优先只输出该 concept_name。
+禁止抽取公式、变量、数字、符号、运算词、人名、例子对象、解题步骤和推导过程。
+禁止根据常识补充文档外概念。
+关系只允许明显的“包含、相关、推广、前置概念、应用于”；没有明确关系时不要输出。
+"""
 
 
 def build_rag(working_dir: Path, llm: dict, emb: dict) -> LightRAG:
@@ -273,12 +315,34 @@ def build_rag(working_dir: Path, llm: dict, emb: dict) -> LightRAG:
         enable_llm_cache_for_entity_extract=False,
         addon_params={
             "language": "Chinese",
-            "entity_types_guidance": ENTITY_TYPES_GUIDANCE,
+            "entity_types": ["MANUAL_MATH_CONCEPT"],
         },
         llm_model_func=build_llm_model_func(llm),
         embedding_func=build_embedding_func(emb),
     )
     return rag
+
+
+async def prune_non_whitelisted_entities(
+    rag: LightRAG,
+    whitelist: set[str],
+) -> tuple[int, int]:
+    """通过 LightRAG 公开 API 删除非白名单实体及其关系。"""
+    deleted = 0
+    failed = 0
+    for entity_name in await rag.get_graph_labels():
+        if entity_name in whitelist:
+            continue
+        result = await rag.adelete_by_entity(entity_name)
+        if getattr(result, "status", None) == "success":
+            deleted += 1
+            logger.info(f"prune entity OK | entity_name={entity_name}")
+        else:
+            failed += 1
+            logger.error(
+                f"prune entity FAILED | entity_name={entity_name} | result={result}"
+            )
+    return deleted, failed
 
 
 # ---------------------------------------------------------------------------
@@ -290,6 +354,27 @@ async def run(args: argparse.Namespace) -> int:
         logger.error(f"config 不存在 | config={config_path}")
         return 1
 
+    items = load_concept_items(config_path)
+    whitelist_path = resolve_path(args.entity_whitelist)
+    if args.generate_whitelist_only:
+        generated = write_entity_whitelist(whitelist_path, items)
+        logger.info(
+            f"whitelist generated | path={whitelist_path} | entity_count={generated}"
+        )
+        return 0
+
+    whitelist: set[str] = set()
+    if args.disable_whitelist:
+        logger.warning("entity whitelist disabled by --disable-whitelist")
+    else:
+        if not whitelist_path.exists():
+            logger.error(f"entity whitelist 不存在 | path={whitelist_path}")
+            return 1
+        whitelist = load_entity_whitelist(whitelist_path)
+        logger.info(
+            f"entity whitelist loaded | path={whitelist_path} | count={len(whitelist)}"
+        )
+
     working_dir = Path(args.working_dir).expanduser()
     if not working_dir.is_absolute():
         working_dir = PROJECT_ROOT / args.working_dir
@@ -297,8 +382,7 @@ async def run(args: argparse.Namespace) -> int:
     logger.info(f"config={config_path}")
     logger.info(f"working_dir={working_dir}")
     logger.info(f"replace={args.replace}")
-
-    items = load_concept_items(config_path)
+    logger.info(f"include_non_correct={args.include_non_correct}")
 
     llm = resolve_llm_config()
     emb = resolve_embedding_config(llm["base_url"], llm["api_key"])
@@ -312,12 +396,26 @@ async def run(args: argparse.Namespace) -> int:
     await rag.initialize_storages()
     logger.info("initialize_storages OK")
 
+    review_status_skipped = 0
+    whitelist_skipped = 0
+    imported = 0
     failures = 0
     pending_entities: list[tuple[str, dict]] = []
     try:
         for idx, raw_item in enumerate(items, 1):
             if not isinstance(raw_item, dict):
                 logger.warning(f"skip non-dict item #{idx} | type={type(raw_item).__name__}")
+                failures += 1
+                continue
+
+            review_status = raw_item.get("review_status")
+            if review_status != "correct" and not args.include_non_correct:
+                review_status_skipped += 1
+                logger.info(
+                    f"skip review_status | item={idx} | "
+                    f"concept_name={raw_item.get('concept_name')} | "
+                    f"review_status={review_status!r}"
+                )
                 continue
 
             doc_id = raw_item.get("doc_id")
@@ -326,6 +424,7 @@ async def run(args: argparse.Namespace) -> int:
                 logger.warning(
                     f"skip item #{idx} | missing doc_id | keys={list(raw_item.keys())}"
                 )
+                failures += 1
                 continue
 
             # 解析 Markdown 内容：优先 md_path 文件，其次 md_content 内联（jsonl 常见）
@@ -355,10 +454,18 @@ async def run(args: argparse.Namespace) -> int:
                 continue
 
             item = normalize_item(raw_item, md_content, md_path)
-            concept_name = item["concept_name"]
+            concept_name = str(item["concept_name"]).strip()
             file_path = item["file_path"]
             strict = item["strict"]
             aliases = item["aliases"]
+
+            if not args.disable_whitelist and concept_name not in whitelist:
+                whitelist_skipped += 1
+                logger.info(
+                    f"skip whitelist | item={idx} | doc_id={doc_id} | "
+                    f"concept_name={concept_name}"
+                )
+                continue
 
             logger.info(
                 f"[{idx}/{len(items)}] doc_id={doc_id} | concept_name={concept_name} | "
@@ -394,11 +501,13 @@ async def run(args: argparse.Namespace) -> int:
             # 判定 entity_type，覆盖我们手动设置的 MANUAL_MATH_CONCEPT。
             entity_data = {
                 "entity_type": "MANUAL_MATH_CONCEPT",
-                "description": f"手动导入的数学概念：{concept_name}。回答该概念时应优先读取对应 Markdown 原文。",
+                "description": md_content,
+                "source_id": doc_id,
                 "doc_id": doc_id,
                 "file_path": file_path,
                 "md_path": md_path_raw,
-                "source_type": "manual_math_concept",
+                "source_type": item.get("source_type") or "manual_math_concept",
+                "review_status": review_status,
                 "strict": strict,
                 "aliases": aliases,
             }
@@ -406,33 +515,52 @@ async def run(args: argparse.Namespace) -> int:
             entity_data = {k: _sanitize_entity_value(v) for k, v in entity_data.items()}
             pending_entities.append((concept_name, entity_data))
 
-        # ---------- 阶段2：所有 insert 完成后，统一创建/更新 MANUAL_MATH_CONCEPT 实体 ----------
+        if not args.disable_whitelist:
+            logger.info("stage-2 prune non-whitelisted entities")
+            pruned, prune_failures = await prune_non_whitelisted_entities(
+                rag, whitelist
+            )
+            failures += prune_failures
+            logger.info(
+                f"prune done | deleted={pruned} | failures={prune_failures}"
+            )
+
+        # ---------- 阶段3：所有 insert 完成后，统一创建/更新 MANUAL_MATH_CONCEPT 实体 ----------
         # 此时实体合并已充分发生，最终态不会被后续 insert 覆盖。
-        logger.info(f"stage-2 upsert entities | count={len(pending_entities)}")
+        logger.info(f"stage-3 upsert entities | count={len(pending_entities)}")
         for concept_name, entity_data in pending_entities:
             try:
-                await rag.acreate_entity(entity_name=concept_name, entity_data=entity_data)
-                logger.info(f"create entity OK | concept_name={concept_name}")
-            except Exception as e:
-                logger.warning(
-                    f"create entity failed, try aedit_entity | concept_name={concept_name} | "
-                    f"error_type={type(e).__name__} | error={e}"
-                )
                 try:
-                    await rag.aedit_entity(
+                    await rag.acreate_entity(
                         entity_name=concept_name,
-                        updated_data=entity_data,
-                        allow_rename=False,
-                        allow_merge=False,
+                        entity_data=entity_data,
                     )
-                    logger.info(f"edit entity OK | concept_name={concept_name}")
-                except Exception as e2:
-                    logger.error(
-                        f"edit entity FAILED | concept_name={concept_name} | "
-                        f"error_type={type(e2).__name__} | error={e2}",
-                        exc_info=True,
+                    logger.info(f"create entity OK | concept_name={concept_name}")
+                except ValueError:
+                    logger.info(
+                        f"entity already exists, update it | concept_name={concept_name}"
                     )
-                    failures += 1
+
+                # acreate_entity 仅保存标准字段；再 edit 一次，将经过 sanitize 的
+                # doc_id/source_type/review_status/strict/aliases 写入 GraphML。
+                await rag.aedit_entity(
+                    entity_name=concept_name,
+                    updated_data=entity_data,
+                    allow_rename=False,
+                    allow_merge=False,
+                )
+                imported += 1
+                logger.info(
+                    f"upsert entity OK | concept_name={concept_name} | "
+                    "entity_type=MANUAL_MATH_CONCEPT"
+                )
+            except Exception as e:
+                logger.error(
+                    f"upsert entity FAILED | concept_name={concept_name} | "
+                    f"error_type={type(e).__name__} | error={e}",
+                    exc_info=True,
+                )
+                failures += 1
     finally:
         try:
             await rag.finalize_storages()
@@ -442,7 +570,12 @@ async def run(args: argparse.Namespace) -> int:
                 f"finalize_storages WARN | error_type={type(e).__name__} | error={e}"
             )
 
-    logger.info(f"import done | total={len(items)} | failures={failures}")
+    logger.info(
+        f"import done | total={len(items)} | "
+        f"review_status_skipped={review_status_skipped} | "
+        f"whitelist_skipped={whitelist_skipped} | imported={imported} | "
+        f"failures={failures}"
+    )
     return 1 if failures else 0
 
 
@@ -450,7 +583,11 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="导入手动数学概念到 LightRAG（Markdown 全文 + MANUAL_MATH_CONCEPT 实体）"
     )
-    p.add_argument("--config", required=True, help="math_concepts_content_list.json 路径")
+    p.add_argument(
+        "--config",
+        default=str(DEFAULT_CONFIG_PATH),
+        help="概念 JSONL/JSON 配置路径",
+    )
     p.add_argument(
         "--working-dir",
         required=True,
@@ -460,6 +597,26 @@ def parse_args() -> argparse.Namespace:
         "--replace",
         action="store_true",
         help="插入前先 rag.adelete_by_doc_id(doc_id)，失败仅 WARN 不中断",
+    )
+    p.add_argument(
+        "--include-non-correct",
+        action="store_true",
+        help="同时导入 review_status 不是 correct 的记录",
+    )
+    p.add_argument(
+        "--entity-whitelist",
+        default=str(DEFAULT_ENTITY_WHITELIST_PATH),
+        help="实体白名单路径",
+    )
+    p.add_argument(
+        "--disable-whitelist",
+        action="store_true",
+        help="临时关闭 concept_name 白名单过滤和图实体清理",
+    )
+    p.add_argument(
+        "--generate-whitelist-only",
+        action="store_true",
+        help="从 --config 生成白名单后退出",
     )
     p.add_argument(
         "--env-file",

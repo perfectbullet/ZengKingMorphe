@@ -1,66 +1,72 @@
 # manual_concepts_lightrag
 
-手动数学概念 → LightRAG 导入 / 测试 / 可视化的独立子项目。
+独立的“手动教材数学概念导入 LightRAG”工具，不依赖 `ai-service` 业务模块，也不修改 LightRAG 源码。
 
-## 数据布局
+## 数据与实体
 
-```
-tools/manual_concepts_lightrag/          ← 本子项目（脚本 + .env，自包含配置）
-  ├─ import_manual_concepts_lightrag.py  导入手动概念（Markdown 全文 + MANUAL_MATH_CONCEPT 实体）
-  ├─ test_manual_concept_lightrag.py     结构化召回 + HIT/MISS 路由 + 严格回答
-  ├─ .env                                LLM / embedding / 数据路径配置
-  └─ run_*.sh                            便捷启动脚本
+默认输入：
 
-ai-service/data/lightrag_manual_concepts/   ← LightRAG 数据目录（复用，勿删）
-ai-service/data/math_concepts/*.jsonl       ← config 源文件（绝对路径引用）
+```text
+/home/zj/ZengKingMorphe/ai-service/data/math_concepts/05_selective3_math_concepts_definition_blocks_with_concept_name_20260630.jsonl
 ```
 
-存储后端：**文件后端**（`JsonKV` / `NanoVectorDB` / `NetworkX`），与现有数据一致；
-**故意不设** `LIGHTRAG_*_STORAGE`，避免走 ai-service/.env 里的 Mongo+Milvus+Neo4j。
+JSONL 每条记录本身就是一个数学概念：
 
-## 模型配置（见 .env）
+- `concept_name`：主实体名；
+- `doc_id`：文档 ID；
+- `md_content`：概念原文，同时用于 chunk 检索和实体 description；
+- `review_status`：默认只导入 `correct`，使用 `--include-non-correct` 可显式放开。
 
-- LLM：`Qwen3-32B-AWQ @ http://192.168.100.202:8200/v1`（内网无鉴权）
-- Embedding：`BAAI/bge-m3 @ http://192.168.8.233:8092/v1`，dim=1024
+每条有效记录最终 upsert 为 `MANUAL_MATH_CONCEPT` 实体，并保存 `doc_id`、`file_path`、`source_type`、`review_status`、`strict`、`aliases` 等 GraphML 安全元数据。
+
+## 严格实体范围
+
+实体白名单位于：
+
+```text
+tools/manual_concepts_lightrag/entity_whitelist_draft.txt
+```
+
+当前只保留教材数学概念，不保留公式、变量、数字、符号、运算词、人名、例子对象、解题步骤或推导过程。默认行为是：
+
+1. `entity_types=["MANUAL_MATH_CONCEPT"]` 收窄 LLM 抽取类型；
+2. 非白名单 `concept_name` 不导入；
+3. 文档插入后，使用 LightRAG 公开 API 删除图中非白名单实体；
+4. 查询只将白名单内的手动概念实体判为 HIT。
+
+当前 LightRAG 版本只从 `addon_params` 读取 `language` 和 `entity_types`，没有自定义实体抽取 prompt 或禁用实体抽取的公开配置 key。脚本保留了严格 prompt 策略常量，但不硬编码不存在的参数；白名单过滤和导入后清理是主要控制手段。原有无效的 `entity_types_guidance` 已移除。
 
 ## 使用
 
 ```bash
-# 环境
+cd /home/zj/ZengKingMorphe/tools/manual_concepts_lightrag
 conda activate morphe
 
-# 1) 导入（默认 --replace，覆盖重建）
+# 默认覆盖导入
 ./run_import.sh
-# 或自定义: CONFIG=...jsonl WORKING_DIR=... ./run_import.sh
 
-# 2) 测试召回 / 严格回答
+# 严格查询并依据对应 md_content 回答
 QUERY="请帮我讲解二项式定理" MODE=local ./run_test.sh --answer
-# local 未命中可换 MODE=hybrid / mix
-
-# 3) 可视化（需先构建 WebUI，见下方）
-./run_server.sh
-# 浏览器: http://localhost:9621
+QUERY="请帮我讲解分类加法计数原理" MODE=local ./run_test.sh --answer
 ```
 
-## WebUI 可视化（首次需构建）
-
-`lightrag-server` 的 WebUI 前端不会随 pip 包预装，首次使用需构建并部署：
+配置均可通过环境变量覆盖：
 
 ```bash
-# 构建
-cd /home/zj/RAG-Anything/thirdpart_reps/LightRAG/lightrag_webui
-bun install --frozen-lockfile
-bun run build
-# 部署到 site-packages（供已安装的 lightrag-server 读取）
-cp -r dist/* /home/zj/miniconda3/envs/morphe/lib/python3.10/site-packages/lightrag/api/webui/
+CONFIG=/path/concepts.jsonl \
+WORKING_DIR=/path/lightrag_data \
+ENTITY_WHITELIST=/path/whitelist.txt \
+./run_import.sh
 ```
 
-构建完成后 `./run_server.sh`，浏览器打开 http://localhost:9621 即可看到
-`ai-service/data/lightrag_manual_concepts` 里的知识图谱（41 个 MANUAL_MATH_CONCEPT 实体
-及 LLM 抽取的关联实体/关系）。
+临时关闭白名单可传 `--disable-whitelist`。从配置重新生成白名单：
 
-## 文件后端 vs 数据库
+```bash
+python import_manual_concepts_lightrag.py \
+  --config "$CONFIG" \
+  --working-dir "$WORKING_DIR" \
+  --entity-whitelist entity_whitelist_draft.txt \
+  --generate-whitelist-only
+```
 
-当前 41 条（衍生 ~311 实体、graph ~370KB）规模远未到数据库的必要阈值（十万级向量、
-TB 级数据、多机共享）。文件后端开箱即用、可移植（打包 working_dir 即可迁移）。
-若将来扩到上千条且需多实例共享，再拨 `LIGHTRAG_*_STORAGE` 接 Mongo+Milvus+Neo4j。
+保存会继续使用现有文件存储后端（JsonKV、NanoVectorDB、NetworkX），默认数据目录为 `/home/zj/ZengKingMorphe/ai-service/data/lightrag_manual_concepts`。
