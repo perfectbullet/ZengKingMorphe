@@ -9,8 +9,11 @@ test_manual_concept_lightrag.py
 2. 初始化同一个 working_dir 的 LightRAG
 3. rag.aquery_data(query, param=QueryParam(...)) 做结构化召回
 4. 打印 entities / relationships / chunks / references / metadata
-5. 判断是否命中手动概念（[HIT] / [MISS]）
-6. --answer：读取 concept["md_path"] 的完整 Markdown，使用严格 prompt 生成回答
+5. 判断是否命中手动概念（[HIT] / [MISS]）：只有 entity_type==MANUAL_MATH_CONCEPT
+   且 entity_name 命中 config 中 concept_name 才算强 HIT；source_type / chunk file_path
+   命中仅作辅助原因，不能单独判 HIT。
+6. --answer：优先使用 matched["md_content"]，其次才读 matched["md_path"] 文件，
+   使用严格 prompt 生成回答（确保 custom KG 模式无 md_path 也能依据 JSONL md_content 回答）
 
 注意：本脚本是独立验证脚本，不依赖也不修改 ai-service 业务代码。
 """
@@ -18,6 +21,7 @@ test_manual_concept_lightrag.py
 from __future__ import annotations
 
 import argparse
+import aiohttp
 import asyncio
 import inspect
 import json
@@ -194,6 +198,41 @@ def resolve_embedding_config(llm_base_url: str, llm_api_key: str) -> dict:
     return {"model": model, "dim": dim, "base_url": base_url, "api_key": api_key}
 
 
+def resolve_rerank_config() -> dict | None:
+    """读取 RERANK_MODEL / RERANK_BASE_URL；未配置返回 None（查询时自动跳过 rerank）。"""
+    model = _pick_env(["RERANK_MODEL"], "RERANK_MODEL", required=False)
+    base_url = _pick_env(["RERANK_BASE_URL"], "RERANK_BASE_URL", required=False)
+    if not model or not base_url:
+        return None
+    return {"model": model, "base_url": base_url.rstrip("/")}
+
+
+def build_rerank_model_func(rerank: dict | None):
+    """构造 LightRAG 期望的 rerank_model_func(query, documents, top_n) -> [{index, relevance_score}]。
+    rerank 为 None 时返回 None，LightRAG 会自动跳过 rerank。"""
+    if not rerank:
+        return None
+
+    async def _rerank_func(query: str, documents: list[str], top_n: int | None = None):
+        payload: dict = {"model": rerank["model"], "query": query, "documents": documents}
+        if top_n:
+            payload["top_n"] = top_n
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{rerank['base_url']}/v1/rerank",
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as resp:
+                resp.raise_for_status()
+                data = await resp.json()
+        return [
+            {"index": r["index"], "relevance_score": r["relevance_score"]}
+            for r in data.get("results", [])
+        ]
+
+    return _rerank_func
+
+
 def build_llm_model_func(llm: dict):
     async def _llm_model_func(
         prompt: str,
@@ -227,7 +266,7 @@ def build_embedding_func(emb: dict) -> EmbeddingFunc:
     )
 
 
-def build_rag(working_dir: Path, llm: dict, emb: dict) -> LightRAG:
+def build_rag(working_dir: Path, llm: dict, emb: dict, rerank_model_func=None) -> LightRAG:
     working_dir.mkdir(parents=True, exist_ok=True)
     rag = LightRAG(
         working_dir=str(working_dir),
@@ -239,6 +278,7 @@ def build_rag(working_dir: Path, llm: dict, emb: dict) -> LightRAG:
         },
         llm_model_func=build_llm_model_func(llm),
         embedding_func=build_embedding_func(emb),
+        rerank_model_func=rerank_model_func,
     )
     return rag
 
@@ -374,46 +414,72 @@ def detect_hit(
     mapping_by_name: dict[str, dict],
     query: str = "",
 ) -> tuple[bool, list[str], dict | None]:
-    """仅依据映射中的手动数学概念实体判定命中。"""
+    """严格命中判定：
+
+    只有 entity_type==MANUAL_MATH_CONCEPT 且 entity_name 命中 config 中 concept_name
+    的实体才算强 HIT。
+    - source_type==manual_math_concept 只能作为辅助原因，不能单独算 HIT。
+    - chunk file_path 命中只能作为辅助原因，不能单独算 HIT。
+    - 公式/变量/符号/Unknown 类型节点不算 HIT（被 entity_type 门槛过滤）。
+    """
     reasons: list[str] = []
     data = result.get("data") or {}
     entities = data.get("entities") or []
-    matched: dict | None = None
+    chunks = data.get("chunks") or []
+
     manual_candidates: list[dict] = []
-    auxiliary_candidates: list[dict] = []
+    seen_candidate_names: set[str] = set()
+    auxiliary_reason_added = False
+    chunk_reason_added = False
 
     for e in entities:
         name = e.get("entity_name")
-        if not name or name not in mapping_by_name:
+        etype = e.get("entity_type")
+        # 公式 / 变量 / 符号 / Unknown 等非概念节点一律忽略
+        if not name or etype in (None, "", "UNKNOWN"):
             continue
-        if e.get("entity_type") == "MANUAL_MATH_CONCEPT":
+        if name not in mapping_by_name:
+            continue
+        if etype == "MANUAL_MATH_CONCEPT":
             reasons.append(f"entity_type==MANUAL_MATH_CONCEPT | entity_name={name}")
-            manual_candidates.append(mapping_by_name[name])
+            if name not in seen_candidate_names:
+                seen_candidate_names.add(name)
+                manual_candidates.append(mapping_by_name[name])
         elif e.get("source_type") == "manual_math_concept":
-            reasons.append(f"source_type==manual_math_concept | entity_name={name}")
-            auxiliary_candidates.append(mapping_by_name[name])
+            # 仅作辅助原因，不计入 HIT 候选
+            if not auxiliary_reason_added:
+                reasons.append(
+                    f"source_type==manual_math_concept(auxiliary, not a HIT by itself) | entity_name={name}"
+                )
+                auxiliary_reason_added = True
 
-    # 3) 确定 matched 优先级：
-    #   a) MANUAL_MATH_CONCEPT 且 concept_name 出现在 query
-    #   b) source_type 辅助候选且 concept_name 出现在 query
-    #   c) MANUAL_MATH_CONCEPT 候选首个
-    #   d) source_type 辅助候选首个
+    # chunk file_path 命中仅作为辅助原因
+    for c in chunks:
+        fp = c.get("file_path")
+        if fp and fp in mapping_by_file:
+            if not chunk_reason_added:
+                reasons.append(
+                    f"chunk file_path==manual_math_concept(auxiliary, not a HIT by itself) | file_path={fp}"
+                )
+                chunk_reason_added = True
+            break
+
+    # matched 优先级：
+    #   1) MANUAL_MATH_CONCEPT 且 concept_name 出现在 query
+    #   2) MANUAL_MATH_CONCEPT 且 entity_name 在 mapping_by_name
+    #   3) 其他都不算 HIT
+    matched: dict | None = None
+
     def _concept_in_query(c: dict | None) -> bool:
         cn = (c or {}).get("concept_name") or ""
         return bool(cn) and cn in query
 
-    for pool in (manual_candidates, auxiliary_candidates):
-        for c in pool:
-            if _concept_in_query(c):
-                matched = c
-                break
-        if matched:
+    for c in manual_candidates:
+        if _concept_in_query(c):
+            matched = c
             break
-    if not matched:
-        for pool in (manual_candidates, auxiliary_candidates):
-            if pool:
-                matched = pool[0]
-                break
+    if not matched and manual_candidates:
+        matched = manual_candidates[0]
 
     # 去重
     seen: set[str] = set()
@@ -500,13 +566,18 @@ async def run(args: argparse.Namespace) -> int:
 
     llm = resolve_llm_config()
     emb = resolve_embedding_config(llm["base_url"], llm["api_key"])
+    rerank = resolve_rerank_config()
     logger.info(
         f"llm_model={llm['model']} | llm_base_url={llm['base_url']} | "
         f"embedding_model={emb['model']} | embedding_dim={emb['dim']} | "
         f"embedding_base_url={emb['base_url']}"
     )
+    if rerank:
+        logger.info(f"rerank_model={rerank['model']} | rerank_base_url={rerank['base_url']}")
+    else:
+        logger.info("rerank 未配置 | 查询时跳过 rerank")
 
-    rag = build_rag(working_dir, llm, emb)
+    rag = build_rag(working_dir, llm, emb, build_rerank_model_func(rerank))
     await rag.initialize_storages()
     logger.info("initialize_storages OK")
 
@@ -614,8 +685,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--chunk-top-k", type=int, default=10, help="chunk top_k（默认 10）")
     p.add_argument(
         "--enable-rerank",
-        action="store_true",
-        help="若 QueryParam 支持 enable_rerank 则设为 True（默认 False，避免依赖 reranker 服务）",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="是否启用 rerank（默认 True，需配置 RERANK_*；用 --no-enable-rerank 关闭）",
     )
     p.add_argument(
         "--answer",

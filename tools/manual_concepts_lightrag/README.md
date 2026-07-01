@@ -70,3 +70,64 @@ python import_manual_concepts_lightrag.py \
 ```
 
 保存会继续使用现有文件存储后端（JsonKV、NanoVectorDB、NetworkX），默认数据目录为 `/home/zj/ZengKingMorphe/ai-service/data/lightrag_manual_concepts`。
+
+## 推荐导入方式：custom KG 手动概念导入
+
+旧的 `import_manual_concepts_lightrag.py` 与新的 `import_manual_concepts_custom_kg.py` 并存，**推荐使用新脚本**。
+
+1. 旧 `import_manual_concepts_lightrag.py` 使用 `rag.ainsert`，会触发 LightRAG 默认 LLM 实体抽取，可能产生公式、变量、符号、短语等脏实体（如 `0!`、`A_n^m`、`C(n,0)`、`排列数公式A(n,n)`、`第1类方案`、`步骤`、`方法数`、`Unknown` 等）。
+2. 新 `import_manual_concepts_custom_kg.py` 使用 `rag.ainsert_custom_kg`，不走默认 LLM 实体抽取，图中只保留人工概念实体，实体类型固定为 `MANUAL_MATH_CONCEPT`。
+3. JSONL 每条记录本身就是一个数学概念：
+   - `concept_name` 是图谱实体名（`entity_name`）；
+   - `md_content` 是概念正文，同时作为 chunk `content` 和实体 `description`；
+   - `doc_id` 是 `source_id`（entity 与 chunk 共享，保证 LightRAG `chunk_to_source_map` 正确映射）；
+   - `review_status == correct` 才默认导入（`--include-non-correct` 可放开）。
+4. 第一版不自动生成 `relationships`，保持空列表。
+5. 默认使用新的 working_dir：
+   `ai-service/data/lightrag_manual_concepts_custom_kg`（与旧目录 `lightrag_manual_concepts` 隔离，互不污染）。
+6. 按 `--batch-size`（默认 100）聚合多条记录一次性 `ainsert_custom_kg`，减少写入次数。
+
+### 使用
+
+```bash
+cd /home/zj/ZengKingMorphe/tools/manual_concepts_lightrag
+conda activate morphe
+
+# 1) dry-run：只打印统计、不初始化 LightRAG、不写入
+./run_import_custom_kg.sh --dry-run
+
+# 2) 正式导入（写入 lightrag_manual_concepts_custom_kg）
+./run_import_custom_kg.sh
+
+# 3) 严格查询并依据对应 md_content 回答（指向新 working_dir）
+QUERY="请帮我讲解二项式定理" \
+MODE=local \
+WORKING_DIR=/home/zj/ZengKingMorphe/ai-service/data/lightrag_manual_concepts_custom_kg \
+./run_test.sh --answer
+
+QUERY="请帮我讲解分类加法计数原理" \
+MODE=local \
+WORKING_DIR=/home/zj/ZengKingMorphe/ai-service/data/lightrag_manual_concepts_custom_kg \
+./run_test.sh --answer
+```
+
+环境变量覆盖（与旧脚本一致的 `CONFIG` / `WORKING_DIR` / `ENTITY_WHITELIST`，外加 `BATCH_SIZE`）：
+
+```bash
+CONFIG=/path/concepts.jsonl \
+WORKING_DIR=/path/lightrag_custom_kg \
+ENTITY_WHITELIST=/path/whitelist.txt \
+BATCH_SIZE=50 \
+./run_import_custom_kg.sh
+```
+
+常用参数：`--dry-run`（只统计不写入）、`--dump-custom-kg out.json`（导出构造后的 custom_kg，dry-run 也可用）、`--include-non-correct`、`--disable-whitelist`。
+
+### 命中判定（test_manual_concept_lightrag.py）
+
+为配合 custom KG 模式，`--answer` 命中判定已收紧：
+
+- 只有 `entity_type == MANUAL_MATH_CONCEPT` 且 `entity_name` 命中 config 中 `concept_name`，才算强 HIT；
+- `source_type == manual_math_concept` 与 chunk `file_path` 命中只作为辅助原因，**不能单独判 HIT**；
+- 公式 / 变量 / 符号 / `Unknown` 类型节点一律不算 HIT；
+- `--answer` 内容优先取 `matched["md_content"]`，其次才读 `matched["md_path"]` 文件，确保无 `md_path` 时也能依据 JSONL 正文回答。

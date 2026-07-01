@@ -307,15 +307,27 @@ STRICT_ENTITY_EXTRACTION_PROMPT = """你是教材数学概念抽取器。
 """
 
 
-def build_rag(working_dir: Path, llm: dict, emb: dict) -> LightRAG:
+def build_rag(working_dir: Path, llm: dict, emb: dict, whitelist: set[str] | None = None) -> LightRAG:
     working_dir.mkdir(parents=True, exist_ok=True)
+    # 把权威概念清单 + 禁止规则塞进 entity_types 列表。LightRAG 会把它注入
+    # entity_extraction prompt 的 <Entity_types>[{entity_types}] 块——这是唯一能
+    # 影响抽取阶段 LLM 的通道（addon_params 不支持自定义 system_prompt）。
+    if whitelist:
+        entity_types = [
+            "教材数学概念(必须是【权威清单】内、教材正式命名的概念/定理/公式)",
+            "MANUAL_MATH_CONCEPT(手动导入的数学概念入口)",
+            "【权威清单】只抽取下列概念: " + " | ".join(sorted(whitelist)),
+            "【严格禁止】单字母变量(a,b,x,n,m) / 数学表达式碎片((a+b)^n,T_k,C_n^k) / 运算步骤词(合并,展开,代入,相乘) / 章节图表引用(公式1,图6.2-4,表7.2-2,问题1,性质1) / 人名(棣莫弗,贝叶斯,高斯) / 例题情境词(共享自行车,身高,施肥量,体重) / 通用泛指词(元素,顺序,步骤,方法)",
+        ]
+    else:
+        entity_types = ["MANUAL_MATH_CONCEPT"]
     rag = LightRAG(
         working_dir=str(working_dir),
         enable_llm_cache=False,
         enable_llm_cache_for_entity_extract=False,
         addon_params={
             "language": "Chinese",
-            "entity_types": ["MANUAL_MATH_CONCEPT"],
+            "entity_types": entity_types,
         },
         llm_model_func=build_llm_model_func(llm),
         embedding_func=build_embedding_func(emb),
@@ -392,7 +404,7 @@ async def run(args: argparse.Namespace) -> int:
         f"embedding_base_url={emb['base_url']}"
     )
 
-    rag = build_rag(working_dir, llm, emb)
+    rag = build_rag(working_dir, llm, emb, whitelist)
     await rag.initialize_storages()
     logger.info("initialize_storages OK")
 
