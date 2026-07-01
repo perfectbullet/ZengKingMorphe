@@ -266,7 +266,7 @@ _PAGE_TEMPLATE = """<!doctype html>
     .section-title-row h2 { margin: 0; font-size: 15px; }
     .md-editor-panel textarea { width: 100%; min-height: 520px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; line-height: 1.65; }
     .preview-hint { color: #71818a; font-size: 12px; }
-    .markdown-preview { min-height: 520px; max-height: calc(100vh - 360px); overflow: auto; padding: 14px; border: 1px solid #d8e0e4; border-radius: 6px; background: #fff; line-height: 1.8; overflow-wrap: anywhere; }
+    .markdown-preview { min-height: 520px; max-height: calc(100vh - 360px); overflow: auto; padding: 14px; border: 1px solid #d8e0e4; border-radius: 6px; background: #fff; line-height: 1.8; overflow-wrap: anywhere; white-space: pre-wrap; }
     .markdown-preview h1, .markdown-preview h2, .markdown-preview h3 { margin-top: 1em; margin-bottom: .6em; }
     .markdown-preview p { margin: .65em 0; }
     .markdown-preview ul, .markdown-preview ol { margin: .5em 0; padding-left: 1.6em; }
