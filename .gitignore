@@ -129,3 +129,5 @@ debug_contexts/请帮我讲解二项式定理_20260630_144349.md
 concept.log
 ai-service/data/math_concepts/*
 ai-service/data/lightrag_manual_concepts/
+tools/manual_concepts_lightrag/debug_contexts/
+tools/manual_concepts_lightrag/lightrag.log

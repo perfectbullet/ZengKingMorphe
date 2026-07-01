@@ -31,9 +31,9 @@ from dotenv import load_dotenv
 from loguru import logger
 
 # ---------------------------------------------------------------------------
-# 项目根目录：ai-service 根目录 = scripts 目录的上一级
+# 项目根目录：子项目根 = 脚本所在目录（tools/manual_concepts_lightrag）
 # ---------------------------------------------------------------------------
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -56,9 +56,9 @@ def resolve_path(path_str: str) -> Path:
     if p.is_absolute():
         return p
     candidates = [
-        PROJECT_ROOT / path_str,          # 相对 ai-service 根目录
-        PROJECT_ROOT.parent / path_str,   # 相对仓库根目录（兼容 config 里的 ai-service/... 形式）
-        Path.cwd() / path_str,            # 相对当前工作目录
+        PROJECT_ROOT / path_str,                  # 相对子项目根
+        PROJECT_ROOT.parent.parent / path_str,    # 相对仓库根（兼容 ai-service/data/... 形式）
+        Path.cwd() / path_str,                    # 相对当前工作目录
     ]
     for c in candidates:
         if c.exists():
