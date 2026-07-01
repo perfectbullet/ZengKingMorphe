@@ -128,3 +128,4 @@ ai-service/data/math_concepts/manual_math_concept_20260630_05_selective3_classif
 debug_contexts/请帮我讲解二项式定理_20260630_144349.md
 concept.log
 ai-service/data/math_concepts/*
+ai-service/data/lightrag_manual_concepts/
