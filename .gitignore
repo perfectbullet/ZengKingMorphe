@@ -123,3 +123,8 @@ vllm-3090-deployment/bench_results/*
 vllm-3090-deployment/qwen3_openai_sdk_test_outputs/*
 tools/asr_latex_review/*.bak
 tools/asr_latex_review/asr_to_latex_after_20260629.jsonl
+ai-service/data/math_concepts/05_selective3_math_concepts_definition_blocks_with_concept_name_20260630.jsonl
+ai-service/data/math_concepts/manual_math_concept_20260630_05_selective3_classification_addition_counting_principle.md
+debug_contexts/请帮我讲解二项式定理_20260630_144349.md
+concept.log
+ai-service/data/math_concepts/*
