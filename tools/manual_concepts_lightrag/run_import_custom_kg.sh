@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 导入人工概念到 LightRAG（custom KG 模式，不走 LLM 实体抽取，推荐生产路径）
+# 导入人工概念到 LightRAG（custom KG 模式，不走 LLM 实体抽取，历史实验性路径）
 #
 # 用法: ./run_import_custom_kg.sh [--dry-run]
 #
@@ -32,7 +32,7 @@ if [[ -f "$HERE/.env" ]]; then
   set -a; . "$HERE/.env"; set +a
 fi
 
-# 3) 设定默认值；WORKING_DIR 强制使用 custom KG 新目录（不沿用 .env 的旧值）
+# 3) 设定默认值；WORKING_DIR 强制使用历史实验性 custom KG 目录（不沿用 .env 的旧值）
 DEFAULT_CONFIG="/home/zj/ZengKingMorphe/ai-service/data/math_concepts/05_selective3_math_concepts_definition_blocks_with_concept_name_20260630.jsonl"
 WORKING_DIR="${working_dir_override:-/home/zj/ZengKingMorphe/ai-service/data/lightrag_manual_concepts_custom_kg}"
 : "${CONFIG:=$DEFAULT_CONFIG}"

@@ -2,7 +2,7 @@
 """
 import_manual_concepts_lightrag.py
 ==================================
-人工概念 -> LightRAG 导入脚本（旧 ainsert 路径，作为对比验证保留）。
+人工概念 -> LightRAG 导入脚本（主路径，使用 ainsert）。
 
 核心流程：
 1. 读取 JSONL / JSON 配置，每条记录视为一个人工概念（默认 domain=math，可扩展）
@@ -12,7 +12,6 @@ import_manual_concepts_lightrag.py
 5. 以 concept_name 手动 upsert MANUAL_CONCEPT 实体（默认；可经 CONCEPT_RETRIEVAL_ENTITY_TYPE 覆盖）
 
 注意：本脚本是独立验证脚本，不依赖也不修改 ai-service 业务代码（conversation_nodes.py 等）。
-推荐生产用 import_manual_concepts_custom_kg.py（不走 LLM 实体抽取）。
 """
 
 from __future__ import annotations

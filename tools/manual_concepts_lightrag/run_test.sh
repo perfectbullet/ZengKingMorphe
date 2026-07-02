@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 测试人工概念在 LightRAG 中的结构化召回 / 严格回答（默认指向 custom KG working_dir）
+# 测试人工概念在 LightRAG 中的结构化召回 / 严格回答（默认指向 lightrag_manual_concepts）
 #
 # 用法: QUERY="请帮我讲解二项式定理" MODE=local ./run_test.sh [--answer]
 #
@@ -24,9 +24,9 @@ if [[ -f "$HERE/.env" ]]; then
   set -a; . "$HERE/.env"; set +a
 fi
 
-# 3) 设定默认值；WORKING_DIR 强制使用 custom KG 新目录（推荐路径）
+# 3) 设定默认值；WORKING_DIR 默认使用主路径目录
 DEFAULT_CONFIG="/home/zj/ZengKingMorphe/ai-service/data/math_concepts/05_selective3_math_concepts_definition_blocks_with_concept_name_20260630.jsonl"
-WORKING_DIR="${working_dir_override:-/home/zj/ZengKingMorphe/ai-service/data/lightrag_manual_concepts_custom_kg}"
+WORKING_DIR="${working_dir_override:-/home/zj/ZengKingMorphe/ai-service/data/lightrag_manual_concepts}"
 : "${CONFIG:=$DEFAULT_CONFIG}"
 : "${ENTITY_WHITELIST:=$HERE/entity_whitelist_draft.txt}"
 : "${QUERY:=请帮我讲解二项式定理}"

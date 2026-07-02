@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# 导入人工概念到 LightRAG（旧 ainsert 路径，带 --replace；对比验证用）
+# 导入人工概念到 LightRAG（主路径，使用 ainsert）
 #
 # 注意：此路径会触发默认 LLM 实体抽取，可能产生公式 / 变量 / 符号等脏实体，
-#       仅作对比验证。生产请优先使用 run_import_custom_kg.sh。
+#       但通过白名单和手动 upsert 进行清洗。这是主导入路径。
 #
 # 用法: ./run_import.sh [--replace]
 # 环境变量覆盖（优先级：调用方传入 > CONCEPT_RETRIEVAL_* > legacy 旧变量 > 默认值）：
@@ -23,7 +23,7 @@ if [[ -f "$HERE/.env" ]]; then
   set -a; . "$HERE/.env"; set +a
 fi
 
-# 3) 设定默认值（旧 ainsert 默认目录：lightrag_manual_concepts）
+# 3) 设定默认值（主路径默认目录：lightrag_manual_concepts）
 DEFAULT_CONFIG="/home/zj/ZengKingMorphe/ai-service/data/math_concepts/05_selective3_math_concepts_definition_blocks_with_concept_name_20260630.jsonl"
 DEFAULT_WORKING_DIR="/home/zj/ZengKingMorphe/ai-service/data/lightrag_manual_concepts"
 DEFAULT_WHITELIST="$HERE/entity_whitelist_draft.txt"

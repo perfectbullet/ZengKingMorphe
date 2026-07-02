@@ -2,12 +2,12 @@
 """
 import_manual_concepts_custom_kg.py
 =====================================
-人工概念 -> LightRAG「自定义 KG」导入脚本（推荐生产路径）。
+人工概念 -> LightRAG「自定义 KG」导入脚本（历史实验性路径）。
 
-与旧脚本 import_manual_concepts_lightrag.py 的核心区别：
-- 旧脚本使用 rag.ainsert(...)，会触发 LightRAG 默认 LLM 实体抽取，
-  导致知识图谱里混入公式、变量、符号、短语等脏实体（如 0!、A_n^m、C(n,0)、
-  排列数公式A(n,n)、第1类方案、步骤、方法数、Unknown 等）。
+与主脚本 import_manual_concepts_lightrag.py 的核心区别：
+- 主脚本使用 rag.ainsert(...)，会触发 LightRAG 默认 LLM 实体抽取，
+  可能产生公式、变量、符号、短语等脏实体（如 0!、A_n^m、C(n,0)、
+  排列数公式A(n,n)、第1类方案、步骤、方法数、Unknown 等），但通过白名单和手动 upsert 进行清洗。
 - 本脚本使用 rag.ainsert_custom_kg(...)，把每条人工概念记录直接作为自定义 KG
   写入，完全不走 LLM 实体抽取，图中只保留 MANUAL_CONCEPT 实体（默认；可经
   CONCEPT_RETRIEVAL_ENTITY_TYPE 覆盖；兼容 legacy MANUAL_MATH_CONCEPT）。
@@ -21,6 +21,8 @@ entity.source_id 与 chunk.source_id 保持一致，LightRAG 内部的 chunk_to_
 
 默认 domain=math，可通过 --domain / CONCEPT_RETRIEVAL_DOMAIN 切换为其它领域
 （如 industrial_training）。本脚本是独立验证脚本，不依赖也不修改 ai-service 业务代码或 LightRAG 源码。
+
+注意：这是历史实验性路径，保留作为 experimental fallback。
 """
 
 from __future__ import annotations
@@ -652,7 +654,7 @@ async def run(args: argparse.Namespace) -> int:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="导入手动概念到 LightRAG（custom KG 模式，不走 LLM 实体抽取，推荐生产路径）"
+        description="导入手动概念到 LightRAG（custom KG 模式，不走 LLM 实体抽取，历史实验性路径）"
     )
     p.add_argument(
         "--config",
@@ -662,7 +664,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--working-dir",
         required=True,
-        help="LightRAG working_dir（必填，推荐使用 lightrag_manual_concepts_custom_kg）",
+        help="LightRAG working_dir（必填，历史实验性路径使用 lightrag_manual_concepts_custom_kg）",
     )
     p.add_argument(
         "--domain",

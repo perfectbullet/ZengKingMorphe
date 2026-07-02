@@ -66,21 +66,16 @@ JSONL 每条记录本身就是一个概念：
 
 | 路径 | 脚本 | 是否触发 LLM 抽取 | 默认 working_dir | 用途 |
 |---|---|---|---|---|
-| **推荐** | `import_manual_concepts_custom_kg.py` | 否（`ainsert_custom_kg`） | `lightrag_manual_concepts_custom_kg` | 生产用 |
-| 对比验证 | `import_manual_concepts_lightrag.py` | 是（`ainsert`） | `lightrag_manual_concepts` | 验证脏实体问题 |
+| 主路径 | `import_manual_concepts_lightrag.py` | 是（`ainsert`） | `lightrag_manual_concepts` | 主路径 |
+| 历史实验性 | `import_manual_concepts_custom_kg.py` | 否（`ainsert_custom_kg`） | `lightrag_manual_concepts_custom_kg` | historical/experimental fallback |
 
-推荐路径 `import_manual_concepts_custom_kg.py`：
+主路径 `import_manual_concepts_lightrag.py`：
 
-1. 使用 `rag.ainsert_custom_kg`，不走默认 LLM 实体抽取，图中只保留人工概念实体；
-2. 每条记录转成 `1 个 chunk + 1 个 entity`（默认 `MANUAL_CONCEPT`），`entity.source_id == chunk.source_id == doc_id`
-   保证 LightRAG `chunk_to_source_map` 正确映射；
-3. 第一版不自动生成 `relationships`；
-4. 与旧 `working_dir` 隔离，互不污染；
-5. 按 `--batch-size`（默认 100）聚合写入。
+1. 使用 `rag.ainsert`，会触发默认 LLM 实体抽取；
+2. 通过 `prune_non_whitelisted_entities` + 白名单 + 阶段 3 手动 upsert `MANUAL_CONCEPT` 实体尽量清洗脏实体；
+3. 可能产生 `0!`、`A_n^m`、`C(n,0)`、`第1类方案`、`步骤` 等脏实体，但通过白名单和手动 upsert 进行清洗。
 
-旧路径 `import_manual_concepts_lightrag.py` 保留为对比验证：使用 `rag.ainsert` 会触发默认 LLM 抽取，
-可能产生 `0!`、`A_n^m`、`C(n,0)`、`第1类方案`、`步骤` 等脏实体。本脚本仍通过 `prune_non_whitelisted_entities`
-+ 白名单 + 阶段 3 手动 upsert 尽量清洗。
+历史实验性路径 `import_manual_concepts_custom_kg.py` 保留为 experimental fallback：使用 `rag.ainsert_custom_kg`，不走默认 LLM 实体抽取，图中只保留人工概念实体。
 
 ---
 
@@ -90,17 +85,15 @@ JSONL 每条记录本身就是一个概念：
 cd /home/zj/ZengKingMorphe/tools/manual_concepts_lightrag
 conda activate morphe   # 或直接用 /home/zj/miniconda3/envs/morphe/bin/python
 
-# 推荐：custom KG 导入 dry-run（只打印统计，不写入）
-./run_import_custom_kg.sh --dry-run
+# 主路径：ainsert 导入（默认指向 lightrag_manual_concepts）
+./run_import.sh
 
-# 推荐：custom KG 正式导入
-./run_import_custom_kg.sh
-
-# 严格查询并依据对应 md_content 回答（指向 custom KG working_dir）
+# 严格查询并依据对应 md_content 回答（指向 lightrag_manual_concepts）
 QUERY="请帮我讲解二项式定理" MODE=local ./run_test.sh --answer
 
-# 对比验证：旧 ainsert 路径（默认指向 lightrag_manual_concepts）
-./run_import.sh
+# （可选）历史实验性路径：custom KG 导入（实验性 fallback）
+./run_import_custom_kg.sh --dry-run
+./run_import_custom_kg.sh
 ```
 
 ### 环境变量
@@ -116,7 +109,7 @@ QUERY="请帮我讲解二项式定理" MODE=local ./run_test.sh --answer
 | `CONCEPT_RETRIEVAL_ENTITY_TYPE` | 实体类型 | `MANUAL_CONCEPT` |
 | `CONCEPT_RETRIEVAL_CONFIG` | 概念 JSONL 路径 | `ai-service/data/math_concepts/...jsonl` |
 | `CONCEPT_RETRIEVAL_WHITELIST` | 白名单路径 | `entity_whitelist_draft.txt` |
-| `CONCEPT_RETRIEVAL_LIGHTRAG_WORKING_DIR` | LightRAG 数据目录 | `lightrag_manual_concepts_custom_kg` |
+| `CONCEPT_RETRIEVAL_LIGHTRAG_WORKING_DIR` | LightRAG 数据目录 | `lightrag_manual_concepts` |
 | `CONCEPT_RETRIEVAL_ENTITY_TYPE_PROMPT_FILE` | 可选 entity extraction prompt 文件 | 空 |
 
 legacy 变量（仍兼容，但建议迁移）：`CONFIG` / `WORKING_DIR` / `ENTITY_WHITELIST` / `BATCH_SIZE` / `QUERY` / `MODE`。
@@ -124,6 +117,14 @@ legacy 变量（仍兼容，但建议迁移）：`CONFIG` / `WORKING_DIR` / `ENT
 覆盖示例：
 
 ```bash
+# 主路径示例
+CONCEPT_RETRIEVAL_CONFIG=/path/concepts.jsonl \
+CONCEPT_RETRIEVAL_LIGHTRAG_WORKING_DIR=/path/lightrag_manual_concepts \
+CONCEPT_RETRIEVAL_DOMAIN=industrial_training \
+CONCEPT_RETRIEVAL_ENTITY_TYPE=MANUAL_CONCEPT \
+./run_import.sh
+
+# （可选）历史实验性路径示例
 CONCEPT_RETRIEVAL_CONFIG=/path/concepts.jsonl \
 CONCEPT_RETRIEVAL_LIGHTRAG_WORKING_DIR=/path/lightrag_custom_kg \
 CONCEPT_RETRIEVAL_DOMAIN=industrial_training \
@@ -134,14 +135,20 @@ CONCEPT_RETRIEVAL_ENTITY_TYPE=MANUAL_CONCEPT \
 切换领域示例（不动代码）：
 
 ```bash
-# 工业实训概念
+# 工业实训概念（主路径）
+CONCEPT_RETRIEVAL_DOMAIN=industrial_training \
+CONCEPT_RETRIEVAL_CONFIG=/path/industrial_training_concepts.jsonl \
+./run_import.sh
+
+# （可选）历史实验性路径
 CONCEPT_RETRIEVAL_DOMAIN=industrial_training \
 CONCEPT_RETRIEVAL_CONFIG=/path/industrial_training_concepts.jsonl \
 ./run_import_custom_kg.sh
 ```
 
-常用参数：`--dry-run`、`--dump-custom-kg out.json`、`--include-non-correct`、`--disable-whitelist`、
-`--domain`、`--entity-type`。
+常用参数：
+- 主路径（`run_import.sh`）：`--replace`、`--include-non-correct`、`--disable-whitelist`、`--domain`、`--entity-type`、`--generate-whitelist-only`
+- 历史实验性路径（`run_import_custom_kg.sh`）：`--dry-run`、`--dump-custom-kg out.json`、`--batch-size`、`--include-non-correct`、`--disable-whitelist`、`--domain`、`--entity-type`
 
 ---
 
@@ -167,8 +174,8 @@ CONCEPT_RETRIEVAL_CONFIG=/path/industrial_training_concepts.jsonl \
 默认使用文件后端（`JsonKV` / `NanoVectorDB` / `NetworkX`），不设
 `LIGHTRAG_*_STORAGE` 环境变量即可。默认数据目录：
 
-- 推荐：`/home/zj/ZengKingMorphe/ai-service/data/lightrag_manual_concepts_custom_kg`
-- 旧 ainsert：`/home/zj/ZengKingMorphe/ai-service/data/lightrag_manual_concepts`
+- 主路径：`/home/zj/ZengKingMorphe/ai-service/data/lightrag_manual_concepts`
+- 历史实验性：`/home/zj/ZengKingMorphe/ai-service/data/lightrag_manual_concepts_custom_kg`
 
 ---
 
