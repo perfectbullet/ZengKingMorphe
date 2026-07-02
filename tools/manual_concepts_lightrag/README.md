@@ -1,6 +1,16 @@
 # manual_concepts_lightrag
 
-独立的“手动教材数学概念导入 LightRAG”工具，不依赖 `ai-service` 业务模块，也不修改 LightRAG 源码。
+独立的「人工概念 → LightRAG」导入工具集。把人工审核后的概念 JSONL 导入 LightRAG，为
+`ai-service` 的 `concept_explain` 意图提供概念上下文召回数据。本子项目**不直接接入**
+`ai-service`，只产出可供 `ai-service` 读取的 LightRAG `working_dir` 数据。
+
+- 第一批 `domain = math`（高中数学选择性必修第三册）；
+- 后续可扩展 `industrial_training`（工业实训）等领域；
+- 命名上已泛化为 `concept` / `MANUAL_CONCEPT`，不写死 `math`。
+
+不依赖 `ai-service` 业务模块，也不修改 LightRAG 源码。
+
+---
 
 ## 数据与实体
 
@@ -10,124 +20,161 @@
 /home/zj/ZengKingMorphe/ai-service/data/math_concepts/05_selective3_math_concepts_definition_blocks_with_concept_name_20260630.jsonl
 ```
 
-JSONL 每条记录本身就是一个数学概念：
+JSONL 每条记录本身就是一个概念：
 
 - `concept_name`：主实体名；
 - `doc_id`：文档 ID；
 - `md_content`：概念原文，同时用于 chunk 检索和实体 description；
-- `review_status`：默认只导入 `correct`，使用 `--include-non-correct` 可显式放开。
+- `review_status`：默认只导入 `correct`，使用 `--include-non-correct` 可显式放开；
+- `domain`（可选）：覆盖默认 domain，否则取 `CONCEPT_RETRIEVAL_DOMAIN`（默认 `math`）。
 
-每条有效记录最终 upsert 为 `MANUAL_MATH_CONCEPT` 实体，并保存 `doc_id`、`file_path`、`source_type`、`review_status`、`strict`、`aliases` 等 GraphML 安全元数据。
+每条有效记录最终写入：
 
-## 严格实体范围
+- `entity_type = MANUAL_CONCEPT`（默认；可经 `CONCEPT_RETRIEVAL_ENTITY_TYPE` 覆盖）；
+- `domain`（默认 math）；
+- `source_type = manual_concept`；
+- `legacy_source_type`：若原 `source_type == manual_math_concept`，则保留为 `manual_math_concept`；
+- 以及 `doc_id`、`file_path`、`md_path`、`review_status`、`strict`、`aliases` 等 GraphML 安全元数据。
 
-实体白名单位于：
+> 兼容 legacy：旧数据写入的 `entity_type = MANUAL_MATH_CONCEPT` / `source_type = manual_math_concept`
+> 在 `test_manual_concept_lightrag.py` 的 HIT 判定中仍被识别（详见下文）。
 
-```text
-tools/manual_concepts_lightrag/entity_whitelist_draft.txt
-```
+---
 
-当前只保留教材数学概念，不保留公式、变量、数字、符号、运算词、人名、例子对象、解题步骤或推导过程。默认行为是：
+## LightRAG main 适配（重要）
 
-1. `entity_types=["MANUAL_MATH_CONCEPT"]` 收窄 LLM 抽取类型；
-2. 非白名单 `concept_name` 不导入；
-3. 文档插入后，使用 LightRAG 公开 API 删除图中非白名单实体；
-4. 查询只将白名单内的手动概念实体判为 HIT。
+本子项目当前针对 **LightRAG main 分支** 适配：
 
-当前 LightRAG 版本只从 `addon_params` 读取 `language` 和 `entity_types`，没有自定义实体抽取 prompt 或禁用实体抽取的公开配置 key。脚本保留了严格 prompt 策略常量，但不硬编码不存在的参数；白名单过滤和导入后清理是主要控制手段。原有无效的 `entity_types_guidance` 已移除。
+- 新版默认使用 `addon_params["entity_types_guidance"]`（字符串）注入 entity_extraction prompt 的
+  `{entity_types_guidance}` 占位符；
+- 可选 `addon_params["entity_type_prompt_file"]`（指向 prompt 文件），与 `entity_types_guidance` 可同时存在；
+- **不再使用** 旧的 `addon_params["entity_types"]`（列表）机制；
+- 因此 `.env` 中**不应再设置** `ENTITY_TYPES` 环境变量——若 LightRAG 检测到会报错，请从 `.env`
+  删除并改用 `CONCEPT_RETRIEVAL_ENTITY_TYPE`（控制默认 entity_type）或通过
+  `CONCEPT_RETRIEVAL_ENTITY_TYPE_PROMPT_FILE` 指定完整 prompt 文件。
+
+`entity_types_guidance` 只是 prompt 软约束，硬控制仍来自：
+
+1. `review_status == correct` 过滤；
+2. `concept_name` 白名单过滤；
+3. `prune_non_whitelisted_entities`（旧 ainsert 路径专用）；
+4. 阶段 3 手动 upsert `MANUAL_CONCEPT` 实体。
+
+---
+
+## 两种导入路径
+
+| 路径 | 脚本 | 是否触发 LLM 抽取 | 默认 working_dir | 用途 |
+|---|---|---|---|---|
+| **推荐** | `import_manual_concepts_custom_kg.py` | 否（`ainsert_custom_kg`） | `lightrag_manual_concepts_custom_kg` | 生产用 |
+| 对比验证 | `import_manual_concepts_lightrag.py` | 是（`ainsert`） | `lightrag_manual_concepts` | 验证脏实体问题 |
+
+推荐路径 `import_manual_concepts_custom_kg.py`：
+
+1. 使用 `rag.ainsert_custom_kg`，不走默认 LLM 实体抽取，图中只保留人工概念实体；
+2. 每条记录转成 `1 个 chunk + 1 个 entity`（默认 `MANUAL_CONCEPT`），`entity.source_id == chunk.source_id == doc_id`
+   保证 LightRAG `chunk_to_source_map` 正确映射；
+3. 第一版不自动生成 `relationships`；
+4. 与旧 `working_dir` 隔离，互不污染；
+5. 按 `--batch-size`（默认 100）聚合写入。
+
+旧路径 `import_manual_concepts_lightrag.py` 保留为对比验证：使用 `rag.ainsert` 会触发默认 LLM 抽取，
+可能产生 `0!`、`A_n^m`、`C(n,0)`、`第1类方案`、`步骤` 等脏实体。本脚本仍通过 `prune_non_whitelisted_entities`
++ 白名单 + 阶段 3 手动 upsert 尽量清洗。
+
+---
 
 ## 使用
 
 ```bash
 cd /home/zj/ZengKingMorphe/tools/manual_concepts_lightrag
-conda activate morphe
+conda activate morphe   # 或直接用 /home/zj/miniconda3/envs/morphe/bin/python
 
-# 默认覆盖导入
-./run_import.sh
-
-# 严格查询并依据对应 md_content 回答
-QUERY="请帮我讲解二项式定理" MODE=local ./run_test.sh --answer
-QUERY="请帮我讲解分类加法计数原理" MODE=local ./run_test.sh --answer
-```
-
-配置均可通过环境变量覆盖：
-
-```bash
-CONFIG=/path/concepts.jsonl \
-WORKING_DIR=/path/lightrag_data \
-ENTITY_WHITELIST=/path/whitelist.txt \
-./run_import.sh
-```
-
-临时关闭白名单可传 `--disable-whitelist`。从配置重新生成白名单：
-
-```bash
-python import_manual_concepts_lightrag.py \
-  --config "$CONFIG" \
-  --working-dir "$WORKING_DIR" \
-  --entity-whitelist entity_whitelist_draft.txt \
-  --generate-whitelist-only
-```
-
-保存会继续使用现有文件存储后端（JsonKV、NanoVectorDB、NetworkX），默认数据目录为 `/home/zj/ZengKingMorphe/ai-service/data/lightrag_manual_concepts`。
-
-## 推荐导入方式：custom KG 手动概念导入
-
-旧的 `import_manual_concepts_lightrag.py` 与新的 `import_manual_concepts_custom_kg.py` 并存，**推荐使用新脚本**。
-
-1. 旧 `import_manual_concepts_lightrag.py` 使用 `rag.ainsert`，会触发 LightRAG 默认 LLM 实体抽取，可能产生公式、变量、符号、短语等脏实体（如 `0!`、`A_n^m`、`C(n,0)`、`排列数公式A(n,n)`、`第1类方案`、`步骤`、`方法数`、`Unknown` 等）。
-2. 新 `import_manual_concepts_custom_kg.py` 使用 `rag.ainsert_custom_kg`，不走默认 LLM 实体抽取，图中只保留人工概念实体，实体类型固定为 `MANUAL_MATH_CONCEPT`。
-3. JSONL 每条记录本身就是一个数学概念：
-   - `concept_name` 是图谱实体名（`entity_name`）；
-   - `md_content` 是概念正文，同时作为 chunk `content` 和实体 `description`；
-   - `doc_id` 是 `source_id`（entity 与 chunk 共享，保证 LightRAG `chunk_to_source_map` 正确映射）；
-   - `review_status == correct` 才默认导入（`--include-non-correct` 可放开）。
-4. 第一版不自动生成 `relationships`，保持空列表。
-5. 默认使用新的 working_dir：
-   `ai-service/data/lightrag_manual_concepts_custom_kg`（与旧目录 `lightrag_manual_concepts` 隔离，互不污染）。
-6. 按 `--batch-size`（默认 100）聚合多条记录一次性 `ainsert_custom_kg`，减少写入次数。
-
-### 使用
-
-```bash
-cd /home/zj/ZengKingMorphe/tools/manual_concepts_lightrag
-conda activate morphe
-
-# 1) dry-run：只打印统计、不初始化 LightRAG、不写入
+# 推荐：custom KG 导入 dry-run（只打印统计，不写入）
 ./run_import_custom_kg.sh --dry-run
 
-# 2) 正式导入（写入 lightrag_manual_concepts_custom_kg）
+# 推荐：custom KG 正式导入
 ./run_import_custom_kg.sh
 
-# 3) 严格查询并依据对应 md_content 回答（指向新 working_dir）
-QUERY="请帮我讲解二项式定理" \
-MODE=local \
-WORKING_DIR=/home/zj/ZengKingMorphe/ai-service/data/lightrag_manual_concepts_custom_kg \
-./run_test.sh --answer
+# 严格查询并依据对应 md_content 回答（指向 custom KG working_dir）
+QUERY="请帮我讲解二项式定理" MODE=local ./run_test.sh --answer
 
-QUERY="请帮我讲解分类加法计数原理" \
-MODE=local \
-WORKING_DIR=/home/zj/ZengKingMorphe/ai-service/data/lightrag_manual_concepts_custom_kg \
-./run_test.sh --answer
+# 对比验证：旧 ainsert 路径（默认指向 lightrag_manual_concepts）
+./run_import.sh
 ```
 
-环境变量覆盖（与旧脚本一致的 `CONFIG` / `WORKING_DIR` / `ENTITY_WHITELIST`，外加 `BATCH_SIZE`）：
+### 环境变量
+
+所有变量优先级统一为：**调用方传入 > `CONCEPT_RETRIEVAL_*` > legacy 旧变量 > 默认值**。
+
+新变量（推荐）：
+
+| 变量 | 说明 | 默认 |
+|---|---|---|
+| `CONCEPT_RETRIEVAL_ENABLED` | 是否启用概念召回（占位，便于 ai-service 复用） | `true` |
+| `CONCEPT_RETRIEVAL_DOMAIN` | 领域 | `math` |
+| `CONCEPT_RETRIEVAL_ENTITY_TYPE` | 实体类型 | `MANUAL_CONCEPT` |
+| `CONCEPT_RETRIEVAL_CONFIG` | 概念 JSONL 路径 | `ai-service/data/math_concepts/...jsonl` |
+| `CONCEPT_RETRIEVAL_WHITELIST` | 白名单路径 | `entity_whitelist_draft.txt` |
+| `CONCEPT_RETRIEVAL_LIGHTRAG_WORKING_DIR` | LightRAG 数据目录 | `lightrag_manual_concepts_custom_kg` |
+| `CONCEPT_RETRIEVAL_ENTITY_TYPE_PROMPT_FILE` | 可选 entity extraction prompt 文件 | 空 |
+
+legacy 变量（仍兼容，但建议迁移）：`CONFIG` / `WORKING_DIR` / `ENTITY_WHITELIST` / `BATCH_SIZE` / `QUERY` / `MODE`。
+
+覆盖示例：
 
 ```bash
-CONFIG=/path/concepts.jsonl \
-WORKING_DIR=/path/lightrag_custom_kg \
-ENTITY_WHITELIST=/path/whitelist.txt \
-BATCH_SIZE=50 \
+CONCEPT_RETRIEVAL_CONFIG=/path/concepts.jsonl \
+CONCEPT_RETRIEVAL_LIGHTRAG_WORKING_DIR=/path/lightrag_custom_kg \
+CONCEPT_RETRIEVAL_DOMAIN=industrial_training \
+CONCEPT_RETRIEVAL_ENTITY_TYPE=MANUAL_CONCEPT \
 ./run_import_custom_kg.sh
 ```
 
-常用参数：`--dry-run`（只统计不写入）、`--dump-custom-kg out.json`（导出构造后的 custom_kg，dry-run 也可用）、`--include-non-correct`、`--disable-whitelist`。
+切换领域示例（不动代码）：
 
-### 命中判定（test_manual_concept_lightrag.py）
+```bash
+# 工业实训概念
+CONCEPT_RETRIEVAL_DOMAIN=industrial_training \
+CONCEPT_RETRIEVAL_CONFIG=/path/industrial_training_concepts.jsonl \
+./run_import_custom_kg.sh
+```
 
-为配合 custom KG 模式，`--answer` 命中判定已收紧：
+常用参数：`--dry-run`、`--dump-custom-kg out.json`、`--include-non-correct`、`--disable-whitelist`、
+`--domain`、`--entity-type`。
 
-- 只有 `entity_type == MANUAL_MATH_CONCEPT` 且 `entity_name` 命中 config 中 `concept_name`，才算强 HIT；
-- `source_type == manual_math_concept` 与 chunk `file_path` 命中只作为辅助原因，**不能单独判 HIT**；
-- 公式 / 变量 / 符号 / `Unknown` 类型节点一律不算 HIT；
-- `--answer` 内容优先取 `matched["md_content"]`，其次才读 `matched["md_path"]` 文件，确保无 `md_path` 时也能依据 JSONL 正文回答。
+---
+
+## 命中判定（test_manual_concept_lightrag.py）
+
+`--answer` 命中判定已收紧，避免脏实体误判：
+
+- **强 HIT**：`entity_type ∈ {MANUAL_CONCEPT, MANUAL_MATH_CONCEPT(legacy)}` **且**
+  `entity_name` 命中 config 中 `concept_name`；
+- **不能单独判 HIT**：`source_type ∈ {manual_concept, manual_math_concept}` 与 chunk `file_path` 命中
+  仅作为辅助 reason；
+- 公式 / 变量 / 符号 / `Unknown` 类型节点一律不算 HIT（被 entity_type 门槛过滤）；
+- `matched` 输出包含 `domain` / `entity_type` / `source_type`；
+- `--answer` 内容优先取 `matched["md_content"]`，其次才读 `matched["md_path"]` 文件，
+  确保 custom KG 模式无 `md_path` 时也能依据 JSONL 正文回答；
+- `STRICT_SYSTEM_PROMPT` 已泛化为「概念讲解助手」（不再写死「数学概念」），保持严格依据资料、
+  不引入文档外知识。
+
+---
+
+## 存储
+
+默认使用文件后端（`JsonKV` / `NanoVectorDB` / `NetworkX`），不设
+`LIGHTRAG_*_STORAGE` 环境变量即可。默认数据目录：
+
+- 推荐：`/home/zj/ZengKingMorphe/ai-service/data/lightrag_manual_concepts_custom_kg`
+- 旧 ainsert：`/home/zj/ZengKingMorphe/ai-service/data/lightrag_manual_concepts`
+
+---
+
+## 与 ai-service 的边界
+
+本子项目只产出 LightRAG `working_dir` 数据。后续 `ai-service` 的 `QueryClassifier`
+命中 `concept_explain` 意图后，会读取该 `working_dir` 召回 `concept_context`，
+**命中手动概念库后完全跳过 RAGAnything**，只依据 `concept_context` 生成答案。
+本任务不修改 `ai-service`。

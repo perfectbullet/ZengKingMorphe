@@ -2,16 +2,17 @@
 """
 import_manual_concepts_lightrag.py
 ==================================
-手动教材数学概念 -> LightRAG 导入脚本。
+人工概念 -> LightRAG 导入脚本（旧 ainsert 路径，作为对比验证保留）。
 
 核心流程：
-1. 读取 JSONL / JSON 配置，每条记录视为一个教材数学概念
+1. 读取 JSONL / JSON 配置，每条记录视为一个人工概念（默认 domain=math，可扩展）
 2. 默认仅处理 review_status=correct 且 concept_name 位于白名单的记录
 3. 插入 Markdown 全文供 chunk 检索
 4. 清理图中非白名单实体
-5. 以 concept_name 手动 upsert MANUAL_MATH_CONCEPT 实体
+5. 以 concept_name 手动 upsert MANUAL_CONCEPT 实体（默认；可经 CONCEPT_RETRIEVAL_ENTITY_TYPE 覆盖）
 
 注意：本脚本是独立验证脚本，不依赖也不修改 ai-service 业务代码（conversation_nodes.py 等）。
+推荐生产用 import_manual_concepts_custom_kg.py（不走 LLM 实体抽取）。
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from dotenv import load_dotenv
 from loguru import logger
@@ -162,15 +163,18 @@ def extract_concept_name(md_content: str, md_path: Path | None) -> str:
 
 
 def default_file_path(item: dict) -> str | None:
-    """file_path 默认值：item.file_path > manual_math_concepts/{md_path文件名} > manual_math_concepts/{doc_id}.md。"""
+    """file_path 默认值：item.file_path > manual_concepts/{md_path文件名} > manual_concepts/{doc_id}.md。
+
+    兼容 legacy：若 item 显式给出 file_path 以 manual_math_concepts/ 为前缀则原样保留。
+    """
     if item.get("file_path"):
         return str(item["file_path"])
     md_path_raw = item.get("md_path")
     if md_path_raw:
-        return f"manual_math_concepts/{Path(md_path_raw).name}"
+        return f"manual_concepts/{Path(md_path_raw).name}"
     doc_id = item.get("doc_id")
     if doc_id:
-        return f"manual_math_concepts/{doc_id}.md"
+        return f"manual_concepts/{doc_id}.md"
     return None
 
 
@@ -185,17 +189,32 @@ def _sanitize_entity_value(v: Any) -> Any:
 
 
 def normalize_item(item: dict, md_content: str, md_path: Path | None) -> dict:
-    """补齐 concept_name / file_path / strict / aliases。"""
+    """补齐 concept_name / file_path / strict / aliases / domain / source_type。"""
     concept_name = item.get("concept_name") or item.get("name")
     if not concept_name:
         concept_name = extract_concept_name(md_content, md_path)
 
-    file_path = default_file_path(item) or f"manual_math_concepts/{concept_name}.md"
+    file_path = default_file_path(item) or f"manual_concepts/{concept_name}.md"
 
     strict_raw = item.get("strict")
     strict = True if strict_raw is None else bool(strict_raw)
 
     aliases = item.get("aliases") or []
+
+    # domain：优先 item.domain，其次 CONCEPT_RETRIEVAL_DOMAIN，默认 math
+    domain = item.get("domain") or resolve_concept_env()["domain"]
+
+    # source_type：新默认 manual_concept；legacy manual_math_concept 进 legacy_source_type
+    raw_source_type = item.get("source_type")
+    if raw_source_type == "manual_math_concept":
+        source_type = "manual_concept"
+        legacy_source_type = raw_source_type
+    elif raw_source_type:
+        source_type = raw_source_type
+        legacy_source_type = "manual_math_concept" if raw_source_type == "manual_concept" else None
+    else:
+        source_type = "manual_concept"
+        legacy_source_type = None
 
     return {
         **item,
@@ -203,12 +222,48 @@ def normalize_item(item: dict, md_content: str, md_path: Path | None) -> dict:
         "file_path": file_path,
         "strict": strict,
         "aliases": aliases,
+        "domain": domain,
+        "source_type": source_type,
+        "legacy_source_type": legacy_source_type,
     }
 
 
 # ---------------------------------------------------------------------------
-# 环境变量解析（兼容任务规格候选名 + 本仓库 .env 实际变量名）
+# 环境变量解析（CONCEPT_RETRIEVAL_* 优先 > 旧变量 > 默认值）
 # ---------------------------------------------------------------------------
+def resolve_concept_env() -> dict:
+    """统一解析概念检索相关环境变量。
+
+    优先级：CONCEPT_RETRIEVAL_* > legacy 旧变量 > 默认值。
+    """
+    domain = (
+        os.getenv("CONCEPT_RETRIEVAL_DOMAIN")
+        or os.getenv("DOMAIN")
+        or "math"
+    ).strip()
+
+    entity_type = (
+        os.getenv("CONCEPT_RETRIEVAL_ENTITY_TYPE")
+        or os.getenv("ENTITY_TYPE")
+        or "MANUAL_CONCEPT"
+    ).strip()
+
+    enabled = (
+        os.getenv("CONCEPT_RETRIEVAL_ENABLED")
+        or os.getenv("ENABLE_LIGHTRAG")
+        or "true"
+    ).strip().lower() in ("1", "true", "yes", "on")
+
+    prompt_file = (os.getenv("CONCEPT_RETRIEVAL_ENTITY_TYPE_PROMPT_FILE") or "").strip() or None
+
+    return {
+        "domain": domain,
+        "entity_type": entity_type,
+        "enabled": enabled,
+        "entity_type_prompt_file": prompt_file,
+    }
+
+
 def _pick_env(candidates: list[str], label: str, required: bool = True) -> str | None:
     for name in candidates:
         val = os.getenv(name)
@@ -293,42 +348,75 @@ def build_embedding_func(emb: dict) -> EmbeddingFunc:
 
 
 # ---------------------------------------------------------------------------
-# LightRAG 构建
+# LightRAG 构建（适配 LightRAG main：使用 entity_types_guidance 而非 entity_types 列表）
 # ---------------------------------------------------------------------------
-# 当前 LightRAG 版本的 extract_entities 固定读取 lightrag.prompt.PROMPTS，
-# addon_params 没有自定义抽取 prompt key。保留这份策略常量用于将来升级；当前
-# 主要约束由 entity_types、concept_name 白名单和导入后实体清理共同完成。
-STRICT_ENTITY_EXTRACTION_PROMPT = """你是教材数学概念抽取器。
-只允许抽取输入文本明确出现的教材数学概念，实体类型只能是 MANUAL_MATH_CONCEPT。
-如果已知文本对应一个 concept_name，应优先只输出该 concept_name。
-禁止抽取公式、变量、数字、符号、运算词、人名、例子对象、解题步骤和推导过程。
-禁止根据常识补充文档外概念。
-关系只允许明显的“包含、相关、推广、前置概念、应用于”；没有明确关系时不要输出。
-"""
+# 旧版用 addon_params["entity_types"]=[...] 列表注入抽取 prompt；
+# LightRAG main 已改为读取 addon_params["entity_types_guidance"]（字符串），
+# 注入 entity_extraction prompt 的 {entity_types_guidance} 占位符。
+# 可选 addon_params["entity_type_prompt_file"]（指向 prompt 文件）。
+#
+# 注意：guidance 只是 prompt 软约束。硬控制仍来自：
+#   1) review_status == correct
+#   2) concept_name 白名单
+#   3) prune_non_whitelisted_entities
+#   4) 阶段3 手动 upsert MANUAL_CONCEPT
 
 
-def build_rag(working_dir: Path, llm: dict, emb: dict, whitelist: set[str] | None = None) -> LightRAG:
-    working_dir.mkdir(parents=True, exist_ok=True)
-    # 把权威概念清单 + 禁止规则塞进 entity_types 列表。LightRAG 会把它注入
-    # entity_extraction prompt 的 <Entity_types>[{entity_types}] 块——这是唯一能
-    # 影响抽取阶段 LLM 的通道（addon_params 不支持自定义 system_prompt）。
+def build_entity_types_guidance(
+    whitelist: set[str] | None,
+    domain: str,
+    entity_type: str,
+) -> str:
+    """构造 entity_types_guidance 字符串（注入 entity_extraction prompt）。
+
+    要求 LLM：
+    - 只抽人工概念实体；
+    - 类型统一 MANUAL_CONCEPT（除非 CONCEPT_RETRIEVAL_ENTITY_TYPE 覆盖）；
+    - 有白名单则只抽白名单 concept_name；
+    - 禁止抽公式/变量/符号/运算词/人名/例子/步骤/推导/文档外常识；
+    - 关系第一版尽量少抽或不抽，必须抽则两端都在白名单。
+    """
+    lines: list[str] = [
+        f"你是 {domain} 教材人工概念抽取器。",
+        f"只允许抽取输入文本明确出现的人工概念，实体类型统一为 {entity_type}。",
+        "禁止抽取：公式、变量、数字、符号、运算词、人名、例子对象、解题步骤和推导过程。",
+        "禁止根据常识补充文档外概念。",
+    ]
     if whitelist:
-        entity_types = [
-            "教材数学概念(必须是【权威清单】内、教材正式命名的概念/定理/公式)",
-            "MANUAL_MATH_CONCEPT(手动导入的数学概念入口)",
-            "【权威清单】只抽取下列概念: " + " | ".join(sorted(whitelist)),
-            "【严格禁止】单字母变量(a,b,x,n,m) / 数学表达式碎片((a+b)^n,T_k,C_n^k) / 运算步骤词(合并,展开,代入,相乘) / 章节图表引用(公式1,图6.2-4,表7.2-2,问题1,性质1) / 人名(棣莫弗,贝叶斯,高斯) / 例题情境词(共享自行车,身高,施肥量,体重) / 通用泛指词(元素,顺序,步骤,方法)",
-        ]
+        lines.append(
+            "【权威清单】只抽取下列 concept_name: " + " | ".join(sorted(whitelist))
+        )
+        lines.append(
+            "关系第一版尽量不抽；若必须抽，两端实体都必须在上述权威清单内。"
+        )
     else:
-        entity_types = ["MANUAL_MATH_CONCEPT"]
+        lines.append("关系没有明确依据时不要输出。")
+    return "\n".join(lines)
+
+
+def build_rag(
+    working_dir: Path,
+    llm: dict,
+    emb: dict,
+    whitelist: set[str] | None = None,
+    domain: str = "math",
+    entity_type: str = "MANUAL_CONCEPT",
+    entity_type_prompt_file: str | None = None,
+) -> LightRAG:
+    working_dir.mkdir(parents=True, exist_ok=True)
+    guidance = build_entity_types_guidance(whitelist, domain, entity_type)
+    addon_params: dict[str, Any] = {
+        "language": "Chinese",
+        "entity_types_guidance": guidance,
+    }
+    if entity_type_prompt_file:
+        addon_params["entity_type_prompt_file"] = entity_type_prompt_file
+        logger.info(f"entity_type_prompt_file={entity_type_prompt_file}")
     rag = LightRAG(
         working_dir=str(working_dir),
         enable_llm_cache=False,
         enable_llm_cache_for_entity_extract=False,
-        addon_params={
-            "language": "Chinese",
-            "entity_types": entity_types,
-        },
+        addon_params=addon_params,
         llm_model_func=build_llm_model_func(llm),
         embedding_func=build_embedding_func(emb),
     )
@@ -355,6 +443,39 @@ async def prune_non_whitelisted_entities(
                 f"prune entity FAILED | entity_name={entity_name} | result={result}"
             )
     return deleted, failed
+
+
+async def normalize_entity_types(
+    rag: LightRAG,
+    whitelist: set[str],
+    target_entity_type: str,
+) -> tuple[int, int]:
+    """把图中白名单内所有实体的 entity_type 统一为 target_entity_type。
+
+    LLM 抽取时 entity_type 大小写常不一致（主概念 MANUAL_CONCEPT、子概念 manual_concept），
+    guidance 是软约束管不住；这里在 prune 之后硬统一，保证图谱 entity_type 一致、
+    test HIT 判定可靠。
+    """
+    normalized = 0
+    failed = 0
+    for entity_name in await rag.get_graph_labels():
+        if entity_name not in whitelist:
+            continue  # 非白名单实体已由 prune 处理
+        try:
+            await rag.aedit_entity(
+                entity_name=entity_name,
+                updated_data={"entity_type": target_entity_type},
+                allow_rename=False,
+                allow_merge=False,
+            )
+            normalized += 1
+        except Exception as e:
+            failed += 1
+            logger.warning(
+                f"normalize entity_type FAILED | entity_name={entity_name} | "
+                f"error_type={type(e).__name__} | error={e}"
+            )
+    return normalized, failed
 
 
 # ---------------------------------------------------------------------------
@@ -398,13 +519,23 @@ async def run(args: argparse.Namespace) -> int:
 
     llm = resolve_llm_config()
     emb = resolve_embedding_config(llm["base_url"], llm["api_key"])
+    concept_env = resolve_concept_env()
     logger.info(
         f"llm_model={llm['model']} | llm_base_url={llm['base_url']} | "
         f"embedding_model={emb['model']} | embedding_dim={emb['dim']} | "
-        f"embedding_base_url={emb['base_url']}"
+        f"embedding_base_url={emb['base_url']} | domain={concept_env['domain']} | "
+        f"entity_type={concept_env['entity_type']} | entity_type_prompt_file={concept_env['entity_type_prompt_file']}"
     )
 
-    rag = build_rag(working_dir, llm, emb, whitelist)
+    rag = build_rag(
+        working_dir,
+        llm,
+        emb,
+        whitelist,
+        domain=concept_env["domain"],
+        entity_type=concept_env["entity_type"],
+        entity_type_prompt_file=concept_env["entity_type_prompt_file"],
+    )
     await rag.initialize_storages()
     logger.info("initialize_storages OK")
 
@@ -470,6 +601,10 @@ async def run(args: argparse.Namespace) -> int:
             file_path = item["file_path"]
             strict = item["strict"]
             aliases = item["aliases"]
+            domain = item["domain"]
+            source_type = item["source_type"]
+            legacy_source_type = item.get("legacy_source_type")
+            entity_type = concept_env["entity_type"]
 
             if not args.disable_whitelist and concept_name not in whitelist:
                 whitelist_skipped += 1
@@ -481,7 +616,9 @@ async def run(args: argparse.Namespace) -> int:
 
             logger.info(
                 f"[{idx}/{len(items)}] doc_id={doc_id} | concept_name={concept_name} | "
-                f"md_path={md_path} | file_path={file_path} | strict={strict} | aliases={aliases}"
+                f"md_path={md_path} | file_path={file_path} | strict={strict} | "
+                f"domain={domain} | entity_type={entity_type} | source_type={source_type} | "
+                f"aliases={aliases}"
             )
 
             # 4. --replace：先删除旧 doc
@@ -510,15 +647,17 @@ async def run(args: argparse.Namespace) -> int:
 
             # 6. 收集实体元数据：实体创建推迟到所有文档 insert 完成后统一执行（见阶段2）。
             # 若每条 insert 后立即 edit_entity，后续文档 insert 时的实体合并会用 LLM 重新
-            # 判定 entity_type，覆盖我们手动设置的 MANUAL_MATH_CONCEPT。
+            # 判定 entity_type，覆盖我们手动设置的 entity_type（默认 MANUAL_CONCEPT）。
             entity_data = {
-                "entity_type": "MANUAL_MATH_CONCEPT",
+                "entity_type": entity_type,
+                "domain": domain,
                 "description": md_content,
                 "source_id": doc_id,
                 "doc_id": doc_id,
                 "file_path": file_path,
                 "md_path": md_path_raw,
-                "source_type": item.get("source_type") or "manual_math_concept",
+                "source_type": source_type,
+                "legacy_source_type": legacy_source_type,
                 "review_status": review_status,
                 "strict": strict,
                 "aliases": aliases,
@@ -537,7 +676,7 @@ async def run(args: argparse.Namespace) -> int:
                 f"prune done | deleted={pruned} | failures={prune_failures}"
             )
 
-        # ---------- 阶段3：所有 insert 完成后，统一创建/更新 MANUAL_MATH_CONCEPT 实体 ----------
+        # ---------- 阶段3：所有 insert 完成后，统一创建/更新 entity_type 实体（默认 MANUAL_CONCEPT） ----------
         # 此时实体合并已充分发生，最终态不会被后续 insert 覆盖。
         logger.info(f"stage-3 upsert entities | count={len(pending_entities)}")
         for concept_name, entity_data in pending_entities:
@@ -554,7 +693,7 @@ async def run(args: argparse.Namespace) -> int:
                     )
 
                 # acreate_entity 仅保存标准字段；再 edit 一次，将经过 sanitize 的
-                # doc_id/source_type/review_status/strict/aliases 写入 GraphML。
+                # doc_id/source_type/review_status/strict/aliases/domain 写入 GraphML。
                 await rag.aedit_entity(
                     entity_name=concept_name,
                     updated_data=entity_data,
@@ -564,7 +703,7 @@ async def run(args: argparse.Namespace) -> int:
                 imported += 1
                 logger.info(
                     f"upsert entity OK | concept_name={concept_name} | "
-                    "entity_type=MANUAL_MATH_CONCEPT"
+                    f"entity_type={entity_data.get('entity_type')}"
                 )
             except Exception as e:
                 logger.error(
@@ -573,6 +712,18 @@ async def run(args: argparse.Namespace) -> int:
                     exc_info=True,
                 )
                 failures += 1
+
+        # ---------- 阶段4：统一白名单内所有实体的 entity_type（修复 LLM 大小写不一致） ----------
+        # LLM 抽的子概念 entity_type 常是小写 manual_concept，主概念是大写 MANUAL_CONCEPT；
+        # 把白名单内所有实体统一成目标 entity_type，保证 test HIT 判定与图谱一致。
+        target_type = concept_env["entity_type"]
+        logger.info(f"stage-4 normalize entity_types | target={target_type}")
+        normalized, normalize_failures = await normalize_entity_types(
+            rag, whitelist, target_type
+        )
+        logger.info(
+            f"normalize done | normalized={normalized} | failures={normalize_failures}"
+        )
     finally:
         try:
             await rag.finalize_storages()
@@ -593,7 +744,7 @@ async def run(args: argparse.Namespace) -> int:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="导入手动数学概念到 LightRAG（Markdown 全文 + MANUAL_MATH_CONCEPT 实体）"
+        description="导入手动概念到 LightRAG（Markdown 全文 + MANUAL_CONCEPT 实体，旧 ainsert 路径，对比验证用）"
     )
     p.add_argument(
         "--config",

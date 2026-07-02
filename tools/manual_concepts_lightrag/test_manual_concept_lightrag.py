@@ -2,16 +2,17 @@
 """
 test_manual_concept_lightrag.py
 ================================
-测试手动数学概念在 LightRAG 中的结构化召回 + 严格回答（最小闭环 v1）。
+测试人工概念在 LightRAG 中的结构化召回 + 严格回答（最小闭环 v1）。
 
 核心流程：
 1. 读取同一个 --config，建立 file_path -> metadata / concept_name -> metadata 映射
 2. 初始化同一个 working_dir 的 LightRAG
 3. rag.aquery_data(query, param=QueryParam(...)) 做结构化召回
 4. 打印 entities / relationships / chunks / references / metadata
-5. 判断是否命中手动概念（[HIT] / [MISS]）：只有 entity_type==MANUAL_MATH_CONCEPT
-   且 entity_name 命中 config 中 concept_name 才算强 HIT；source_type / chunk file_path
-   命中仅作辅助原因，不能单独判 HIT。
+5. 判断是否命中人工概念（[HIT] / [MISS]）：entity_type 必须命中
+   {MANUAL_CONCEPT, MANUAL_MATH_CONCEPT(legacy)} 且 entity_name 命中 config 中
+   concept_name 才算强 HIT；source_type / chunk file_path 命中仅作辅助原因，
+   不能单独判 HIT。
 6. --answer：优先使用 matched["md_content"]，其次才读 matched["md_path"] 文件，
    使用严格 prompt 生成回答（确保 custom KG 模式无 md_path 也能依据 JSONL md_content 回答）
 
@@ -139,15 +140,18 @@ def extract_concept_name(md_content: str, md_path: Path | None) -> str:
 
 
 def default_file_path(item: dict) -> str | None:
-    """file_path 默认值：item.file_path > manual_math_concepts/{md_path文件名} > manual_math_concepts/{doc_id}.md。"""
+    """file_path 默认值：item.file_path > manual_concepts/{md_path文件名} > manual_concepts/{doc_id}.md。
+
+    兼容 legacy：若 item 显式给出以 manual_math_concepts/ 为前缀的 file_path 则原样保留。
+    """
     if item.get("file_path"):
         return str(item["file_path"])
     md_path_raw = item.get("md_path")
     if md_path_raw:
-        return f"manual_math_concepts/{Path(md_path_raw).name}"
+        return f"manual_concepts/{Path(md_path_raw).name}"
     doc_id = item.get("doc_id")
     if doc_id:
-        return f"manual_math_concepts/{doc_id}.md"
+        return f"manual_concepts/{doc_id}.md"
     return None
 
 
@@ -161,6 +165,38 @@ def _pick_env(candidates: list[str], label: str, required: bool = True) -> str |
             f"缺少必要环境变量 [{label}]，请在 .env 中配置以下候选之一: {candidates}"
         )
     return None
+
+
+def resolve_concept_env() -> dict:
+    """统一解析概念检索相关环境变量（CONCEPT_RETRIEVAL_* 优先 > 旧变量 > 默认值）。"""
+    domain = (
+        os.getenv("CONCEPT_RETRIEVAL_DOMAIN")
+        or os.getenv("DOMAIN")
+        or "math"
+    ).strip()
+    entity_type = (
+        os.getenv("CONCEPT_RETRIEVAL_ENTITY_TYPE")
+        or os.getenv("ENTITY_TYPE")
+        or "MANUAL_CONCEPT"
+    ).strip()
+    enabled = (
+        os.getenv("CONCEPT_RETRIEVAL_ENABLED")
+        or os.getenv("ENABLE_LIGHTRAG")
+        or "true"
+    ).strip().lower() in ("1", "true", "yes", "on")
+    prompt_file = (os.getenv("CONCEPT_RETRIEVAL_ENTITY_TYPE_PROMPT_FILE") or "").strip() or None
+    return {
+        "domain": domain,
+        "entity_type": entity_type,
+        "enabled": enabled,
+        "entity_type_prompt_file": prompt_file,
+    }
+
+
+# HIT 判定允许的 entity_type 集合（新默认 MANUAL_CONCEPT + legacy MANUAL_MATH_CONCEPT）
+HIT_ENTITY_TYPES = {"MANUAL_CONCEPT", "MANUAL_MATH_CONCEPT"}
+# 辅助 reason 允许的 source_type 集合
+HIT_SOURCE_TYPES = {"manual_concept", "manual_math_concept"}
 
 
 def resolve_llm_config() -> dict:
@@ -267,14 +303,19 @@ def build_embedding_func(emb: dict) -> EmbeddingFunc:
 
 
 def build_rag(working_dir: Path, llm: dict, emb: dict, rerank_model_func=None) -> LightRAG:
+    """适配 LightRAG main：用 entity_types_guidance 替代旧 entity_types 列表。"""
     working_dir.mkdir(parents=True, exist_ok=True)
+    concept_env = resolve_concept_env()
     rag = LightRAG(
         working_dir=str(working_dir),
         enable_llm_cache=False,
         enable_llm_cache_for_entity_extract=False,
         addon_params={
             "language": "Chinese",
-            "entity_types": ["MANUAL_MATH_CONCEPT"],
+            "entity_types_guidance": (
+                f"只抽取 {concept_env['domain']} 领域人工概念，"
+                f"实体类型统一为 {concept_env['entity_type']}。"
+            ),
         },
         llm_model_func=build_llm_model_func(llm),
         embedding_func=build_embedding_func(emb),
@@ -416,9 +457,9 @@ def detect_hit(
 ) -> tuple[bool, list[str], dict | None]:
     """严格命中判定：
 
-    只有 entity_type==MANUAL_MATH_CONCEPT 且 entity_name 命中 config 中 concept_name
-    的实体才算强 HIT。
-    - source_type==manual_math_concept 只能作为辅助原因，不能单独算 HIT。
+    只有 entity_type ∈ {MANUAL_CONCEPT, MANUAL_MATH_CONCEPT(legacy)} 且 entity_name
+    命中 config 中 concept_name 的实体才算强 HIT。
+    - source_type ∈ {manual_concept, manual_math_concept} 只能作为辅助原因，不能单独算 HIT。
     - chunk file_path 命中只能作为辅助原因，不能单独算 HIT。
     - 公式/变量/符号/Unknown 类型节点不算 HIT（被 entity_type 门槛过滤）。
     """
@@ -440,16 +481,23 @@ def detect_hit(
             continue
         if name not in mapping_by_name:
             continue
-        if etype == "MANUAL_MATH_CONCEPT":
-            reasons.append(f"entity_type==MANUAL_MATH_CONCEPT | entity_name={name}")
+        if etype in HIT_ENTITY_TYPES:
+            reasons.append(f"entity_type=={etype} | entity_name={name}")
             if name not in seen_candidate_names:
                 seen_candidate_names.add(name)
-                manual_candidates.append(mapping_by_name[name])
-        elif e.get("source_type") == "manual_math_concept":
+                # 合并实体上召回回来的 domain/source_type 到 matched（便于诊断）
+                base = dict(mapping_by_name[name])
+                base.setdefault("hit_entity_type", etype)
+                if e.get("domain"):
+                    base.setdefault("hit_domain", e.get("domain"))
+                if e.get("source_type"):
+                    base.setdefault("hit_source_type", e.get("source_type"))
+                manual_candidates.append(base)
+        elif e.get("source_type") in HIT_SOURCE_TYPES:
             # 仅作辅助原因，不计入 HIT 候选
             if not auxiliary_reason_added:
                 reasons.append(
-                    f"source_type==manual_math_concept(auxiliary, not a HIT by itself) | entity_name={name}"
+                    f"source_type=={e.get('source_type')}(auxiliary, not a HIT by itself) | entity_name={name}"
                 )
                 auxiliary_reason_added = True
 
@@ -459,14 +507,14 @@ def detect_hit(
         if fp and fp in mapping_by_file:
             if not chunk_reason_added:
                 reasons.append(
-                    f"chunk file_path==manual_math_concept(auxiliary, not a HIT by itself) | file_path={fp}"
+                    f"chunk file_path hit(auxiliary, not a HIT by itself) | file_path={fp}"
                 )
                 chunk_reason_added = True
             break
 
     # matched 优先级：
-    #   1) MANUAL_MATH_CONCEPT 且 concept_name 出现在 query
-    #   2) MANUAL_MATH_CONCEPT 且 entity_name 在 mapping_by_name
+    #   1) HIT entity_type 且 concept_name 出现在 query
+    #   2) HIT entity_type 且 entity_name 在 mapping_by_name
     #   3) 其他都不算 HIT
     matched: dict | None = None
 
@@ -495,9 +543,9 @@ def detect_hit(
 # ===========================================================================
 # 严格回答
 # ===========================================================================
-STRICT_SYSTEM_PROMPT = """你是一个严格依据资料回答的数学概念讲解助手。
+STRICT_SYSTEM_PROMPT = """你是一个严格依据资料回答的概念讲解助手。
 
-你只能依据用户提供的【手动概念 Markdown】回答。
+你只能依据用户提供的【人工概念 Markdown】回答。
 禁止补充 Markdown 中没有出现的内容。
 禁止扩展到历史背景、推广形式或其他应用场景。
 如果 Markdown 中没有相关内容，就明确说明“该概念文档中未提供”。
@@ -512,7 +560,7 @@ STRICT_SYSTEM_PROMPT = """你是一个严格依据资料回答的数学概念讲
 async def generate_strict_answer(llm: dict, query: str, md_content: str) -> str:
     user_prompt = (
         f"用户问题：{query}\n\n"
-        f"【手动概念 Markdown】\n{md_content}\n\n"
+        f"【人工概念 Markdown】\n{md_content}\n\n"
         f"请严格依据上述 Markdown 回答用户问题，不要引入文档之外的知识。"
     )
     return await openai_complete_if_cache(
@@ -623,6 +671,9 @@ async def run(args: argparse.Namespace) -> int:
                     "file_path": matched.get("file_path"),
                     "md_path": matched.get("md_path"),
                     "strict": matched.get("strict"),
+                    "domain": matched.get("domain") or matched.get("hit_domain"),
+                    "entity_type": matched.get("hit_entity_type"),
+                    "source_type": matched.get("source_type") or matched.get("hit_source_type"),
                 },
                 ensure_ascii=False,
             )
@@ -662,7 +713,7 @@ async def run(args: argparse.Namespace) -> int:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="测试手动数学概念在 LightRAG 中的结构化召回与严格回答"
+        description="测试人工概念在 LightRAG 中的结构化召回与严格回答"
     )
     p.add_argument(
         "--config",
