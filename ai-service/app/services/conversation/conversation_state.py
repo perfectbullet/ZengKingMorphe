@@ -228,3 +228,10 @@ class ConversationState(TypedDict):
     math_context_used: Optional[bool]            # 数学追问是否使用历史上下文
     math_context_text: Optional[str]             # 数学追问使用的上下文文本（仅给 math prompt，不用于改写题干）
     effective_query: Optional[str]               # 最终用于分类 / 生成的 query（数学题仍以 post_classification_preprocess 后的 user_query 为准）
+    # ── 人工概念检索状态 ──
+    # 概念检索节点（concept_retrieval）写入的字段，用于人工概念库的精确匹配和 LightRAG 召回
+    concept_retrieval_enabled: Optional[bool]    # 概念检索功能是否启用
+    concept_retrieval_hit: Optional[bool]        # 是否命中人工概念库
+    concept_retrieval_reason: Optional[str]      # 命中原因或未命中原因
+    concept_context: Optional[Dict[str, Any]]   # 命中的概念上下文（含 concept_name, content, domain 等）
+    concept_context_source: Optional[str]       # 概念上下文来源（如 "manual_concept_lightrag"）

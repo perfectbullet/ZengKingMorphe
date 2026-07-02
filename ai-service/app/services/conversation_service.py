@@ -315,6 +315,7 @@ class ConversationWorkflow:
         graph.add_node("resolve_context_query", self.nodes.resolve_context_query)
         graph.add_node("finalize_classification", self.nodes.finalize_classification)
         graph.add_node("post_classification_preprocess", self.nodes.post_classification_preprocess)
+        graph.add_node("concept_retrieval", self.nodes.concept_retrieval)
         graph.add_node("evaluate_complexity", self.nodes.evaluate_complexity)
         graph.add_node("web_search", self.nodes.web_search)
         graph.add_node("generate_answer", self.nodes.generate_answer)
@@ -343,6 +344,8 @@ class ConversationWorkflow:
         # path_map 的 key 必须与 ``intent_routing.ROUTE_BRANCH_*`` 一一对应，
         # 任何新增的分支都需要在这里登记，否则 LangGraph 会抛 KeyError。
         from app.services.conversation.intent_routing import (
+            ROUTE_BRANCH_CONCEPT_HIT,
+            ROUTE_BRANCH_CONCEPT_MISS,
             ROUTE_BRANCH_GENERAL,
             ROUTE_BRANCH_GREETING,
             ROUTE_BRANCH_MATH,
@@ -356,8 +359,18 @@ class ConversationWorkflow:
                 ROUTE_BRANCH_GREETING: "generate_answer",   # 问候/噪声 → 直接回答
                 ROUTE_BRANCH_REALTIME: "web_search",        # 实时类 → 联网检索
                 ROUTE_BRANCH_MATH: "generate_answer",       # 数学题 → 数学模型直接回答
-                ROUTE_BRANCH_RAG: "evaluate_complexity",    # 概念/教材类 → 复杂度评估 → RAG
+                ROUTE_BRANCH_RAG: "concept_retrieval",     # 概念/教材类 → 概念检索 → ...
                 ROUTE_BRANCH_GENERAL: "generate_answer",    # 通用 LLM（英语/常识/闲聊）→ 直接回答
+            }
+        )
+
+        # 概念检索后的条件路由
+        graph.add_conditional_edges(
+            "concept_retrieval",
+            self.nodes.route_after_concept_retrieval,
+            {
+                ROUTE_BRANCH_CONCEPT_HIT: "generate_answer",  # 命中人工概念库 → 直接回答
+                ROUTE_BRANCH_CONCEPT_MISS: "evaluate_complexity",  # 未命中 → 复杂度评估 → RAG
             }
         )
 

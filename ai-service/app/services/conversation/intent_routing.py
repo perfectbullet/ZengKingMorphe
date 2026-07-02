@@ -136,8 +136,11 @@ def resolve_answer_mode(classification_label: str | None) -> AnswerMode:
 ROUTE_BRANCH_GREETING = "greeting"  # 含 noise，走 generate_answer 直出
 ROUTE_BRANCH_REALTIME = "realtime"  # 走 web_search 后再 generate_answer
 ROUTE_BRANCH_MATH = "math"          # 走 generate_answer（数学模型）
-ROUTE_BRANCH_RAG = "rag"            # 走 generate_answer（RAGAnything）
+ROUTE_BRANCH_RAG = "rag"            # 走 concept_retrieval → evaluate_complexity / generate_answer（RAGAnything）
 ROUTE_BRANCH_GENERAL = "general"    # 走 generate_answer（通用 LLM，不走 RAG）
+# 概念检索后的路由分支
+ROUTE_BRANCH_CONCEPT_HIT = "concept_hit"      # 命中人工概念库，直接走 generate_answer
+ROUTE_BRANCH_CONCEPT_MISS = "concept_miss"   # 未命中人工概念库，走 evaluate_complexity → generate_answer
 
 
 # 回答模式 → LangGraph 路由分支名。

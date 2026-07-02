@@ -65,6 +65,8 @@ from app.services.conversation.conversation_helpers import (
 from app.services.word_to_latex import word_to_latex
 from app.services.conversation.intent_routing import (
     AnswerMode,
+    ROUTE_BRANCH_CONCEPT_HIT,
+    ROUTE_BRANCH_CONCEPT_MISS,
     ROUTE_BRANCH_GENERAL,
     ROUTE_BRANCH_GREETING,
     ROUTE_BRANCH_MATH,
@@ -1576,6 +1578,147 @@ class ConversationNodes:
         return resolve_route_branch(state.get("answer_mode"))
 
     # -------------------------------------------------------------------------
+    # Workflow Nodes - Concept Retrieval
+    # -------------------------------------------------------------------------
+    async def concept_retrieval(self, state: ConversationState) -> ConversationState:
+        """
+        人工概念检索节点。
+
+        职责：
+        - 对 concept_explain 意图进行人工概念库检索
+        - 支持精确匹配（concept_name/alias）和 LightRAG local 模式召回
+        - 命中时完全跳过 RAGAnything，只依据 concept_context 生成答案
+        - 未命中时继续走 evaluate_complexity → generate_answer（RAGAnything 兜底）
+
+        设计要点：
+        - 只有 classification_label 为 "concept_explain" 时才执行检索
+        - 命中后清理其他 RAG 上下文，避免混合
+        - 使用 ConceptRetrievalService 执行检索逻辑
+        """
+        async with time_node("concept_retrieval", state):
+            # 初始化默认状态
+            state["concept_retrieval_enabled"] = False
+            state["concept_retrieval_hit"] = False
+            state["concept_retrieval_reason"] = None
+            state["concept_context"] = None
+            state["concept_context_source"] = None
+
+            # 只处理 concept_explain 意图
+            label = state.get("classification_label")
+            if label != "concept_explain":
+                state["concept_retrieval_reason"] = "skip_non_concept_explain"
+                logger.info(
+                    f"Concept retrieval skipped: classification_label={label}, "
+                    f"reason=not_concept_explain"
+                )
+                return state
+
+            # 检查功能开关
+            enabled = os.getenv("CONCEPT_RETRIEVAL_ENABLED", "false").lower() in ("true", "1", "yes")
+            if not enabled:
+                state["concept_retrieval_reason"] = "disabled"
+                logger.info("Concept retrieval disabled by CONCEPT_RETRIEVAL_ENABLED")
+                return state
+
+            state["concept_retrieval_enabled"] = True
+
+            # 选择 query
+            query = (
+                state.get("effective_query")
+                or state.get("rewritten_query")
+                or state.get("user_query")
+                or ""
+            )
+
+            if not query:
+                state["concept_retrieval_reason"] = "empty_query"
+                logger.warning("Concept retrieval skipped: empty query")
+                return state
+
+            try:
+                # 调用概念检索服务
+                from app.services.concept_retrieval_service import get_concept_retrieval_service
+
+                service = get_concept_retrieval_service()
+                result = await service.aretrieve(query)
+
+                if result.hit:
+                    # 命中人工概念库
+                    state["concept_retrieval_hit"] = True
+                    state["concept_retrieval_reason"] = result.hit_reason
+                    state["concept_context"] = result.to_dict()
+                    state["concept_context_source"] = "manual_concept_lightrag"
+
+                    # 清理会污染答案的其它上下文
+                    state["retrieved_docs"] = []
+                    state["web_search_results"] = []
+                    state["web_search_used"] = False
+                    state["web_search_error"] = None
+                    state["raganything_query"] = None
+                    state["raganything_mode"] = None
+
+                    # 追加来源
+                    sources = state.get("sources", [])
+                    sources.append({
+                        "type": "text",
+                        "from": "manual_concept",
+                        "text": (result.content or "")[:500],
+                        "citations": [{
+                            "title": result.concept_name or "",
+                            "url": "",
+                            "score": result.confidence,
+                            "snippet": (result.content or "")[:300],
+                            "doc_id": result.doc_id,
+                            "domain": result.domain,
+                            "entity_type": result.entity_type,
+                        }],
+                    })
+                    state["sources"] = sources
+
+                    logger.info(
+                        f"Concept retrieval hit: concept_name={result.concept_name}, "
+                        f"reason={result.hit_reason}, confidence={result.confidence}, "
+                        f"query={query[:50]}"
+                    )
+                else:
+                    # 未命中
+                    state["concept_retrieval_hit"] = False
+                    state["concept_retrieval_reason"] = result.hit_reason or "not_found"
+
+                    logger.info(
+                        f"Concept retrieval miss: reason={result.hit_reason}, "
+                        f"query={query[:50]}"
+                    )
+
+            except Exception as e:
+                logger.exception(
+                    f"Concept retrieval error: query={query[:50]}, error={e}"
+                )
+                state["concept_retrieval_hit"] = False
+                state["concept_retrieval_reason"] = f"error:{type(e).__name__}"
+
+        return state
+
+    @staticmethod
+    def route_after_concept_retrieval(state: ConversationState) -> str:
+        """
+        概念检索后的路由决策。
+
+        路由逻辑：
+        - concept_retrieval_hit=True → concept_hit（直接走 generate_answer）
+        - concept_retrieval_hit=False → concept_miss（走 evaluate_complexity → generate_answer）
+
+        Args:
+            state: 当前对话状态
+
+        Returns:
+            目标分支名（ROUTE_BRANCH_CONCEPT_HIT 或 ROUTE_BRANCH_CONCEPT_MISS）
+        """
+        if state.get("concept_retrieval_hit") and state.get("concept_context"):
+            return ROUTE_BRANCH_CONCEPT_HIT
+        return ROUTE_BRANCH_CONCEPT_MISS
+
+    # -------------------------------------------------------------------------
     # Workflow Nodes - Complexity Evaluation
     # -------------------------------------------------------------------------
     async def evaluate_complexity(self, state: ConversationState) -> ConversationState:
@@ -2280,6 +2423,26 @@ class ConversationNodes:
             #   仅作为细分场景修饰（如 RAG 在已联网情况下退回 langchain_llm）；
             # - 新分支只在本 if/elif 链中追加一条，对应 INTENT_TO_ANSWER_MODE 表。
             answer_mode = state.get("answer_mode") or AnswerMode.GENERAL_LLM.value
+
+            # 人工概念上下文优先：命中人工概念库后完全跳过 RAGAnything，
+            # 只依据 concept_context 生成概念讲解答案。
+            if state.get("concept_retrieval_hit") and state.get("concept_context"):
+                concept_context = state.get("concept_context") or {}
+                messages = build_generation_messages(state)
+                streaming_llm, model_name = self.workflow.get_streaming_llm(state)
+
+                state["streaming_llm"] = streaming_llm
+                state["streaming_messages"] = messages
+                state["streaming_type"] = "langchain_llm"
+                state["confidence"] = max(float(state.get("confidence") or 0.0), 0.9)
+                state["final_answer"] = ""
+
+                logger.info(
+                    f"Streaming configured: type=langchain_llm, manual_concept_context_hit, "
+                    f"concept_name={concept_context.get('concept_name')}, "
+                    f"model={model_name}, answer_mode={answer_mode}"
+                )
+                return state
 
             # web_search 已经命中网络资料：不论 answer_mode 原本是什么，统一交给
             # langchain_llm 用网络上下文生成（避免再去走 RAG，让"实时问题"行为

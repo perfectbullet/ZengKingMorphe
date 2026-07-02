@@ -123,6 +123,54 @@ class ChatStreamV1Tester:
             team_id=self.team_id,
         )
 
+    def _save_response_markdown(self, content: str) -> str:
+        """保存响应内容为 Markdown 文件"""
+        try:
+            # 创建保存目录
+            save_dir = Path(__file__).parent / "saved_responses"
+            save_dir.mkdir(parents=True, exist_ok=True)
+
+            # 生成时间戳文件名（参考 conversation_state 的格式）
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            session_id = self.session_id
+            # 清理查询文本作为文件名
+            safe_query = "".join(c if c.isalnum() or c in ('_', '-') else '_' for c in self.query[:50])
+            filename = f"{timestamp}_{session_id}_{safe_query}_response.md"
+            filepath = save_dir / filename
+
+            # 构建 Markdown 内容
+            markdown_content = f"""# 对话响应
+
+## 基本信息
+
+- **时间**: {self.results['test_time']}
+- **查询**: {self.query}
+- **用户ID**: {self.user_id}
+- **员工ID**: {self.employee_id}
+- **会话ID**: {self.session_id}
+- **模型**: {self.model}
+- **温度**: {self.temperature}
+- **Top-P**: {self.top_p}
+- **耗时**: {self.results.get('duration_ms', 0)}ms
+- **Chunk数量**: {self.results.get('chunk_count', 0)}
+
+## 响应内容
+
+{content}
+
+"""
+
+            # 保存文件
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.write(markdown_content)
+
+            logger.info(f"[保存] 响应内容已保存到: {filepath}")
+            return str(filepath)
+
+        except Exception as e:
+            logger.error(f"[保存失败] 无法保存响应内容: {e}")
+            return None
+
     async def test_stream(self) -> dict:
         """测试流式输出"""
         logger.info("=" * 60)
@@ -193,6 +241,12 @@ class ChatStreamV1Tester:
         logger.info(f"响应长度: {len(full_content)} 字符")
         logger.info("=" * 60)
 
+        # 保存响应为 Markdown
+        saved_path = self._save_response_markdown(full_content)
+        if saved_path:
+            self.results["saved_markdown_path"] = saved_path
+            print(f"📄 响应已保存到: {saved_path}")
+
         # 打印完整响应（截断显示）
         if full_content:
             preview = full_content[:200] + "..." if len(full_content) > 200 else full_content
@@ -213,6 +267,10 @@ class ChatStreamV1Tester:
         print(f"总耗时: {self.results['duration_ms']}ms")
         print(f"Chunk 数量: {self.results.get('chunk_count', 0)}")
         print(f"响应长度: {len(self.results.get('full_response', ''))} 字符")
+
+        # 显示保存的文件路径
+        if self.results.get("saved_markdown_path"):
+            print(f"📄 响应已保存到: {self.results['saved_markdown_path']}")
 
         if self.results.get("error"):
             print(f"错误: {self.results['error']}")

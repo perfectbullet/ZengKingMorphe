@@ -729,6 +729,60 @@ Style:
 - Formality: {formality_desc}
 """
 
+    # 人工概念上下文处理：命中人工概念库后严格依据概念内容回答，
+    # 禁止引入资料正文之外的知识，禁止混合其他上下文来源。
+    if state.get("concept_retrieval_hit") and state.get("concept_context"):
+        concept_context = state.get("concept_context") or {}
+        concept_name = concept_context.get("concept_name", "")
+        concept_domain = concept_context.get("domain", "")
+        concept_content = concept_context.get("content", "")
+
+        if prefer_zh_output:
+            concept_requirements = f"""【人工概念资料】
+概念名：{concept_name}
+领域：{concept_domain}
+资料正文：
+{concept_content}
+
+回答要求：
+1. 只能依据【人工概念资料】回答用户问题；
+2. 禁止引入资料正文之外的知识、例子、历史背景、推广形式或应用场景；
+3. 如果资料正文没有提供相关内容，明确说明"该概念文档中未提供"；
+4. 尽量贴近原文表达；
+5. 如果原文已经完整，可以直接转述原文；
+6. 不要提及 RAG、知识库、检索过程、数据来源路径；
+7. 不要追加与问题无关的反问。
+
+用户问题：
+{effective_query}
+"""
+        else:
+            concept_requirements = f"""【Manual Concept Material】
+Concept Name: {concept_name}
+Domain: {concept_domain}
+Content:
+{concept_content}
+
+Answer Requirements:
+1. Answer ONLY based on the 【Manual Concept Material】 above;
+2. Do NOT introduce knowledge, examples, background, or applications beyond the provided content;
+3. If the content doesn't provide relevant information, explicitly state "not provided in this concept document";
+4. Stay close to the original text expression;
+5. If the original text is complete, you may paraphrase it directly;
+6. Do NOT mention RAG, knowledge bases, retrieval processes, or data sources;
+7. Do NOT add unrelated follow-up questions.
+
+User Question:
+{effective_query}
+"""
+
+        messages = [
+            SystemMessage(content=base_prompt + concept_requirements),
+            *_build_conversation_history(state),
+            HumanMessage(content=effective_query),
+        ]
+        return messages
+
     # Add scenario-specific instructions
     if state.get("web_search_used", False) and state.get("is_realtime_query", False):
         temporal_guardrail = _build_realtime_temporal_guardrail(prefer_zh_output)

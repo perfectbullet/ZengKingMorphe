@@ -524,6 +524,12 @@ _STATE_DEFAULTS: ConversationState = {
     "math_context_used": False,
     "math_context_text": None,
     "effective_query": None,
+    # ── 人工概念检索状态 ──
+    "concept_retrieval_enabled": False,
+    "concept_retrieval_hit": False,
+    "concept_retrieval_reason": None,
+    "concept_context": None,
+    "concept_context_source": None,
 }
 
 # 启动时校验：_STATE_DEFAULTS 必须覆盖 ConversationState 的全部字段
