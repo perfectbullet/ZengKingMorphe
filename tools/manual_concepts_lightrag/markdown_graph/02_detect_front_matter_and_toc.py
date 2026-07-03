@@ -146,6 +146,20 @@ def normalize_body_start_line(
     )
 
 
+def is_numbering_only_title(title: str) -> bool:
+    """Return True when a catalog title contains a number but no title text."""
+    compact = "".join(title.split()).replace("．", ".").rstrip(".")
+    if compact and all(part.isdigit() for part in compact.split(".")):
+        return True
+    if compact.startswith("第") and compact.endswith(("章", "节", "篇")):
+        number = compact[1:-1]
+        chinese_digits = set("零〇一二三四五六七八九十百千万两")
+        return number.isdigit() or (
+            bool(number) and all(char in chinese_digits for char in number)
+        )
+    return False
+
+
 def validate_and_normalize_catalog_items(items: list) -> list[dict]:
     """Validate catalog item fields and keep a printed page out of title."""
     normalized_items: list[dict] = []
@@ -185,6 +199,8 @@ def validate_and_normalize_catalog_items(items: list) -> list[dict]:
             title_parts = title.rsplit(maxsplit=1)
             if len(title_parts) == 2 and title_parts[1] == page_hint:
                 title = title_parts[0]
+        if is_numbering_only_title(title):
+            logger.warning("%s 的 title 只有编号、缺少标题文本: %s", label, title)
 
         normalized_items.append(
             {
