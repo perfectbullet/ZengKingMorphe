@@ -15,6 +15,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 from lightrag import LightRAG
+from lightrag.operate import merge_nodes_and_edges
 
 from common import (
     DEFAULT_WORKING_DIR,
@@ -119,6 +120,7 @@ async def import_custom_chunks(
 
     new_docs: dict[str, dict[str, Any]] = {}
     inserting_chunks: dict[str, dict[str, Any]] = {}
+    inserting_chunks_by_doc: dict[str, dict[str, dict[str, Any]]] = {}
     for doc_id, doc_chunks in grouped.items():
         doc_chunks.sort(key=lambda item: int(item["chunk_order_index"]))
         if replace:
@@ -140,35 +142,82 @@ async def import_custom_chunks(
                 f"同一 doc_id 对应多个 source_md_path: {doc_id}: {sorted(source_paths)}"
             )
         new_docs[doc_id] = {"content": full_text, "file_path": next(iter(source_paths))}
+        doc_inserting_chunks: dict[str, dict[str, Any]] = {}
         for chunk in doc_chunks:
             chunk_id = str(chunk["chunk_id"])
             content = str(chunk["content"])
-            inserting_chunks[chunk_id] = {
+            chunk_record = {
                 "content": content,
                 "full_doc_id": doc_id,
                 "tokens": len(rag.tokenizer.encode(content)),
                 "chunk_order_index": int(chunk["chunk_order_index"]),
                 "file_path": str(chunk["file_path"]),
             }
+            inserting_chunks[chunk_id] = chunk_record
+            doc_inserting_chunks[chunk_id] = chunk_record
+        inserting_chunks_by_doc[doc_id] = doc_inserting_chunks
 
     flush_needed = False
     active_error: BaseException | None = None
     try:
         flush_needed = True
         await rag.chunks_vdb.upsert(inserting_chunks)
-        try:
-            extraction_results = await rag._process_extract_entities(inserting_chunks)
-        except Exception as exc:
-            raise EntityExtractionError(
-                f"实体关系抽取失败: {type(exc).__name__}: {exc}",
-                chunks,
-            ) from exc
         await rag.full_docs.upsert(new_docs)
         await rag.text_chunks.upsert(inserting_chunks)
+
+        extraction_result_count = 0
+        extracted_entity_mentions = 0
+        extracted_relation_mentions = 0
+        total_docs = len(inserting_chunks_by_doc)
+        for doc_number, (doc_id, doc_chunks) in enumerate(
+            inserting_chunks_by_doc.items(), 1
+        ):
+            pipeline_status = {
+                "latest_message": "",
+                "history_messages": [],
+                "cancellation_requested": False,
+            }
+            pipeline_status_lock = asyncio.Lock()
+            try:
+                extraction_results = await rag._process_extract_entities(
+                    doc_chunks,
+                    pipeline_status,
+                    pipeline_status_lock,
+                )
+                extraction_result_count += len(extraction_results or [])
+                for maybe_nodes, maybe_edges in extraction_results or []:
+                    extracted_entity_mentions += len(maybe_nodes)
+                    extracted_relation_mentions += len(maybe_edges)
+                await merge_nodes_and_edges(
+                    chunk_results=extraction_results,
+                    knowledge_graph_inst=rag.chunk_entity_relation_graph,
+                    entity_vdb=rag.entities_vdb,
+                    relationships_vdb=rag.relationships_vdb,
+                    global_config=rag._build_global_config(),
+                    full_entities_storage=rag.full_entities,
+                    full_relations_storage=rag.full_relations,
+                    doc_id=doc_id,
+                    pipeline_status=pipeline_status,
+                    pipeline_status_lock=pipeline_status_lock,
+                    llm_response_cache=rag.llm_response_cache,
+                    entity_chunks_storage=rag.entity_chunks,
+                    relation_chunks_storage=rag.relation_chunks,
+                    current_file_number=doc_number,
+                    total_files=total_docs,
+                    file_path=new_docs[doc_id]["file_path"],
+                )
+            except Exception as exc:
+                failed_doc_chunks = grouped[doc_id]
+                raise EntityExtractionError(
+                    f"实体关系抽取或合并失败: {type(exc).__name__}: {exc}",
+                    failed_doc_chunks,
+                ) from exc
         return {
             "doc_count": len(new_docs),
             "chunk_count": len(inserting_chunks),
-            "extraction_result_count": len(extraction_results or []),
+            "extraction_result_count": extraction_result_count,
+            "extracted_entity_mentions": extracted_entity_mentions,
+            "extracted_relation_mentions": extracted_relation_mentions,
         }
     except BaseException as exc:
         active_error = exc
@@ -214,7 +263,13 @@ async def run(args: argparse.Namespace) -> int:
     started = datetime.now(timezone.utc)
     failures: list[dict] = []
     error_message = ""
-    result = {"doc_count": 0, "chunk_count": len(chunks), "extraction_result_count": 0}
+    result = {
+        "doc_count": 0,
+        "chunk_count": len(chunks),
+        "extraction_result_count": 0,
+        "extracted_entity_mentions": 0,
+        "extracted_relation_mentions": 0,
+    }
 
     llm = resolve_llm_config()
     embedding = resolve_embedding_config()
@@ -244,6 +299,7 @@ async def run(args: argparse.Namespace) -> int:
                 for chunk in exc.chunks
             ]
         labels = await rag.get_graph_labels()
+        relations = await rag.chunk_entity_relation_graph.get_all_edges()
     finally:
         await rag.finalize_storages()
         logger.info("LightRAG storages finalized")
@@ -254,6 +310,9 @@ async def run(args: argparse.Namespace) -> int:
         "doc_count": result["doc_count"],
         "chunk_count": result["chunk_count"],
         "entity_count_after": len(labels),
+        "relation_count_after": len(relations),
+        "extracted_entity_mentions": result["extracted_entity_mentions"],
+        "extracted_relation_mentions": result["extracted_relation_mentions"],
         "replace": bool(args.replace),
         "failures": len(failures),
         "started_at": started.isoformat(),

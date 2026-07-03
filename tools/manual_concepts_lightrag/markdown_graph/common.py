@@ -152,8 +152,13 @@ def resolve_embedding_config() -> dict:
     }
 
 
-def build_llm_request_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
-    """Apply this pipeline's fixed generation settings to an LLM request."""
+def build_llm_request_kwargs(
+    kwargs: dict[str, Any],
+    *,
+    max_tokens: int,
+    temperature: float,
+) -> dict[str, Any]:
+    """Apply one pipeline stage's generation settings to an LLM request."""
     request_kwargs = dict(kwargs)
     extra_body_value = request_kwargs.get("extra_body")
     if extra_body_value is None:
@@ -176,12 +181,16 @@ def build_llm_request_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
     request_kwargs["extra_body"] = extra_body
     # This separately disables LightRAG's reasoning-content/COT integration.
     request_kwargs["enable_cot"] = False
-    request_kwargs["max_tokens"] = 20480
-    request_kwargs["temperature"] = 0.7
+    request_kwargs["max_tokens"] = max_tokens
+    request_kwargs["temperature"] = temperature
     return request_kwargs
 
 
-def build_llm_model_func():
+def build_llm_model_func(
+    *,
+    max_tokens: int = 20480,
+    temperature: float = 0.7,
+):
     from lightrag.llm.openai import openai_complete_if_cache
 
     config = resolve_llm_config()
@@ -192,7 +201,11 @@ def build_llm_model_func():
         history_messages: list | None = None,
         **kwargs: Any,
     ) -> str:
-        request_kwargs = build_llm_request_kwargs(kwargs)
+        request_kwargs = build_llm_request_kwargs(
+            kwargs,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
         return await openai_complete_if_cache(
             config["model"],
             prompt,

@@ -28,7 +28,12 @@ from common import (
 logger = logging.getLogger(__name__)
 
 
-def build_rag(working_dir: Path, domain: str, subject: str) -> LightRAG:
+def build_rag(
+    working_dir: Path,
+    domain: str,
+    subject: str,
+    query_max_tokens: int,
+) -> LightRAG:
     guidance = load_prompt(PROJECT_DIR / "prompts/graph_extraction_guidance.md")
     guidance = (
         f"{guidance.strip()}\n\n当前领域：{domain}\n当前科目：{subject or '未指定'}"
@@ -41,7 +46,7 @@ def build_rag(working_dir: Path, domain: str, subject: str) -> LightRAG:
             "language": "Chinese",
             "entity_types_guidance": guidance,
         },
-        llm_model_func=build_llm_model_func(),
+        llm_model_func=build_llm_model_func(max_tokens=query_max_tokens),
         embedding_func=build_embedding_func(),
     )
 
@@ -71,6 +76,12 @@ def parse_args() -> argparse.Namespace:
         choices=["local", "global", "hybrid", "naive", "mix"],
         default="hybrid",
     )
+    parser.add_argument(
+        "--query-max-tokens",
+        type=int,
+        default=int(os.getenv("MARKDOWN_GRAPH_QUERY_MAX_TOKENS", "4096")),
+        help="查询回答最大输出 token，默认 4096",
+    )
     parser.add_argument("--output", type=Path)
     parser.add_argument("--env-file", type=Path, default=PROJECT_DIR.parent / ".env")
     return parser.parse_args()
@@ -94,7 +105,14 @@ async def run(args: argparse.Namespace) -> Path:
         .expanduser()
         .resolve()
     )
-    rag = build_rag(working_dir, args.domain, args.subject)
+    if args.query_max_tokens <= 0:
+        raise ValueError("--query-max-tokens 必须大于 0")
+    rag = build_rag(
+        working_dir,
+        args.domain,
+        args.subject,
+        args.query_max_tokens,
+    )
     await rag.initialize_storages()
     report = [
         "# LightRAG 图谱验证报告",
@@ -102,6 +120,7 @@ async def run(args: argparse.Namespace) -> Path:
         f"- 时间: {datetime.now(timezone.utc).isoformat()}",
         f"- working_dir: `{working_dir}`",
     ]
+    query_failures: list[str] = []
     try:
         labels = await rag.get_graph_labels()
         report.extend(
@@ -140,8 +159,15 @@ async def run(args: argparse.Namespace) -> Path:
         if args.query:
             param = QueryParam(mode=args.query_mode, stream=False, enable_rerank=False)
             for query in args.query:
-                response = await rag.aquery(query, param=param)
-                report.extend([f"### {query}", "", str(response), ""])
+                try:
+                    response = await rag.aquery(query, param=param)
+                    if response is None or not str(response).strip():
+                        raise RuntimeError("LightRAG 返回空回答")
+                    report.extend([f"### {query}", "", str(response), ""])
+                except Exception as exc:
+                    error = f"{type(exc).__name__}: {exc}"
+                    query_failures.append(f"{query}: {error}")
+                    report.extend([f"### {query}", "", f"- ERROR: {error}", ""])
         else:
             report.extend(["- 未指定 --query，仅完成图和实体检查。", ""])
     finally:
@@ -149,6 +175,11 @@ async def run(args: argparse.Namespace) -> Path:
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text("\n".join(report) + "\n", encoding="utf-8")
     logger.info("验证完成 | output=%s", output)
+    if query_failures:
+        raise RuntimeError(
+            f"{len(query_failures)} 个查询失败；详情见 {output}: "
+            + " | ".join(query_failures)
+        )
     return output
 
 

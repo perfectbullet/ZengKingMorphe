@@ -134,6 +134,7 @@ tools/manual_concepts_lightrag/lightrag.log
 tools/manual_concepts_lightrag/markdown_graph/outputs/*
 !tools/manual_concepts_lightrag/markdown_graph/outputs/.gitkeep
 tools/manual_concepts_lightrag/markdown_graph/*.log
+tools/manual_concepts_lightrag/markdown_graph/debug_contexts/
 ai-service/data/lightrag_manual_concepts_custom_kg/*
 ai-service/data/lightrag_industrial_training/
 ai-service/tests/saved_responses/*
