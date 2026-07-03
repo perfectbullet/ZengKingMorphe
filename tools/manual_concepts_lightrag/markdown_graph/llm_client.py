@@ -25,8 +25,11 @@ async def call_llm_json(
     raw_output_path: Path | None = None,
     expect_jsonl: bool = False,
     guided_json_schema: dict | None = None,
+    max_tokens: int = 20480,
 ) -> dict | list[dict]:
-    llm_func = build_llm_model_func()
+    if max_tokens <= 0:
+        raise ValueError("max_tokens 必须大于 0")
+    llm_func = build_llm_model_func(max_tokens=max_tokens)
     raw_text = ""
     try:
         extra_body = {"guided_json": guided_json_schema} if guided_json_schema else None
