@@ -36,16 +36,23 @@ PYTHON_BIN="${PYTHON_BIN:-/home/zj/miniconda3/envs/morphe/bin/python}"
 WORKING_DIR="${MARKDOWN_GRAPH_WORKING_DIR:-/home/zj/ZengKingMorphe/ai-service/data/lightrag_industrial_training}"
 DOMAIN="${MARKDOWN_GRAPH_DOMAIN:-industrial_training}"
 FRONT_LINES="${STRUCTURE_FRONT_LINES:-1000}"
-WINDOW_LINES="${STRUCTURE_WINDOW_LINES:-320}"
-OVERLAP_LINES="${STRUCTURE_OVERLAP_LINES:-60}"
+TOC_START_LINE="${STRUCTURE_TOC_START_LINE:-}"
+TOC_END_LINE="${STRUCTURE_TOC_END_LINE:-}"
+BODY_START_LINE="${STRUCTURE_BODY_START_LINE:-}"
 MAX_LINES="${MAX_BLOCK_LINES_WARN:-500}"
 MAX_CHARS="${MAX_BLOCK_CHARS_WARN:-12000}"
 IMPORT_METHOD="${MARKDOWN_GRAPH_IMPORT_METHOD:-custom_chunks}"
 VALIDATE_QUERY="${MARKDOWN_GRAPH_VALIDATE_QUERY:-请概述本教材的核心概念和主要工艺流程}"
+TOP_K_CANDIDATES="${TOP_K_CANDIDATE_TITLE_LINES:-12}"
+MIN_ANCHOR_CONFIDENCE="${MIN_ANCHOR_CONFIDENCE:-0.65}"
+MAX_UNMATCHED="${MAX_UNMATCHED_CATALOG_ITEMS:-0}"
+USE_EXISTING_ANCHOR_PLAN="${MARKDOWN_GRAPH_USE_EXISTING_ANCHOR_PLAN:-false}"
 
 PREPARED="$SCRIPT_DIR/outputs/01_prepared/$BOOK_STEM.prepared.json"
 OUTLINE="$SCRIPT_DIR/outputs/02_outline/$BOOK_STEM.book_outline.json"
 RAW_PLAN="$SCRIPT_DIR/outputs/03_structure_plan/$BOOK_STEM.structure_plan.raw.jsonl"
+ANCHOR_PLAN="$SCRIPT_DIR/outputs/03_structure_plan/$BOOK_STEM.catalog_anchor_plan.jsonl"
+UNMATCHED_REPORT="$SCRIPT_DIR/outputs/03_structure_plan/$BOOK_STEM.unmatched_report.md"
 VALIDATED_PLAN="$SCRIPT_DIR/outputs/04_blocks/$BOOK_STEM.structure_plan.validated.jsonl"
 BLOCKS="$SCRIPT_DIR/outputs/04_blocks/$BOOK_STEM.blocks.jsonl"
 VALIDATION_REPORT="$SCRIPT_DIR/outputs/04_blocks/$BOOK_STEM.validation_report.md"
@@ -59,11 +66,23 @@ run_step() {
       ;;
     2)
       echo "[2/7] Detect front matter and table of contents"
-      "$PYTHON_BIN" "$SCRIPT_DIR/02_detect_front_matter_and_toc.py" --prepared "$PREPARED" --output "$OUTLINE" --front-lines "$FRONT_LINES"
+      outline_args=(--prepared "$PREPARED" --output "$OUTLINE" --front-lines "$FRONT_LINES")
+      if [[ -n "$TOC_START_LINE" || -n "$TOC_END_LINE" || -n "$BODY_START_LINE" ]]; then
+        if [[ -z "$TOC_START_LINE" || -z "$TOC_END_LINE" || -z "$BODY_START_LINE" ]]; then
+          echo "STRUCTURE_TOC_START_LINE, STRUCTURE_TOC_END_LINE and STRUCTURE_BODY_START_LINE must be set together" >&2
+          exit 2
+        fi
+        outline_args+=(--toc-start-line "$TOC_START_LINE" --toc-end-line "$TOC_END_LINE" --body-start-line "$BODY_START_LINE")
+      fi
+      "$PYTHON_BIN" "$SCRIPT_DIR/02_detect_front_matter_and_toc.py" "${outline_args[@]}"
       ;;
     3)
-      echo "[3/7] Build LLM structure plan"
-      "$PYTHON_BIN" "$SCRIPT_DIR/03_llm_structure_plan.py" --prepared "$PREPARED" --outline "$OUTLINE" --output "$RAW_PLAN" --window-lines "$WINDOW_LINES" --overlap-lines "$OVERLAP_LINES"
+      echo "[3/7] Build catalog-driven structure plan"
+      if [[ "$USE_EXISTING_ANCHOR_PLAN" == "true" && -f "$ANCHOR_PLAN" ]]; then
+        "$PYTHON_BIN" "$SCRIPT_DIR/03_catalog_structure_plan.py" --prepared "$PREPARED" --outline "$OUTLINE" --output "$RAW_PLAN" --anchor-plan "$ANCHOR_PLAN" --unmatched-report "$UNMATCHED_REPORT" --use-existing-anchor-plan "$ANCHOR_PLAN" --top-k-candidates "$TOP_K_CANDIDATES" --min-anchor-confidence "$MIN_ANCHOR_CONFIDENCE" --max-unmatched "$MAX_UNMATCHED"
+      else
+        "$PYTHON_BIN" "$SCRIPT_DIR/03_catalog_structure_plan.py" --prepared "$PREPARED" --outline "$OUTLINE" --output "$RAW_PLAN" --anchor-plan "$ANCHOR_PLAN" --unmatched-report "$UNMATCHED_REPORT" --top-k-candidates "$TOP_K_CANDIDATES" --min-anchor-confidence "$MIN_ANCHOR_CONFIDENCE" --max-unmatched "$MAX_UNMATCHED"
+      fi
       ;;
     4)
       echo "[4/7] Validate and apply structure plan"

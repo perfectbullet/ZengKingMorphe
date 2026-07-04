@@ -109,6 +109,36 @@ def parse_args() -> argparse.Namespace:
         default=int(os.getenv("STRUCTURE_FRONT_LINES", "1000")),
         help="发送给 LLM 的文档前部行数",
     )
+    parser.add_argument(
+        "--toc-start-line",
+        type=int,
+        default=(
+            int(os.environ["STRUCTURE_TOC_START_LINE"])
+            if os.getenv("STRUCTURE_TOC_START_LINE")
+            else None
+        ),
+        help="人工覆盖目录起始行，必须与 toc-end/body-start 一起使用",
+    )
+    parser.add_argument(
+        "--toc-end-line",
+        type=int,
+        default=(
+            int(os.environ["STRUCTURE_TOC_END_LINE"])
+            if os.getenv("STRUCTURE_TOC_END_LINE")
+            else None
+        ),
+        help="人工覆盖目录结束行，必须与 toc-start/body-start 一起使用",
+    )
+    parser.add_argument(
+        "--body-start-line",
+        type=int,
+        default=(
+            int(os.environ["STRUCTURE_BODY_START_LINE"])
+            if os.getenv("STRUCTURE_BODY_START_LINE")
+            else None
+        ),
+        help="人工覆盖正文起始行，必须与 toc-start/toc-end 一起使用",
+    )
     parser.add_argument("--env-file", type=Path, default=PROJECT_DIR.parent / ".env")
     return parser.parse_args()
 
@@ -251,6 +281,28 @@ async def run(args: argparse.Namespace) -> Path:
     missing = required - ranges.keys()
     if missing:
         raise ValueError(f"边界识别结果缺少字段: {sorted(missing)}")
+    normalization_notes: list[str] = []
+    manual_boundaries = (
+        args.toc_start_line,
+        args.toc_end_line,
+        args.body_start_line,
+    )
+    if any(value is not None for value in manual_boundaries):
+        if not all(value is not None for value in manual_boundaries):
+            raise ValueError(
+                "人工边界覆盖必须同时提供 --toc-start-line、"
+                "--toc-end-line 和 --body-start-line"
+            )
+        previous_toc = ranges.get("toc_range")
+        previous_body = ranges.get("body_start_line")
+        ranges["toc_range"] = [args.toc_start_line, args.toc_end_line]
+        ranges["body_start_line"] = args.body_start_line
+        note = (
+            f"人工覆盖边界: toc_range {previous_toc} -> {ranges['toc_range']}，"
+            f"body_start_line {previous_body} -> {args.body_start_line}"
+        )
+        logger.warning(note)
+        normalization_notes.append(note)
     visible_end = min(args.front_lines, int(prepared["line_count"]))
     for field in ("front_matter_range", "toc_range"):
         value = ranges.get(field)
@@ -268,7 +320,6 @@ async def run(args: argparse.Namespace) -> Path:
     body_start = ranges["body_start_line"]
     if not isinstance(body_start, int) or not 1 <= body_start <= visible_end:
         raise ValueError(f"body_start_line 越界: {body_start}")
-    normalization_notes: list[str] = []
     normalized_body_start = normalize_body_start_line(
         prepared["lines"], body_start, visible_end
     )
