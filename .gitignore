@@ -138,3 +138,5 @@ tools/manual_concepts_lightrag/markdown_graph/debug_contexts/
 ai-service/data/lightrag_manual_concepts_custom_kg/*
 ai-service/data/lightrag_industrial_training/
 ai-service/tests/saved_responses/*
+tools/call_online_mineru/output/
+tools/manual_concepts_lightrag/markdown_graph/backups/lightrag_industrial_training_before_import_20260706_145323.tar.gz
