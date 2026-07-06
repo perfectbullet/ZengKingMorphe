@@ -280,6 +280,8 @@ def run(args: argparse.Namespace) -> tuple[Path, Path, Path]:
                         "relative_path": image["relative_path"],
                         "absolute_path": image["absolute_path"],
                         "exists": image["exists"],
+                        "reference_type": image.get("reference_type", "local_file"),
+                        "url": image.get("url", ""),
                         "caption": captions[0]["text"] if captions else "",
                     }
                 )

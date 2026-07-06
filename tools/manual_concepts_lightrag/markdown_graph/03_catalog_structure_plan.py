@@ -414,6 +414,78 @@ def unmatched_anchor(
         "reason": reason,
         "manual_override": False,
         "review_status": "unmatched",
+        "anchor_status": "blocking_unmatched",
+        "source_missing": False,
+        "invalid": False,
+        "top_candidates": candidates,
+    }
+
+
+def invalid_anchor(
+    catalog_index: int,
+    catalog_item: dict,
+    candidates: list[dict[str, Any]],
+    reason: str,
+) -> dict[str, Any]:
+    anchor = unmatched_anchor(catalog_index, catalog_item, candidates, reason)
+    anchor["review_status"] = "invalid"
+    anchor["anchor_status"] = "invalid"
+    anchor["invalid"] = True
+    return anchor
+
+
+def validate_source_missing_anchor(
+    source: Any,
+    catalog_index: int,
+    catalog_item: dict,
+    candidates: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Validate a manual source_missing record, or return None when not requested."""
+    if not isinstance(source, dict) or source.get("review_status") != "source_missing":
+        return None
+    errors: list[str] = []
+    if source.get("catalog_index") != catalog_index:
+        errors.append(
+            f"catalog_index 不一致: expected={catalog_index} "
+            f"actual={source.get('catalog_index')!r}"
+        )
+    if source.get("matched") is not False:
+        errors.append("source_missing 必须 matched=false")
+    if source.get("manual_override") is not True:
+        errors.append("source_missing 必须 manual_override=true")
+    if source.get("missing_source") is not True:
+        errors.append("source_missing 必须 missing_source=true")
+    reason = str(source.get("reason") or "").strip()
+    missing_reason = str(source.get("missing_reason") or "").strip()
+    if not reason:
+        errors.append("source_missing 的 reason 必须非空")
+    if not missing_reason:
+        errors.append("source_missing 的 missing_reason 必须非空")
+    if errors:
+        return invalid_anchor(
+            catalog_index,
+            catalog_item,
+            candidates,
+            "；".join(errors),
+        )
+    return {
+        "catalog_index": catalog_index,
+        "catalog_level": int(catalog_item["level"]),
+        "catalog_title": str(catalog_item["title"]),
+        "catalog_number_key": extract_number_key(str(catalog_item["title"])),
+        "matched": False,
+        "matched_candidate_id": None,
+        "matched_start_line": None,
+        "matched_title_text": "",
+        "confidence": 0.0,
+        "reason": reason or missing_reason,
+        "missing_reason": missing_reason,
+        "missing_source": True,
+        "manual_override": True,
+        "review_status": "source_missing",
+        "anchor_status": "source_missing",
+        "source_missing": True,
+        "invalid": False,
         "top_candidates": candidates,
     }
 
@@ -605,6 +677,9 @@ def validate_anchor(
                 source.get("review_status")
                 or ("manual_corrected" if manual_override else "llm_matched")
             ),
+            "anchor_status": "matched",
+            "source_missing": False,
+            "invalid": False,
         }
     )
     return base
@@ -697,6 +772,9 @@ def validate_anchor_order(anchors: list[dict[str, Any]]) -> None:
         )
         anchor["matched"] = False
         anchor["review_status"] = "unmatched"
+        anchor["anchor_status"] = "blocking_unmatched"
+        anchor["source_missing"] = False
+        anchor["invalid"] = False
         anchor["reason"] = (
             "锚点不属于目录顺序的全局最长严格递增序列: "
             f"candidate={rejected_id} line={rejected_line}"
@@ -827,23 +905,31 @@ def load_existing_anchors(
         zip(catalog, candidate_sets), start=1
     ):
         if catalog_index in duplicates:
-            anchor = unmatched_anchor(
+            anchor = invalid_anchor(
                 catalog_index, catalog_item, candidates, "已有 anchor plan 中该索引重复"
             )
         elif catalog_index not in by_index:
-            anchor = unmatched_anchor(
+            anchor = invalid_anchor(
                 catalog_index, catalog_item, candidates, "已有 anchor plan 缺少该目录项"
             )
         else:
-            anchor = validate_anchor(
-                by_index[catalog_index],
+            source = by_index[catalog_index]
+            anchor = validate_source_missing_anchor(
+                source,
                 catalog_index,
                 catalog_item,
                 candidates,
-                body_start_line=body_start_line,
-                line_count=line_count,
-                min_confidence=min_confidence,
             )
+            if anchor is None:
+                anchor = validate_anchor(
+                    source,
+                    catalog_index,
+                    catalog_item,
+                    candidates,
+                    body_start_line=body_start_line,
+                    line_count=line_count,
+                    min_confidence=min_confidence,
+                )
         anchors.append(anchor)
     out_of_range = sorted(index for index in by_index if not 1 <= index <= len(catalog))
     if out_of_range:
@@ -1023,22 +1109,65 @@ def write_unmatched_report(
     manual_mode: bool,
     notes: list[str] | None = None,
 ) -> None:
-    unmatched = [anchor for anchor in anchors if not anchor["matched"]]
+    matched = [anchor for anchor in anchors if anchor["matched"]]
+    source_missing = [
+        anchor for anchor in anchors if anchor.get("anchor_status") == "source_missing"
+    ]
+    invalid = [
+        anchor for anchor in anchors if anchor.get("anchor_status") == "invalid"
+    ]
+    blocking_unmatched = [
+        anchor
+        for anchor in anchors
+        if not anchor["matched"]
+        and anchor.get("anchor_status") not in {"source_missing", "invalid"}
+    ]
     content = [
         "# 目录锚点未匹配报告",
         "",
         f"- 目录项总数: {len(anchors)}",
-        f"- matched: {len(anchors) - len(unmatched)}",
-        f"- unmatched: {len(unmatched)}",
+        f"- matched_count: {len(matched)}",
+        f"- source_missing_count: {len(source_missing)}",
+        f"- blocking_unmatched_count: {len(blocking_unmatched)}",
+        f"- invalid_count: {len(invalid)}",
         f"- max_unmatched: {max_unmatched}",
         f"- 模式: {'人工复核' if manual_mode else 'LLM'}",
     ]
     if notes:
         content.extend(["", "## 读取提示", ""])
         content.extend(f"- {note}" for note in notes)
-    if unmatched:
+    if source_missing:
+        content.extend(["", "## Source Missing 目录项", ""])
+        for anchor in source_missing:
+            content.extend(
+                [
+                    f"### {anchor['catalog_index']}. {anchor['catalog_title']}",
+                    "",
+                    f"- catalog_index: {anchor['catalog_index']}",
+                    f"- title: {anchor['catalog_title']}",
+                    f"- level: {anchor['catalog_level']}",
+                    f"- number_key: {anchor['catalog_number_key'] or '<empty>'}",
+                    f"- reason: {anchor['reason']}",
+                    f"- missing_reason: {anchor.get('missing_reason') or '<empty>'}",
+                    "",
+                ]
+            )
+    if invalid:
+        content.extend(["", "## Invalid 目录项", ""])
+        for anchor in invalid:
+            content.extend(
+                [
+                    f"### {anchor['catalog_index']}. {anchor['catalog_title']}",
+                    "",
+                    f"- 原因: {anchor['reason']}",
+                    f"- level: {anchor['catalog_level']}",
+                    f"- number_key: {anchor['catalog_number_key'] or '<empty>'}",
+                    "",
+                ]
+            )
+    if blocking_unmatched:
         content.extend(["", "## Unmatched 目录项", ""])
-        for anchor in unmatched:
+        for anchor in blocking_unmatched:
             content.extend(
                 [
                     f"### {anchor['catalog_index']}. {anchor['catalog_title']}",
@@ -1059,7 +1188,7 @@ def write_unmatched_report(
             else:
                 content.append("  - <none>")
             content.append("")
-    else:
+    if not source_missing and not invalid and not blocking_unmatched:
         content.extend(["", "全部目录项均已匹配。", ""])
     ensure_dir(path.parent)
     path.write_text("\n".join(content).rstrip() + "\n", encoding="utf-8")
@@ -1168,7 +1297,18 @@ async def run(args: argparse.Namespace) -> Path:
         write_jsonl(anchor_plan, anchors)
         logger.info("anchor plan 已写入 | %s", anchor_plan)
 
-    unmatched_count = sum(not anchor["matched"] for anchor in anchors)
+    matched_count = sum(anchor["matched"] for anchor in anchors)
+    source_missing_count = sum(
+        anchor.get("anchor_status") == "source_missing" for anchor in anchors
+    )
+    invalid_count = sum(
+        anchor.get("anchor_status") == "invalid" for anchor in anchors
+    )
+    blocking_unmatched_count = sum(
+        not anchor["matched"]
+        and anchor.get("anchor_status") not in {"source_missing", "invalid"}
+        for anchor in anchors
+    )
     write_unmatched_report(
         unmatched_report,
         anchors,
@@ -1176,24 +1316,26 @@ async def run(args: argparse.Namespace) -> Path:
         manual_mode=manual_mode,
         notes=report_notes,
     )
-    must_fail = unmatched_count > args.max_unmatched or (
-        manual_mode and unmatched_count > 0
-    )
+    blocking_count = blocking_unmatched_count + invalid_count
+    must_fail = blocking_count > args.max_unmatched
     if must_fail:
         output.unlink(missing_ok=True)
         raise UnmatchedAnchorsError(
-            f"目录锚点存在 {unmatched_count} 个 unmatched，"
+            f"目录锚点存在 blocking_unmatched={blocking_unmatched_count}、"
+            f"invalid={invalid_count}，合计 {blocking_count}；"
             f"允许上限 {args.max_unmatched}；报告: {unmatched_report}"
         )
 
     structure_plan = build_structure_plan(prepared, outline, anchors)
     write_jsonl(output, structure_plan)
     logger.info(
-        "目录驱动 structure plan 完成 | catalog=%d matched=%d unmatched=%d "
-        "blocks=%d output=%s",
+        "目录驱动 structure plan 完成 | catalog=%d matched=%d "
+        "source_missing=%d blocking_unmatched=%d invalid=%d blocks=%d output=%s",
         len(catalog),
-        len(catalog) - unmatched_count,
-        unmatched_count,
+        matched_count,
+        source_missing_count,
+        blocking_unmatched_count,
+        invalid_count,
         len(structure_plan),
         output,
     )

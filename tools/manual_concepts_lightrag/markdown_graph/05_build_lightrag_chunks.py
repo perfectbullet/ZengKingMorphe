@@ -79,6 +79,8 @@ def run(args: argparse.Namespace) -> Path:
             {
                 "relative_path": image.get("relative_path", ""),
                 "absolute_path": image.get("absolute_path", ""),
+                "reference_type": image.get("reference_type", "local_file"),
+                "url": image.get("url", ""),
                 "caption": image.get("caption", ""),
             }
             for image in block.get("images", [])

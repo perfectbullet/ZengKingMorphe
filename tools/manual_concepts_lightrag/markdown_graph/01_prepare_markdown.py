@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare immutable, line-numbered Markdown and local image metadata."""
+"""Prepare immutable, line-numbered Markdown and image metadata."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import logging
 import re
 import sys
 from pathlib import Path
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit
 
 from common import PROJECT_DIR, ensure_dir, write_json
 
@@ -39,6 +39,30 @@ def caption_candidates(lines: list[str], image_index: int) -> list[dict]:
     return candidates
 
 
+def resolve_image_reference(reference: str, source_dir: Path) -> dict:
+    """Describe a local image path or preserve an HTTP(S) image URL."""
+    parsed = urlsplit(reference)
+    if parsed.scheme.lower() in {"http", "https"} and parsed.netloc:
+        return {
+            "reference_type": "remote_url",
+            "relative_path": reference,
+            "absolute_path": "",
+            "url": reference,
+            "exists": None,
+        }
+
+    relative_path = unquote(reference)
+    local_path = relative_path.split("?", 1)[0].split("#", 1)[0]
+    absolute_path = (source_dir / local_path).resolve()
+    return {
+        "reference_type": "local_file",
+        "relative_path": relative_path,
+        "absolute_path": str(absolute_path),
+        "url": "",
+        "exists": absolute_path.is_file(),
+    }
+
+
 def prepare_markdown(md_file: Path) -> dict:
     source = md_file.expanduser().resolve()
     if not source.is_file():
@@ -48,15 +72,11 @@ def prepare_markdown(md_file: Path) -> dict:
     image_refs: list[dict] = []
     for index, line in enumerate(lines):
         for match in IMAGE_RE.finditer(line):
-            relative_path = unquote((match.group(1) or match.group(2)).strip())
-            local_path = relative_path.split("?", 1)[0].split("#", 1)[0]
-            absolute_path = (source.parent / local_path).resolve()
+            reference = (match.group(1) or match.group(2)).strip()
             image_refs.append(
                 {
                     "line_no": index + 1,
-                    "relative_path": relative_path,
-                    "absolute_path": str(absolute_path),
-                    "exists": absolute_path.is_file(),
+                    **resolve_image_reference(reference, source.parent),
                     "caption_candidates": caption_candidates(lines, index),
                 }
             )
@@ -86,11 +106,18 @@ def main() -> int:
         output = output.expanduser().resolve()
         ensure_dir(output.parent)
         write_json(output, data)
-        missing = sum(not item["exists"] for item in data["image_refs"])
+        remote = sum(
+            item["reference_type"] == "remote_url" for item in data["image_refs"]
+        )
+        missing = sum(
+            item["reference_type"] == "local_file" and not item["exists"]
+            for item in data["image_refs"]
+        )
         logger.info(
-            "prepared 完成 | lines=%d images=%d missing=%d output=%s",
+            "prepared 完成 | lines=%d images=%d remote=%d local_missing=%d output=%s",
             data["line_count"],
             len(data["image_refs"]),
+            remote,
             missing,
             output,
         )
