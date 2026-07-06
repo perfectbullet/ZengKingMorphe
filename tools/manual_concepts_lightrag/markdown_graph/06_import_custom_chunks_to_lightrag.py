@@ -7,6 +7,7 @@ import argparse
 import asyncio
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
+import hashlib
 import logging
 import os
 import sys
@@ -19,10 +20,8 @@ from lightrag.operate import merge_nodes_and_edges
 
 from common import (
     DEFAULT_WORKING_DIR,
-    PROJECT_DIR,
     build_embedding_func,
     build_llm_model_func,
-    load_prompt,
     read_jsonl,
     resolve_embedding_config,
     resolve_llm_config,
@@ -30,6 +29,9 @@ from common import (
     write_jsonl,
 )
 
+PROJECT_DIR = Path(__file__).resolve().parent
+PROMPTS_DIR = PROJECT_DIR / "prompts"
+PROFILES_DIR = PROMPTS_DIR / "profiles"
 logger = logging.getLogger(__name__)
 CUSTOM_CHUNK_METADATA_FIELDS = [
     "chunk_id",
@@ -87,6 +89,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--replace", action="store_true")
     parser.add_argument("--report", type=Path)
     parser.add_argument("--failed-chunks", type=Path)
+    parser.add_argument("--base-prompt", type=Path)
+    parser.add_argument("--profile-prompt", type=Path)
+    parser.add_argument("--no-profile-prompt", action="store_true")
+    parser.add_argument("--print-prompt-preview", action="store_true")
     parser.add_argument("--env-file", type=Path, default=PROJECT_DIR.parent / ".env")
     return parser.parse_args()
 
@@ -104,11 +110,81 @@ def preload_env() -> Path:
     return env_path
 
 
-def build_rag(working_dir: Path, domain: str, subject: str) -> LightRAG:
-    guidance = load_prompt(PROJECT_DIR / "prompts/graph_extraction_guidance.md")
-    guidance = (
-        f"{guidance.strip()}\n\n当前领域：{domain}\n当前科目：{subject or '未指定'}"
+def read_text_file(path: Path) -> str:
+    resolved = path.expanduser().resolve()
+    if not resolved.is_file():
+        raise FileNotFoundError(f"prompt 文件不存在: {resolved}")
+    return resolved.read_text(encoding="utf-8").strip()
+
+
+def resolve_base_prompt_path(args: argparse.Namespace) -> Path:
+    if args.base_prompt is not None:
+        return args.base_prompt.expanduser().resolve()
+    env_path = os.getenv("MARKDOWN_GRAPH_BASE_PROMPT", "").strip()
+    if env_path:
+        return Path(env_path).expanduser().resolve()
+    for candidate in (
+        PROMPTS_DIR / "graph_extraction_base.md",
+        PROMPTS_DIR / "graph_extraction_guidance.md",
+    ):
+        if candidate.is_file():
+            return candidate.resolve()
+    raise FileNotFoundError(
+        "未找到 KG 抽取 base prompt；请提供 --base-prompt 或创建 "
+        f"{PROMPTS_DIR / 'graph_extraction_base.md'}"
     )
+
+
+def resolve_profile_prompt_path(args: argparse.Namespace) -> Path | None:
+    if args.no_profile_prompt:
+        return None
+    if args.profile_prompt is not None:
+        return args.profile_prompt.expanduser().resolve()
+    env_path = os.getenv("MARKDOWN_GRAPH_PROFILE_PROMPT", "").strip()
+    if env_path:
+        return Path(env_path).expanduser().resolve()
+
+    profile = PROFILES_DIR / "01_enamel.profile.md"
+    chunks_name = args.chunks.name.casefold()
+    subject = str(args.subject or "").casefold()
+    if subject == "enamel" or any(
+        marker.casefold() in chunks_name for marker in ("01珐琅工艺", "enamel", "珐琅")
+    ):
+        return profile.resolve() if profile.is_file() else None
+    return None
+
+
+def prompt_sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def build_extraction_prompt(args: argparse.Namespace) -> tuple[str, dict[str, Any]]:
+    base_path = resolve_base_prompt_path(args)
+    base_prompt = read_text_file(base_path)
+    profile_path = resolve_profile_prompt_path(args)
+    profile_prompt = read_text_file(profile_path) if profile_path is not None else ""
+
+    final_prompt = base_prompt.strip()
+    if profile_prompt:
+        final_prompt += "\n\n---\n\n# 教材级抽取 Profile\n\n"
+        final_prompt += profile_prompt.strip()
+    prompt_meta = {
+        "base_prompt_path": str(base_path),
+        "base_prompt_chars": len(base_prompt),
+        "base_prompt_sha256": prompt_sha256(base_prompt),
+        "profile_prompt_enabled": profile_path is not None,
+        "profile_prompt_path": str(profile_path) if profile_path is not None else None,
+        "profile_prompt_chars": len(profile_prompt),
+        "profile_prompt_sha256": (
+            prompt_sha256(profile_prompt) if profile_path is not None else None
+        ),
+        "final_prompt_chars": len(final_prompt),
+        "final_prompt_sha256": prompt_sha256(final_prompt),
+    }
+    return final_prompt, prompt_meta
+
+
+def build_rag(working_dir: Path, extraction_prompt: str) -> LightRAG:
     working_dir.mkdir(parents=True, exist_ok=True)
     return LightRAG(
         working_dir=str(working_dir),
@@ -116,7 +192,7 @@ def build_rag(working_dir: Path, domain: str, subject: str) -> LightRAG:
         enable_llm_cache_for_entity_extract=False,
         addon_params={
             "language": "Chinese",
-            "entity_types_guidance": guidance,
+            "entity_types_guidance": extraction_prompt,
         },
         llm_model_func=build_llm_model_func(),
         embedding_func=build_embedding_func(),
@@ -380,6 +456,17 @@ async def run(args: argparse.Namespace) -> int:
         "extracted_relation_mentions": 0,
     }
 
+    extraction_prompt, prompt_meta = build_extraction_prompt(args)
+    logger.info(
+        "extraction prompt | base=%s profile=%s final_sha256=%s final_chars=%d",
+        prompt_meta["base_prompt_path"],
+        prompt_meta["profile_prompt_path"],
+        prompt_meta["final_prompt_sha256"],
+        prompt_meta["final_prompt_chars"],
+    )
+    if args.print_prompt_preview:
+        logger.info("extraction prompt preview:\n%s", extraction_prompt[:1200])
+
     llm = resolve_llm_config()
     embedding = resolve_embedding_config()
     logger.info(
@@ -390,7 +477,7 @@ async def run(args: argparse.Namespace) -> int:
         embedding["dim"],
         working_dir,
     )
-    rag = build_rag(working_dir, args.domain, args.subject)
+    rag = build_rag(working_dir, extraction_prompt)
     await rag.initialize_storages()
     logger.info("LightRAG storages initialized")
     try:
@@ -422,6 +509,7 @@ async def run(args: argparse.Namespace) -> int:
         "skipped_kg_chunk_count": result["skipped_kg_chunk_count"],
         "content_scope_stats": result["content_scope_stats"],
         "should_extract_kg_stats": result["should_extract_kg_stats"],
+        "prompt": prompt_meta,
         "entity_count_after": len(labels),
         "relation_count_after": len(relations),
         "extracted_entity_mentions": result["extracted_entity_mentions"],
