@@ -91,6 +91,19 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def preload_env() -> Path:
+    pre_parser = argparse.ArgumentParser(add_help=False)
+    pre_parser.add_argument(
+        "--env-file", type=Path, default=PROJECT_DIR.parent / ".env"
+    )
+    pre_args, _ = pre_parser.parse_known_args()
+    env_path = pre_args.env_file.expanduser().resolve()
+    if env_path.is_file():
+        load_dotenv(env_path, override=False)
+        logger.info("loaded env: %s", env_path)
+    return env_path
+
+
 def build_rag(working_dir: Path, domain: str, subject: str) -> LightRAG:
     guidance = load_prompt(PROJECT_DIR / "prompts/graph_extraction_guidance.md")
     guidance = (
@@ -313,6 +326,14 @@ async def run(args: argparse.Namespace) -> int:
     chunks = read_jsonl(chunks_path)
     validate_chunks(chunks)
     working_dir = args.working_dir.expanduser().resolve()
+    logger.info("最终 working_dir | %s", working_dir)
+    if (
+        args.domain == "industrial_training"
+        and "lightrag_manual_concepts" in str(working_dir)
+    ):
+        raise ValueError(
+            f"工业教材不能导入 manual concepts working_dir: {working_dir}"
+        )
     book_stem = (
         Path(str(chunks[0]["source_md_path"])).stem
         if chunks
@@ -422,11 +443,8 @@ async def run(args: argparse.Namespace) -> int:
 
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    preload_env()
     args = parse_args()
-    env_path = args.env_file.expanduser().resolve()
-    if env_path.is_file():
-        load_dotenv(env_path, override=False)
-        logger.info("loaded env: %s", env_path)
     try:
         return asyncio.run(run(args))
     except Exception as exc:
