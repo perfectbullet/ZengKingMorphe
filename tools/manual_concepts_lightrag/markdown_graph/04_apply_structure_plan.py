@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import difflib
 import logging
 import os
@@ -26,6 +27,16 @@ ALLOWED_BLOCK_TYPES = {
     "appendix",
     "unknown",
 }
+PLAN_METADATA_FIELDS = [
+    "catalog_index",
+    "catalog_level",
+    "catalog_title",
+    "matched_title_line",
+    "matched_title_text",
+    "content_scope",
+    "should_extract_kg",
+    "structural_children",
+]
 
 
 def parse_args() -> argparse.Namespace:
@@ -267,9 +278,6 @@ def run(args: argparse.Namespace) -> tuple[Path, Path, Path]:
     for record in deduplicated:
         start, end = record["start_line"], record["end_line"]
         content = "\n".join(item["text"] for item in source_lines[start - 1 : end])
-        if not content.strip():
-            discoveries.append(f"- DROPPED {record['block_id']}: content 为空")
-            continue
         block_images: list[dict] = []
         for image in images:
             if start <= int(image["line_no"]) <= end:
@@ -307,6 +315,25 @@ def run(args: argparse.Namespace) -> tuple[Path, Path, Path]:
             "confidence": float(record.get("confidence") or 0),
             "source_window_id": record.get("source_window_id", ""),
         }
+        for field in PLAN_METADATA_FIELDS:
+            if field in record:
+                block[field] = record.get(field)
+
+        if not block.get("content_scope"):
+            structural_children = block.get("structural_children") or []
+            if structural_children:
+                block["content_scope"] = "direct" if content.strip() else "structural"
+            else:
+                block["content_scope"] = "leaf"
+        if (
+            "should_extract_kg" not in block
+            or block.get("should_extract_kg") is None
+        ):
+            block["should_extract_kg"] = block["content_scope"] != "structural"
+
+        if not content.strip() and block["content_scope"] != "structural":
+            discoveries.append(f"- DROPPED {record['block_id']}: content 为空")
+            continue
         line_count = end - start + 1
         if line_count > args.max_block_lines_warn:
             discoveries.append(
@@ -347,11 +374,18 @@ def run(args: argparse.Namespace) -> tuple[Path, Path, Path]:
     write_jsonl(output_blocks, blocks)
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text("\n".join(report) + "\n", encoding="utf-8")
+    content_scope_counts = Counter(block["content_scope"] for block in blocks)
+    should_extract_kg_counts = Counter(
+        bool(block["should_extract_kg"]) for block in blocks
+    )
     logger.info(
-        "apply 完成 | raw=%d validated=%d blocks=%d",
+        "apply 完成 | raw=%d validated=%d blocks=%d | content_scope=%s "
+        "should_extract_kg=%s",
         len(raw_records),
         len(final_plan),
         len(blocks),
+        dict(sorted(content_scope_counts.items())),
+        dict(sorted(should_extract_kg_counts.items())),
     )
     return output_blocks, output_plan, report_path
 

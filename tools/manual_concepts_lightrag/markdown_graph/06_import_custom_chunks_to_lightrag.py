@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime, timezone
 import logging
 import os
@@ -31,6 +31,34 @@ from common import (
 )
 
 logger = logging.getLogger(__name__)
+CUSTOM_CHUNK_METADATA_FIELDS = [
+    "chunk_id",
+    "block_id",
+    "doc_id",
+    "catalog_index",
+    "catalog_level",
+    "catalog_title",
+    "matched_title_line",
+    "matched_title_text",
+    "content_scope",
+    "should_extract_kg",
+    "structural_children",
+    "book_title",
+    "chapter_title",
+    "section_title",
+    "heading_path",
+    "start_line",
+    "end_line",
+    "image_lines",
+    "images",
+    "image_assets",
+    "confidence",
+    "reason",
+    "file_path",
+    "source_md_path",
+    "domain",
+    "subject",
+]
 
 
 class EntityExtractionError(RuntimeError):
@@ -92,6 +120,9 @@ def validate_chunks(chunks: list[dict]) -> None:
         "file_path",
         "source_md_path",
         "content",
+        "content_scope",
+        "should_extract_kg",
+        "catalog_title",
     }
     seen: set[str] = set()
     for index, chunk in enumerate(chunks, 1):
@@ -104,6 +135,8 @@ def validate_chunks(chunks: list[dict]) -> None:
         seen.add(chunk_id)
         if not str(chunk["content"]).strip():
             raise ValueError(f"chunk 内容为空: {chunk_id}")
+        if not isinstance(chunk["should_extract_kg"], bool):
+            raise ValueError(f"chunk {chunk_id} 的 should_extract_kg 必须是 JSON boolean")
 
 
 async def import_custom_chunks(
@@ -153,9 +186,32 @@ async def import_custom_chunks(
                 "chunk_order_index": int(chunk["chunk_order_index"]),
                 "file_path": str(chunk["file_path"]),
             }
+            for field in CUSTOM_CHUNK_METADATA_FIELDS:
+                if field in chunk:
+                    chunk_record[field] = chunk.get(field)
             inserting_chunks[chunk_id] = chunk_record
             doc_inserting_chunks[chunk_id] = chunk_record
         inserting_chunks_by_doc[doc_id] = doc_inserting_chunks
+
+    content_scope_stats = dict(
+        sorted(Counter(chunk["content_scope"] for chunk in chunks).items())
+    )
+    should_extract_kg_stats = dict(
+        sorted(Counter(chunk["should_extract_kg"] for chunk in chunks).items())
+    )
+    kg_chunk_count = sum(
+        chunk.get("should_extract_kg", True) is not False for chunk in chunks
+    )
+    skipped_kg_chunk_count = len(chunks) - kg_chunk_count
+    logger.info(
+        "custom chunks | total=%d kg=%d skipped_kg=%d content_scope=%s "
+        "should_extract_kg=%s",
+        len(chunks),
+        kg_chunk_count,
+        skipped_kg_chunk_count,
+        content_scope_stats,
+        should_extract_kg_stats,
+    )
 
     flush_needed = False
     active_error: BaseException | None = None
@@ -168,10 +224,23 @@ async def import_custom_chunks(
         extraction_result_count = 0
         extracted_entity_mentions = 0
         extracted_relation_mentions = 0
-        total_docs = len(inserting_chunks_by_doc)
-        for doc_number, (doc_id, doc_chunks) in enumerate(
-            inserting_chunks_by_doc.items(), 1
-        ):
+        total_kg_docs = sum(
+            any(
+                record.get("should_extract_kg", True) is not False
+                for record in doc_records.values()
+            )
+            for doc_records in inserting_chunks_by_doc.values()
+        )
+        current_kg_doc = 0
+        for doc_id, doc_chunks in inserting_chunks_by_doc.items():
+            kg_doc_chunks = {
+                chunk_id: record
+                for chunk_id, record in doc_chunks.items()
+                if record.get("should_extract_kg", True) is not False
+            }
+            if not kg_doc_chunks:
+                continue
+            current_kg_doc += 1
             pipeline_status = {
                 "latest_message": "",
                 "history_messages": [],
@@ -180,7 +249,7 @@ async def import_custom_chunks(
             pipeline_status_lock = asyncio.Lock()
             try:
                 extraction_results = await rag._process_extract_entities(
-                    doc_chunks,
+                    kg_doc_chunks,
                     pipeline_status,
                     pipeline_status_lock,
                 )
@@ -202,8 +271,8 @@ async def import_custom_chunks(
                     llm_response_cache=rag.llm_response_cache,
                     entity_chunks_storage=rag.entity_chunks,
                     relation_chunks_storage=rag.relation_chunks,
-                    current_file_number=doc_number,
-                    total_files=total_docs,
+                    current_file_number=current_kg_doc,
+                    total_files=total_kg_docs,
                     file_path=new_docs[doc_id]["file_path"],
                 )
             except Exception as exc:
@@ -215,6 +284,10 @@ async def import_custom_chunks(
         return {
             "doc_count": len(new_docs),
             "chunk_count": len(inserting_chunks),
+            "kg_chunk_count": kg_chunk_count,
+            "skipped_kg_chunk_count": skipped_kg_chunk_count,
+            "content_scope_stats": content_scope_stats,
+            "should_extract_kg_stats": should_extract_kg_stats,
             "extraction_result_count": extraction_result_count,
             "extracted_entity_mentions": extracted_entity_mentions,
             "extracted_relation_mentions": extracted_relation_mentions,
@@ -238,6 +311,7 @@ async def import_custom_chunks(
 async def run(args: argparse.Namespace) -> int:
     chunks_path = args.chunks.expanduser().resolve()
     chunks = read_jsonl(chunks_path)
+    validate_chunks(chunks)
     working_dir = args.working_dir.expanduser().resolve()
     book_stem = (
         Path(str(chunks[0]["source_md_path"])).stem
@@ -266,6 +340,20 @@ async def run(args: argparse.Namespace) -> int:
     result = {
         "doc_count": 0,
         "chunk_count": len(chunks),
+        "kg_chunk_count": sum(
+            chunk.get("should_extract_kg", True) is not False for chunk in chunks
+        ),
+        "skipped_kg_chunk_count": sum(
+            chunk.get("should_extract_kg") is False for chunk in chunks
+        ),
+        "content_scope_stats": dict(
+            sorted(Counter(chunk.get("content_scope") for chunk in chunks).items())
+        ),
+        "should_extract_kg_stats": dict(
+            sorted(
+                Counter(chunk.get("should_extract_kg") for chunk in chunks).items()
+            )
+        ),
         "extraction_result_count": 0,
         "extracted_entity_mentions": 0,
         "extracted_relation_mentions": 0,
@@ -309,6 +397,10 @@ async def run(args: argparse.Namespace) -> int:
         "working_dir": str(working_dir),
         "doc_count": result["doc_count"],
         "chunk_count": result["chunk_count"],
+        "kg_chunk_count": result["kg_chunk_count"],
+        "skipped_kg_chunk_count": result["skipped_kg_chunk_count"],
+        "content_scope_stats": result["content_scope_stats"],
+        "should_extract_kg_stats": result["should_extract_kg_stats"],
         "entity_count_after": len(labels),
         "relation_count_after": len(relations),
         "extracted_entity_mentions": result["extracted_entity_mentions"],
