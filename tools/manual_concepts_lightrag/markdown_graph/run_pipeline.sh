@@ -47,6 +47,8 @@ TOP_K_CANDIDATES="${TOP_K_CANDIDATE_TITLE_LINES:-12}"
 MIN_ANCHOR_CONFIDENCE="${MIN_ANCHOR_CONFIDENCE:-0.65}"
 MAX_UNMATCHED="${MAX_UNMATCHED_CATALOG_ITEMS:-0}"
 USE_EXISTING_ANCHOR_PLAN="${MARKDOWN_GRAPH_USE_EXISTING_ANCHOR_PLAN:-false}"
+SCHEMA_VERSION="${MARKDOWN_GRAPH_SCHEMA_VERSION:-industrial_training_kg_schema.v1}"
+SCHEMA_JSON="${MARKDOWN_GRAPH_SCHEMA_JSON:-$SCRIPT_DIR/prompts/schemas/industrial_training_kg_schema.v1.json}"
 
 PREPARED="$SCRIPT_DIR/outputs/01_prepared/$BOOK_STEM.prepared.json"
 OUTLINE="$SCRIPT_DIR/outputs/02_outline/$BOOK_STEM.book_outline.json"
@@ -96,7 +98,7 @@ run_step() {
       ;;
     6)
       echo "[6/8] Import custom chunks into LightRAG"
-      "$PYTHON_BIN" "$SCRIPT_DIR/06_import_custom_chunks_to_lightrag.py" --chunks "$CHUNKS" --working-dir "$WORKING_DIR" --domain "$DOMAIN" --subject "$SUBJECT" --import-method "$IMPORT_METHOD" --replace
+      "$PYTHON_BIN" "$SCRIPT_DIR/06_import_custom_chunks_to_lightrag.py" --chunks "$CHUNKS" --working-dir "$WORKING_DIR" --domain "$DOMAIN" --subject "$SUBJECT" --import-method "$IMPORT_METHOD" --schema-version "$SCHEMA_VERSION" --schema-json "$SCHEMA_JSON" --replace
       ;;
     7)
       echo "[7/8] Validate graph"
@@ -104,7 +106,7 @@ run_step() {
       ;;
     8)
       echo "[8/8] Audit graph quality"
-      "$PYTHON_BIN" "$SCRIPT_DIR/08_audit_graph_quality.py" --book-stem "$BOOK_STEM" --domain "$DOMAIN" --subject "$SUBJECT" --output-md "$AUDIT_MD" --output-json "$AUDIT_JSON"
+      "$PYTHON_BIN" "$SCRIPT_DIR/08_audit_graph_quality.py" --book-stem "$BOOK_STEM" --domain "$DOMAIN" --subject "$SUBJECT" --schema-version "$SCHEMA_VERSION" --schema-json "$SCHEMA_JSON" --output-md "$AUDIT_MD" --output-json "$AUDIT_JSON"
       ;;
   esac
 }

@@ -32,6 +32,10 @@ from common import (
 PROJECT_DIR = Path(__file__).resolve().parent
 PROMPTS_DIR = PROJECT_DIR / "prompts"
 PROFILES_DIR = PROMPTS_DIR / "profiles"
+SCHEMAS_DIR = PROMPTS_DIR / "schemas"
+DEFAULT_SCHEMA_VERSION = "industrial_training_kg_schema.v1"
+DEFAULT_SCHEMA_MD = SCHEMAS_DIR / "industrial_training_kg_schema.v1.md"
+DEFAULT_SCHEMA_JSON = SCHEMAS_DIR / "industrial_training_kg_schema.v1.json"
 logger = logging.getLogger(__name__)
 CUSTOM_CHUNK_METADATA_FIELDS = [
     "chunk_id",
@@ -93,6 +97,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--profile-prompt", type=Path)
     parser.add_argument("--no-profile-prompt", action="store_true")
     parser.add_argument("--print-prompt-preview", action="store_true")
+    parser.add_argument(
+        "--schema-version",
+        default=os.getenv("MARKDOWN_GRAPH_SCHEMA_VERSION", DEFAULT_SCHEMA_VERSION),
+    )
+    parser.add_argument(
+        "--schema-json",
+        type=Path,
+        default=Path(
+            os.getenv("MARKDOWN_GRAPH_SCHEMA_JSON", str(DEFAULT_SCHEMA_JSON))
+        ),
+    )
     parser.add_argument("--env-file", type=Path, default=PROJECT_DIR.parent / ".env")
     return parser.parse_args()
 
@@ -125,6 +140,7 @@ def resolve_base_prompt_path(args: argparse.Namespace) -> Path:
         return Path(env_path).expanduser().resolve()
     for candidate in (
         PROMPTS_DIR / "graph_extraction_base.md",
+        DEFAULT_SCHEMA_MD,
         PROMPTS_DIR / "graph_extraction_guidance.md",
     ):
         if candidate.is_file():
@@ -163,12 +179,21 @@ def build_extraction_prompt(args: argparse.Namespace) -> tuple[str, dict[str, An
     base_prompt = read_text_file(base_path)
     profile_path = resolve_profile_prompt_path(args)
     profile_prompt = read_text_file(profile_path) if profile_path is not None else ""
+    schema_json_path = args.schema_json.expanduser().resolve()
+    schema_json_exists = schema_json_path.is_file()
+    if not schema_json_exists:
+        logger.warning(
+            "schema json 不存在，仅使用 prompt 文本: %s", schema_json_path
+        )
 
     final_prompt = base_prompt.strip()
     if profile_prompt:
         final_prompt += "\n\n---\n\n# 教材级抽取 Profile\n\n"
         final_prompt += profile_prompt.strip()
     prompt_meta = {
+        "schema_version": args.schema_version,
+        "schema_json_path": str(schema_json_path) if schema_json_exists else None,
+        "schema_json_exists": schema_json_exists,
         "base_prompt_path": str(base_path),
         "base_prompt_chars": len(base_prompt),
         "base_prompt_sha256": prompt_sha256(base_prompt),

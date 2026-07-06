@@ -1,0 +1,130 @@
+{
+  "schema_version": "industrial_training_kg_schema.v1",
+  "domain": "industrial_training",
+  "allowed_entity_types": [
+    "CONCEPT",
+    "METHOD",
+    "PROCESS",
+    "MATERIAL",
+    "TOOL",
+    "EQUIPMENT",
+    "PROPERTY",
+    "DEFECT",
+    "PRODUCT",
+    "SAFETY_REQUIREMENT"
+  ],
+  "forbidden_entity_types": [
+    "FIGURE",
+    "PERSON",
+    "AUTHOR",
+    "ORGANIZATION",
+    "LOCATION",
+    "DATE",
+    "PAGE",
+    "STEP",
+    "NUMBER",
+    "UNKNOWN"
+  ],
+  "allowed_relation_types": [
+    "属于",
+    "包括",
+    "组成",
+    "用于",
+    "需要",
+    "影响",
+    "导致",
+    "适用于",
+    "步骤",
+    "前置步骤",
+    "后续步骤",
+    "对比",
+    "注意事项",
+    "产生",
+    "改善",
+    "防止"
+  ],
+  "forbidden_entity_name_patterns": [
+    {
+      "name": "pure_figure_no",
+      "pattern": "^图\\s*\\d+[-－]\\d+$",
+      "severity": "error",
+      "message": "纯图号不得作为实体，图号应作为 evidence.figure_no。"
+    },
+    {
+      "name": "image_path_or_url",
+      "pattern": "(images/|https?://|\\.(jpg|jpeg|png|webp)$)",
+      "severity": "error",
+      "message": "图片路径、URL、图片文件名不得作为实体。"
+    },
+    {
+      "name": "step_no",
+      "pattern": "^(STEP\\s*\\d+|操作步骤\\s*\\d+|步骤\\s*\\d+)$",
+      "severity": "error",
+      "message": "STEP 或步骤编号不得作为实体。"
+    },
+    {
+      "name": "chapter_like",
+      "pattern": "^(第\\s*\\d+\\s*章|CHAPTER\\s*\\d+|\\d+(\\.\\d+)+)$",
+      "severity": "error",
+      "message": "章节号、目录编号不得作为实体。"
+    },
+    {
+      "name": "temperature_only",
+      "pattern": "^\\d+(\\.\\d+)?\\s*(摄氏度|℃|°C)$",
+      "severity": "error",
+      "message": "单独温度数值不得作为实体，应写入 PROPERTY 的 description。"
+    },
+    {
+      "name": "percentage_only",
+      "pattern": "^\\d+(\\.\\d+)?%$",
+      "severity": "error",
+      "message": "单独百分比不得作为实体，应写入 description/evidence。"
+    },
+    {
+      "name": "ratio_only",
+      "pattern": "^\\d+\\s*:\\s*\\d+$",
+      "severity": "error",
+      "message": "单独比例不得作为实体，应写入 description/evidence。"
+    },
+    {
+      "name": "possible_person_en",
+      "pattern": "^[A-Z][a-z]+(\\s+[A-Z][a-z]+)+$",
+      "severity": "warn",
+      "message": "疑似英文人名，工业实训 KG 第一版默认不抽人名。"
+    }
+  ],
+  "required_node_fields": [
+    "entity_type",
+    "description",
+    "source_id",
+    "file_path"
+  ],
+  "evidence_fields": [
+    "chunk_id",
+    "doc_id",
+    "file_path",
+    "catalog_index",
+    "catalog_title",
+    "heading_path",
+    "source_md_path",
+    "figure_no",
+    "caption",
+    "raw_caption",
+    "image_path",
+    "page_idx",
+    "bbox",
+    "source_missing_status"
+  ],
+  "entity_type_guidelines": {
+    "CONCEPT": "概念、术语、定义对象、分类对象。",
+    "METHOD": "命名工艺、技法、操作方法。",
+    "PROCESS": "具体工艺过程、连续操作序列。",
+    "MATERIAL": "材料、原料、介质、化学材料。",
+    "TOOL": "手工工具、辅助器具、量具、夹具。",
+    "EQUIPMENT": "设备、机器、炉、机床。",
+    "PROPERTY": "性能、性质、技术要求、参数类别。",
+    "DEFECT": "缺陷、问题、失效现象。",
+    "PRODUCT": "产品、作品、零件、工件、工艺样件、首饰品类。",
+    "SAFETY_REQUIREMENT": "安全要求、注意事项、防护要求。"
+  }
+}

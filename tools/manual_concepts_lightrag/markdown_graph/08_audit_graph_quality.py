@@ -21,6 +21,9 @@ from common import PROJECT_DIR
 
 logger = logging.getLogger(__name__)
 
+SCHEMAS_DIR = PROJECT_DIR / "prompts/schemas"
+DEFAULT_SCHEMA_VERSION = "industrial_training_kg_schema.v1"
+DEFAULT_SCHEMA_JSON = SCHEMAS_DIR / "industrial_training_kg_schema.v1.json"
 DEFAULT_AUDIT_WORKING_DIR = Path(
     "/home/zj/ZengKingMorphe/ai-service/data/lightrag_industrial_training"
 )
@@ -93,6 +96,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-md", type=Path)
     parser.add_argument("--output-json", type=Path)
     parser.add_argument("--anchor-plan", type=Path)
+    parser.add_argument(
+        "--schema-version",
+        default=os.getenv("MARKDOWN_GRAPH_SCHEMA_VERSION", DEFAULT_SCHEMA_VERSION),
+    )
+    parser.add_argument(
+        "--schema-json",
+        type=Path,
+        default=Path(
+            os.getenv("MARKDOWN_GRAPH_SCHEMA_JSON", str(DEFAULT_SCHEMA_JSON))
+        ),
+    )
     parser.add_argument("--env-file", type=Path, default=PROJECT_DIR.parent / ".env")
     return parser.parse_args()
 
@@ -528,11 +542,199 @@ def audit_source_missing(anchor_plan: Path | None) -> dict[str, Any]:
     }
 
 
+def load_schema_json(path: Path) -> dict[str, Any] | None:
+    if not path.is_file():
+        logger.warning("schema json 不存在，跳过 schema 审计: %s", path)
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning("schema json 读取失败，跳过 schema 审计 | path=%s error=%s", path, exc)
+        return None
+    if not isinstance(data, dict):
+        logger.warning("schema json 顶层不是对象，跳过 schema 审计: %s", path)
+        return None
+    return data
+
+
+def edge_sample(
+    source: Any,
+    target: Any,
+    attrs: dict[str, Any],
+    relation_type: str | None,
+) -> dict[str, Any]:
+    return {
+        "source": truncate(source),
+        "target": truncate(target),
+        "relation_type": relation_type,
+        "keywords": truncate(attrs.get("keywords")),
+        "description": truncate(attrs.get("description")),
+        "source_id": truncate(attrs.get("source_id")),
+        "file_path": truncate(attrs.get("file_path")),
+    }
+
+
+def resolve_edge_relation_type(
+    attrs: dict[str, Any], allowed_relation_types: set[str]
+) -> str | None:
+    for field in ("relation_type", "edge_type", "type"):
+        value = stringify(attrs.get(field)).strip()
+        if value:
+            return value
+    keywords = stringify(attrs.get("keywords")).strip()
+    if keywords:
+        tokens = [
+            token.strip()
+            for token in re.split(r"<SEP>|[,，;；|/]", keywords)
+            if token.strip()
+        ]
+        for token in tokens:
+            if token in allowed_relation_types:
+                return token
+        return tokens[0] if tokens else keywords
+    description = stringify(attrs.get("description"))
+    for relation_type in sorted(allowed_relation_types, key=len, reverse=True):
+        if relation_type in description:
+            return relation_type
+    return None
+
+
+def audit_schema(
+    graph: nx.Graph,
+    nodes: list[tuple[Any, dict[str, Any]]],
+    edges: list[tuple[Any, Any, dict[str, Any]]],
+    schema_path: Path,
+    configured_version: str,
+) -> dict[str, Any]:
+    schema = load_schema_json(schema_path)
+    base = {
+        "schema_version": configured_version,
+        "schema_json_path": str(schema_path),
+        "schema_loaded": schema is not None,
+        "allowed_entity_types": [],
+        "forbidden_entity_types": [],
+        "allowed_relation_types": [],
+        "invalid_entity_type_count": 0,
+        "forbidden_entity_type_count": 0,
+        "unknown_entity_type_count": 0,
+        "invalid_relation_type_count": 0,
+        "unknown_relation_type_count": 0,
+        "invalid_entity_type_samples": [],
+        "forbidden_entity_type_samples": [],
+        "invalid_relation_type_samples": [],
+        "unknown_relation_type_samples": [],
+        "forbidden_name_pattern_hits": {},
+    }
+    if schema is None:
+        return base
+
+    allowed_entities = {
+        stringify(value).strip().upper()
+        for value in schema.get("allowed_entity_types", [])
+        if stringify(value).strip()
+    }
+    forbidden_entities = {
+        stringify(value).strip().upper()
+        for value in schema.get("forbidden_entity_types", [])
+        if stringify(value).strip()
+    }
+    allowed_relations = {
+        stringify(value).strip()
+        for value in schema.get("allowed_relation_types", [])
+        if stringify(value).strip()
+    }
+    base.update(
+        {
+            "schema_version": stringify(schema.get("schema_version"))
+            or configured_version,
+            "allowed_entity_types": sorted(allowed_entities),
+            "forbidden_entity_types": sorted(forbidden_entities),
+            "allowed_relation_types": sorted(allowed_relations),
+        }
+    )
+
+    for node_id, attrs in nodes:
+        raw_type = stringify(attrs.get("entity_type")).strip().upper()
+        if raw_type in {"", "UNKNOWN", "NONE", "NULL"}:
+            base["unknown_entity_type_count"] += 1
+        elif raw_type in allowed_entities:
+            pass
+        elif raw_type in forbidden_entities:
+            base["forbidden_entity_type_count"] += 1
+            if len(base["forbidden_entity_type_samples"]) < 50:
+                base["forbidden_entity_type_samples"].append(
+                    node_sample(graph, node_id, attrs)
+                )
+        else:
+            base["invalid_entity_type_count"] += 1
+            if len(base["invalid_entity_type_samples"]) < 50:
+                base["invalid_entity_type_samples"].append(
+                    node_sample(graph, node_id, attrs)
+                )
+
+    for source, target, attrs in edges:
+        relation_type = resolve_edge_relation_type(attrs, allowed_relations)
+        if relation_type is None:
+            base["unknown_relation_type_count"] += 1
+            if len(base["unknown_relation_type_samples"]) < 50:
+                base["unknown_relation_type_samples"].append(
+                    edge_sample(source, target, attrs, None)
+                )
+        elif relation_type not in allowed_relations:
+            base["invalid_relation_type_count"] += 1
+            if len(base["invalid_relation_type_samples"]) < 50:
+                base["invalid_relation_type_samples"].append(
+                    edge_sample(source, target, attrs, relation_type)
+                )
+
+    pattern_hits: dict[str, dict[str, Any]] = {}
+    for index, rule in enumerate(schema.get("forbidden_entity_name_patterns", []), 1):
+        if not isinstance(rule, dict):
+            continue
+        name = stringify(rule.get("name") or f"pattern_{index}")
+        pattern_text = stringify(rule.get("pattern"))
+        try:
+            pattern = re.compile(pattern_text, re.I)
+        except re.error as exc:
+            logger.warning("schema 禁抽正则无效 | name=%s error=%s", name, exc)
+            pattern_hits[name] = {
+                "count": 0,
+                "samples": [],
+                "severity": rule.get("severity"),
+                "message": rule.get("message"),
+                "pattern": pattern_text,
+                "regex_error": str(exc),
+            }
+            continue
+        matched = []
+        for node_id, attrs in nodes:
+            names = {stringify(node_id), stringify(attrs.get("entity_id"))}
+            if any(value and pattern.search(value) for value in names):
+                matched.append((node_id, attrs))
+        pattern_hits[name] = {
+            "count": len(matched),
+            "samples": [
+                node_sample(graph, node_id, attrs) for node_id, attrs in matched[:50]
+            ],
+            "severity": rule.get("severity"),
+            "message": rule.get("message"),
+            "pattern": pattern_text,
+        }
+    base["forbidden_name_pattern_hits"] = pattern_hits
+    return base
+
+
 def calculate_quality_score(audit: dict[str, Any]) -> tuple[float, str]:
     forbidden = audit["forbidden_entity_audit"]
     unknown = audit["unknown_type_audit"]
     evidence = audit["evidence_completeness"]
     noise = audit["chunk_content_noise_audit"]
+    schema = audit["schema_audit"]
+    forbidden_pattern_error_count = sum(
+        item.get("count", 0)
+        for item in schema["forbidden_name_pattern_hits"].values()
+        if stringify(item.get("severity")).lower() == "error"
+    )
     penalties = [
         min(forbidden["pure_figure_nodes"]["count"] * 0.2, 20),
         min(forbidden["image_path_nodes"]["count"] * 1.0, 20),
@@ -544,6 +746,10 @@ def calculate_quality_score(audit: dict[str, Any]) -> tuple[float, str]:
         min(evidence["missing_file_path_count"] * 0.1, 10),
         min(noise["chunks_with_url_in_content"] * 1.0, 10),
         min(noise["chunks_with_local_image_path_in_content"] * 1.0, 10),
+        min(schema["invalid_entity_type_count"] * 1.0, 15),
+        min(schema["forbidden_entity_type_count"] * 1.0, 20),
+        min(schema["invalid_relation_type_count"] * 0.5, 10),
+        min(forbidden_pattern_error_count * 0.5, 20),
     ]
     score = round(max(0.0, 100.0 - sum(penalties)), 2)
     if score >= 90:
@@ -566,6 +772,7 @@ def build_recommendations(audit: dict[str, Any]) -> list[str]:
     images = audit["image_metadata_audit"]
     source_missing = audit["source_missing_audit"]
     evidence = audit["evidence_completeness"]
+    schema = audit["schema_audit"]
     recommendations: list[str] = []
     if forbidden["pure_figure_nodes"]["count"] or figure["figure_type_count"]:
         recommendations.append(
@@ -595,6 +802,22 @@ def build_recommendations(audit: dict[str, Any]) -> list[str]:
     if evidence["missing_source_id_count"] or evidence["missing_file_path_count"]:
         recommendations.append(
             "部分实体缺少 source_id 或 file_path，建议修复导入 metadata 以保证稳定溯源。"
+        )
+    if schema["forbidden_entity_type_count"]:
+        recommendations.append(
+            "发现 schema 明确禁止的实体类型，建议收紧 base prompt/profile，禁止 forbidden entity type。"
+        )
+    if schema["invalid_entity_type_count"]:
+        recommendations.append(
+            "发现统一 schema 之外的实体类型，建议检查 LLM 是否输出未允许的 entity_type。"
+        )
+    if schema["invalid_relation_type_count"]:
+        recommendations.append(
+            "发现统一 schema 之外的关系类型，建议检查关系抽取是否超出 allowed_relation_types。"
+        )
+    if schema["forbidden_name_pattern_hits"].get("pure_figure_no", {}).get("count"):
+        recommendations.append(
+            "schema 检测到纯图号实体，建议图号只进入 evidence.figure_no。"
         )
     return recommendations or ["未发现需要立即处理的规则型问题。"]
 
@@ -656,6 +879,47 @@ def render_markdown(audit: dict[str, Any]) -> str:
                 ["chunks", overall["chunk_count"]],
                 ["entity_vdb_count", overall["entity_vdb_count"]],
                 ["relationship_vdb_count", overall["relationship_vdb_count"]],
+            ],
+        )
+    )
+    schema = audit["schema_audit"]
+    lines.extend(["", "## Schema Audit", ""])
+    lines.extend(
+        markdown_table(
+            ["field", "value"],
+            [
+                ["schema_version", schema["schema_version"]],
+                ["schema_json_path", schema["schema_json_path"]],
+                ["schema_loaded", schema["schema_loaded"]],
+                ["invalid_entity_type_count", schema["invalid_entity_type_count"]],
+                [
+                    "forbidden_entity_type_count",
+                    schema["forbidden_entity_type_count"],
+                ],
+                ["unknown_entity_type_count", schema["unknown_entity_type_count"]],
+                [
+                    "invalid_relation_type_count",
+                    schema["invalid_relation_type_count"],
+                ],
+                [
+                    "unknown_relation_type_count",
+                    schema["unknown_relation_type_count"],
+                ],
+            ],
+        )
+    )
+    lines.extend(["", "### Forbidden Name Pattern Hits", ""])
+    lines.extend(
+        markdown_table(
+            ["name", "severity", "count", "message"],
+            [
+                [
+                    name,
+                    item.get("severity", ""),
+                    item.get("count", 0),
+                    item.get("message", ""),
+                ]
+                for name, item in schema["forbidden_name_pattern_hits"].items()
             ],
         )
     )
@@ -862,6 +1126,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     )
     if filter_meta["filter_warning"]:
         logger.warning("book filter | %s", filter_meta["filter_warning"])
+    schema_path = args.schema_json.expanduser().resolve()
+    schema_audit = audit_schema(
+        graph,
+        nodes,
+        edges,
+        schema_path,
+        args.schema_version,
+    )
 
     type_counts = Counter(normalized_entity_type(attrs) for _, attrs in nodes)
     node_count = len(nodes)
@@ -1001,6 +1273,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "relationship_vdb_count": len(relationship_vdb),
         },
         "entity_type_distribution": entity_type_distribution,
+        "schema_audit": schema_audit,
         "forbidden_entity_audit": forbidden,
         "figure_node_audit": figure_audit,
         "unknown_type_audit": unknown_audit,
