@@ -10,8 +10,9 @@
     output/
     ├── document.pdf.zip
     └── document/
-        ├── full.md
+        ├── document_full.md
         ├── images/
+        ├── document_list_v2.json
         └── ...
 """
 
@@ -215,6 +216,33 @@ def extract_zip(zip_path: Path, extract_dir: Path) -> None:
         raise
 
 
+def rename_extracted_results(extract_dir: Path, document_name: str) -> None:
+    """按输入 PDF 文件名重命名解压后的核心结果文件。"""
+    markdown_path = extract_dir / "full.md"
+    renamed_markdown_path = extract_dir / f"{document_name}_full.md"
+    if markdown_path.exists():
+        if renamed_markdown_path.exists():
+            raise FileExistsError(f"目标文件已存在: {renamed_markdown_path}")
+        markdown_path.rename(renamed_markdown_path)
+        logger.info("Markdown 已重命名: %s", renamed_markdown_path.name)
+    else:
+        logger.warning("未找到 full.md，跳过 Markdown 重命名: %s", extract_dir)
+
+    content_list_files = sorted(extract_dir.glob("*_content_list_v2.json"))
+    if not content_list_files:
+        logger.warning("未找到 *_content_list_v2.json，跳过 list_v2 重命名: %s", extract_dir)
+        return
+    if len(content_list_files) > 1:
+        matched_files = ", ".join(path.name for path in content_list_files)
+        raise RuntimeError(f"找到多个 *_content_list_v2.json，无法确定重命名对象: {matched_files}")
+
+    renamed_list_path = extract_dir / f"{document_name}_list_v2.json"
+    if renamed_list_path.exists():
+        raise FileExistsError(f"目标文件已存在: {renamed_list_path}")
+    content_list_files[0].rename(renamed_list_path)
+    logger.info("Content list v2 已重命名: %s", renamed_list_path.name)
+
+
 def load_local_env() -> None:
     """读取脚本同级 .env，但不覆盖已有环境变量。"""
     env_file = Path(__file__).parent / ".env"
@@ -294,6 +322,7 @@ def main() -> None:
     extract_dir = output_dir / pdf_path.stem
     download_zip(zip_url, zip_path)
     extract_zip(zip_path, extract_dir)
+    rename_extracted_results(extract_dir, pdf_path.stem)
 
     logger.info("解析完成")
     logger.info("ZIP 文件: %s", zip_path)
