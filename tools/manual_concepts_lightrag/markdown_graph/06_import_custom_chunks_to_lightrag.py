@@ -134,6 +134,12 @@ def parse_args() -> argparse.Namespace:
         choices=["return_nonzero", "return_zero"],
         default=os.getenv("MARKDOWN_GRAPH_FAILED_CHUNK_POLICY", "return_nonzero"),
     )
+    parser.add_argument("--max-kg-chunks", type=int)
+    parser.add_argument("--start-chunk-index", type=int, default=0)
+    parser.add_argument("--chunk-id", action="append", default=[])
+    parser.add_argument("--chunk-id-file", type=Path)
+    parser.add_argument("--chunk-title-contains")
+    parser.add_argument("--dry-run-selected-chunks", action="store_true")
     parser.add_argument(
         "--schema-version",
         default=os.getenv("MARKDOWN_GRAPH_SCHEMA_VERSION", DEFAULT_SCHEMA_VERSION),
@@ -288,6 +294,145 @@ def validate_chunks(chunks: list[dict]) -> None:
             raise ValueError(f"chunk 内容为空: {chunk_id}")
         if not isinstance(chunk["should_extract_kg"], bool):
             raise ValueError(f"chunk {chunk_id} 的 should_extract_kg 必须是 JSON boolean")
+
+
+def read_chunk_id_file(path: Path | None) -> list[str]:
+    if path is None:
+        return []
+    resolved = path.expanduser().resolve()
+    if not resolved.is_file():
+        raise FileNotFoundError(f"chunk-id-file 不存在: {resolved}")
+    chunk_ids: list[str] = []
+    for raw_line in resolved.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        chunk_ids.append(line)
+    return chunk_ids
+
+
+def chunk_search_text(chunk: dict[str, Any]) -> str:
+    heading_path = chunk.get("heading_path") or ""
+    if isinstance(heading_path, list):
+        heading_text = " ".join(str(item) for item in heading_path)
+    else:
+        heading_text = str(heading_path)
+    return "\n".join(
+        [
+            str(chunk.get("chunk_id") or ""),
+            str(chunk.get("catalog_title") or ""),
+            str(chunk.get("chapter_title") or ""),
+            str(chunk.get("section_title") or ""),
+            heading_text,
+        ]
+    )
+
+
+def selection_enabled(args: argparse.Namespace, chunk_ids: set[str]) -> bool:
+    return bool(
+        chunk_ids
+        or args.chunk_title_contains
+        or args.max_kg_chunks is not None
+        or args.start_chunk_index != 0
+        or args.dry_run_selected_chunks
+    )
+
+
+def select_kg_chunks(
+    chunks: list[dict],
+    args: argparse.Namespace,
+) -> tuple[list[dict], dict[str, Any]]:
+    total_chunks = len(chunks)
+    kg_chunks = [
+        chunk for chunk in chunks if chunk.get("should_extract_kg", True) is not False
+    ]
+    chunk_id_values = list(args.chunk_id or []) + read_chunk_id_file(args.chunk_id_file)
+    chunk_id_set = set(chunk_id_values)
+    enabled = selection_enabled(args, chunk_id_set)
+    selected = list(kg_chunks)
+
+    if chunk_id_set:
+        selected = [
+            chunk for chunk in selected if str(chunk.get("chunk_id")) in chunk_id_set
+        ]
+
+    if args.chunk_title_contains:
+        needle = str(args.chunk_title_contains)
+        needle_folded = needle.casefold()
+        selected = [
+            chunk
+            for chunk in selected
+            if needle in chunk_search_text(chunk)
+            or needle_folded in chunk_search_text(chunk).casefold()
+        ]
+
+    if args.start_chunk_index < 0:
+        raise ValueError("--start-chunk-index 不能小于 0")
+    if args.max_kg_chunks is not None and args.max_kg_chunks <= 0:
+        raise ValueError("--max-kg-chunks 必须大于 0")
+    selected = selected[args.start_chunk_index :]
+    if args.max_kg_chunks is not None:
+        selected = selected[: args.max_kg_chunks]
+
+    meta = {
+        "enabled": enabled,
+        "total_chunks_before_filter": total_chunks,
+        "kg_chunks_before_filter": len(kg_chunks),
+        "selected_chunks_after_filter": len(selected),
+        "skipped_by_filter": len(kg_chunks) - len(selected),
+        "start_chunk_index": args.start_chunk_index,
+        "max_kg_chunks": args.max_kg_chunks,
+        "chunk_title_contains": args.chunk_title_contains,
+        "chunk_id_count": len(chunk_id_set),
+        "selected_chunk_ids": [str(chunk.get("chunk_id")) for chunk in selected],
+    }
+    if not selected:
+        raise ValueError(
+            "筛选后没有可抽取的 KG chunks: "
+            f"total={total_chunks} kg={len(kg_chunks)} criteria={meta}"
+        )
+    if enabled:
+        logger.info(
+            "debug selection | total=%d kg_before=%d selected=%d start=%d "
+            "max=%s title_contains=%s chunk_ids=%d",
+            total_chunks,
+            len(kg_chunks),
+            len(selected),
+            args.start_chunk_index,
+            args.max_kg_chunks,
+            args.chunk_title_contains,
+            len(chunk_id_set),
+        )
+    else:
+        logger.info(
+            "debug selection disabled | total=%d kg=%d", total_chunks, len(kg_chunks)
+        )
+        return chunks, meta
+    return selected, meta
+
+
+def print_dry_run_selection(chunks: list[dict], meta: dict[str, Any]) -> None:
+    print(f"total_chunks: {meta['total_chunks_before_filter']}")
+    print(f"kg_chunks_before_filter: {meta['kg_chunks_before_filter']}")
+    print(f"selected_kg_chunks: {meta['selected_chunks_after_filter']}")
+    print(f"skipped_by_filter: {meta['skipped_by_filter']}")
+    print(f"max_kg_chunks: {meta['max_kg_chunks']}")
+    print(f"start_chunk_index: {meta['start_chunk_index']}")
+    print(f"chunk_title_contains: {meta['chunk_title_contains']}")
+    print(f"chunk_id_count: {meta['chunk_id_count']}")
+    print("selected chunks:")
+    for order, chunk in enumerate(chunks, start=1):
+        content = str(chunk.get("content") or "")
+        print(
+            "  "
+            f"order={order} "
+            f"chunk_order_index={chunk.get('chunk_order_index')} "
+            f"chunk_id={chunk.get('chunk_id')} "
+            f"catalog_title={chunk.get('catalog_title')} "
+            f"content_chars={len(content)} "
+            f"file_path={chunk.get('file_path')} "
+            f"should_extract_kg={chunk.get('should_extract_kg')}"
+        )
 
 
 def chunk_batches(
@@ -707,7 +852,12 @@ async def import_custom_chunks(
 async def run(args: argparse.Namespace) -> int:
     chunks_path = args.chunks.expanduser().resolve()
     chunks = read_jsonl(chunks_path)
-    validate_chunks(chunks)
+    selected_chunks, debug_selection = select_kg_chunks(chunks, args)
+    validate_chunks(selected_chunks)
+    if args.dry_run_selected_chunks:
+        print_dry_run_selection(selected_chunks, debug_selection)
+        return 0
+
     working_dir = args.working_dir.expanduser().resolve()
     logger.info("最终 working_dir | %s", working_dir)
     if (
@@ -743,22 +893,27 @@ async def run(args: argparse.Namespace) -> int:
     error_message = ""
     result = {
         "doc_count": 0,
-        "chunk_count": len(chunks),
+        "chunk_count": len(selected_chunks),
         "kg_chunk_count": sum(
-            chunk.get("should_extract_kg", True) is not False for chunk in chunks
+            chunk.get("should_extract_kg", True) is not False
+            for chunk in selected_chunks
         ),
         "succeeded_kg_chunk_count": 0,
         "failed_kg_chunk_count": 0,
         "skipped_kg_chunk_count": sum(
-            chunk.get("should_extract_kg") is False for chunk in chunks
+            chunk.get("should_extract_kg") is False for chunk in selected_chunks
         ),
         "failed_chunks": [],
         "content_scope_stats": dict(
-            sorted(Counter(chunk.get("content_scope") for chunk in chunks).items())
+            sorted(
+                Counter(chunk.get("content_scope") for chunk in selected_chunks).items()
+            )
         ),
         "should_extract_kg_stats": dict(
             sorted(
-                Counter(chunk.get("should_extract_kg") for chunk in chunks).items()
+                Counter(
+                    chunk.get("should_extract_kg") for chunk in selected_chunks
+                ).items()
             )
         ),
         "extraction_result_count": 0,
@@ -798,7 +953,7 @@ async def run(args: argparse.Namespace) -> int:
         try:
             result = await import_custom_chunks(
                 rag,
-                chunks,
+                selected_chunks,
                 replace=args.replace,
                 extract_batch_size=args.extract_batch_size,
                 single_chunk_retry=args.single_chunk_retry,
@@ -837,6 +992,7 @@ async def run(args: argparse.Namespace) -> int:
         "replace": bool(args.replace),
         "failures": failed_kg_chunk_count,
         "failed_chunk_ids": [chunk.get("chunk_id") for chunk in failures],
+        "debug_selection": debug_selection,
         "started_at": started.isoformat(),
         "finished_at": datetime.now(timezone.utc).isoformat(),
     }

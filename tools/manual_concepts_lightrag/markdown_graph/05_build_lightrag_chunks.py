@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert each validated textbook block into exactly one custom chunk."""
+"""Convert validated textbook blocks into LightRAG custom chunks."""
 
 from __future__ import annotations
 
@@ -75,6 +75,9 @@ CONTENT_IMAGE_CHECKS = {
     "markdown_image_syntax": re.compile(r"!\[[^\]]*\]\("),
     "image_filename": re.compile(r"\.(?:jpe?g|png|webp)(?:\b|$)", re.I),
 }
+TARGET_KG_CHUNK_CHARS = 2000
+HARD_MAX_KG_CHUNK_CHARS = 3000
+SENTENCE_SPLIT_RE = re.compile(r"(?<=[。；;！？!?])")
 
 
 def parse_args() -> argparse.Namespace:
@@ -94,11 +97,6 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--mineru-dir", type=Path, help="MinerU 输出目录")
     parser.add_argument("--image-root", type=Path, help="解析相对图片路径的根目录")
-    parser.add_argument(
-        "--disable-image-caption-content",
-        action="store_true",
-        help="仅在 metadata 中保留图片说明，不写入 chunk content",
-    )
     return parser.parse_args()
 
 
@@ -372,48 +370,28 @@ def _caption_matches(line: str, captions: list[str]) -> bool:
     return False
 
 
-def clean_body_content(
-    content: str, enhanced_images: list[dict] | None = None
-) -> tuple[str, list[str]]:
-    image_descriptions: list[str] = []
-
-    def replace_markdown_image(match: re.Match[str]) -> str:
-        description = meaningful_image_alt(match.group(1))
-        if description and description not in image_descriptions:
-            image_descriptions.append(description)
-        return ""
-
-    cleaned = MARKDOWN_IMAGE_RE.sub(replace_markdown_image, content)
-    cleaned = REMOTE_URL_RE.sub("", cleaned)
-    cleaned = LOCAL_IMAGE_PATH_RE.sub("", cleaned)
-    cleaned = IMAGE_FILENAME_RE.sub("", cleaned)
-    enhanced_captions = [
-        str(image["caption"])
-        for image in enhanced_images or []
-        if image.get("caption")
-    ]
-    kept_lines: list[str] = []
-    for line in cleaned.splitlines():
-        stripped = line.strip()
+def clean_body_lines(content: str, start_line: int) -> list[dict[str, int | str]]:
+    """Clean image references and figure-caption-only lines while preserving line numbers."""
+    cleaned_lines: list[dict[str, int | str]] = []
+    for offset, line in enumerate(content.splitlines()):
+        line_no = start_line + offset
+        cleaned = MARKDOWN_IMAGE_RE.sub("", line)
+        cleaned = REMOTE_URL_RE.sub("", cleaned)
+        cleaned = LOCAL_IMAGE_PATH_RE.sub("", cleaned)
+        cleaned = IMAGE_FILENAME_RE.sub("", cleaned)
+        cleaned = cleaned.rstrip()
+        stripped = cleaned.strip()
         if PURE_FIGURE_LINE_RE.fullmatch(stripped):
             continue
-        if enhanced_captions and FIGURE_PREFIX_RE.match(stripped):
-            if _caption_matches(stripped, enhanced_captions):
-                continue
-        kept_lines.append(line.rstrip())
-    cleaned = "\n".join(kept_lines)
-    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
-    return cleaned, image_descriptions
+        if FIGURE_PREFIX_RE.match(stripped):
+            continue
+        cleaned_lines.append({"line_no": line_no, "text": cleaned})
+    return cleaned_lines
 
 
-def _image_description(image: dict) -> str | None:
-    caption = meaningful_image_alt(str(image.get("caption") or ""))
-    if not caption:
-        return None
-    figure_no = str(image.get("figure_no") or "").strip()
-    suffix = f"（{figure_no}）" if figure_no else ""
-    caption = caption[: 120 - len(suffix)].rstrip()
-    return f"{caption}{suffix}"
+def body_lines_to_text(lines: list[dict[str, int | str]]) -> str:
+    text = "\n".join(str(line.get("text") or "").rstrip() for line in lines)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
 def build_content(
@@ -421,36 +399,12 @@ def build_content(
     domain: str,
     subject: str,
     file_path: str,
-    images: list[dict] | None = None,
-    include_image_captions: bool = True,
+    body_content: str,
+    split_label: str | None = None,
 ) -> str:
     heading_path = [
         str(item) for item in block.get("heading_path", []) if str(item).strip()
     ]
-    enhanced_images = images or []
-    body_content, alt_descriptions = clean_body_content(
-        str(block.get("content") or ""), enhanced_images
-    )
-    image_descriptions: list[str] = []
-    seen_descriptions: set[str] = set()
-    known_caption_keys: set[str] = set()
-    for image in enhanced_images:
-        description = _image_description(image)
-        if not description:
-            continue
-        key = _caption_compare_key(description)
-        if key and key not in seen_descriptions:
-            image_descriptions.append(description)
-            seen_descriptions.add(key)
-        caption_key = _caption_compare_key(str(image.get("caption") or ""))
-        if caption_key:
-            known_caption_keys.add(caption_key)
-    for item in alt_descriptions:
-        description = item[:120].rstrip()
-        key = _caption_compare_key(description)
-        if key and key not in known_caption_keys and key not in seen_descriptions:
-            image_descriptions.append(description)
-            seen_descriptions.add(key)
     headers = [
         "【文档类型】工业实训教材",
         f"【领域】{domain}",
@@ -460,12 +414,145 @@ def build_content(
         f"【目录项】{block.get('catalog_title', '')}",
         f"【源码位置】{file_path}",
     ]
+    if split_label:
+        headers.append(f"【分片】{split_label}")
     sections = ["\n".join(headers)]
-    if include_image_captions and image_descriptions:
-        descriptions = "\n".join(f"- {item}" for item in image_descriptions)
-        sections.append(f"【图片说明】\n{descriptions}")
     sections.append(f"【正文】\n{body_content}")
     return "\n\n".join(sections)
+
+
+def _is_split_boundary_line(text: str) -> bool:
+    stripped = text.strip()
+    return bool(
+        not stripped
+        or re.match(r"^#{1,6}\s+", stripped)
+        or re.match(r"^\s*(?:[-*+]\s+|[（(]?\d+[）).、]\s+)", text)
+        or stripped.startswith(("注意", "提示", "步骤", "要点"))
+    )
+
+
+def _split_long_text_line(line: dict[str, int | str]) -> list[list[dict[str, int | str]]]:
+    text = str(line.get("text") or "")
+    line_no = int(line.get("line_no") or 0)
+    if len(text) <= TARGET_KG_CHUNK_CHARS:
+        return [[line]]
+    fragments = [item for item in SENTENCE_SPLIT_RE.split(text) if item]
+    units: list[list[dict[str, int | str]]] = []
+
+    def append_fragment(fragment: str) -> None:
+        fragment = fragment.strip()
+        if not fragment:
+            return
+        if len(fragment) <= TARGET_KG_CHUNK_CHARS:
+            units.append([{"line_no": line_no, "text": fragment}])
+            return
+        for index in range(0, len(fragment), TARGET_KG_CHUNK_CHARS):
+            units.append(
+                [
+                    {
+                        "line_no": line_no,
+                        "text": fragment[index : index + TARGET_KG_CHUNK_CHARS],
+                    }
+                ]
+            )
+
+    buffer = ""
+    for fragment in fragments:
+        if len(fragment) > TARGET_KG_CHUNK_CHARS:
+            append_fragment(buffer)
+            buffer = ""
+            append_fragment(fragment)
+            continue
+        if buffer and len(buffer) + len(fragment) > TARGET_KG_CHUNK_CHARS:
+            append_fragment(buffer)
+            buffer = fragment
+        else:
+            buffer += fragment
+    append_fragment(buffer)
+    if not units:
+        units = [
+            [{"line_no": line_no, "text": text[index : index + TARGET_KG_CHUNK_CHARS]}]
+            for index in range(0, len(text), TARGET_KG_CHUNK_CHARS)
+        ]
+    return units
+
+
+def _body_line_units(
+    lines: list[dict[str, int | str]]
+) -> list[list[dict[str, int | str]]]:
+    units: list[list[dict[str, int | str]]] = []
+    current: list[dict[str, int | str]] = []
+
+    def flush_current() -> None:
+        nonlocal current
+        if current:
+            units.extend(_split_unit_if_needed(current))
+            current = []
+
+    for line in lines:
+        text = str(line.get("text") or "")
+        if _is_split_boundary_line(text):
+            flush_current()
+            units.extend(_split_unit_if_needed([line]))
+            continue
+        current.append(line)
+    flush_current()
+    return units
+
+
+def _split_unit_if_needed(
+    unit: list[dict[str, int | str]]
+) -> list[list[dict[str, int | str]]]:
+    if len(body_lines_to_text(unit)) <= TARGET_KG_CHUNK_CHARS:
+        return [unit]
+    if len(unit) == 1:
+        return _split_long_text_line(unit[0])
+    result: list[list[dict[str, int | str]]] = []
+    for line in unit:
+        result.extend(_split_long_text_line(line))
+    return result
+
+
+def split_body_lines_for_kg(
+    body_lines: list[dict[str, int | str]],
+) -> list[list[dict[str, int | str]]]:
+    units = _body_line_units(body_lines)
+    parts: list[list[dict[str, int | str]]] = []
+    current: list[dict[str, int | str]] = []
+    for unit in units:
+        tentative = current + unit
+        if current and len(body_lines_to_text(tentative)) > TARGET_KG_CHUNK_CHARS:
+            parts.append(current)
+            current = list(unit)
+        else:
+            current = tentative
+    if current:
+        parts.append(current)
+    return [part for part in parts if body_lines_to_text(part)]
+
+
+def line_range_for_part(
+    part_lines: list[dict[str, int | str]], fallback_start: int, fallback_end: int
+) -> tuple[int, int]:
+    line_numbers = [int(line["line_no"]) for line in part_lines if line.get("line_no")]
+    if not line_numbers:
+        return fallback_start, fallback_end
+    return min(line_numbers), max(line_numbers)
+
+
+def images_for_line_range(images: list[dict], start_line: int, end_line: int) -> list[dict]:
+    result = []
+    for image in images:
+        line_no = image.get("line_no")
+        if isinstance(line_no, bool) or not isinstance(line_no, int):
+            continue
+        if start_line <= line_no <= end_line:
+            result.append(image)
+    return result
+
+
+def file_path_for_range(source_path: Path, start_line: int, end_line: int) -> str:
+    return f"{source_path.name}#L{start_line}-L{end_line}"
 
 
 def _build_evidence(record: dict) -> dict:
@@ -509,23 +596,22 @@ def run(args: argparse.Namespace) -> Path:
     )
     records: list[dict] = []
     seen_ids: set[str] = set()
-    image_caption_content_lines = 0
-    for order, block in enumerate(blocks):
+    split_long_chunks_count = 0
+    split_generated_chunks_count = 0
+    for block in blocks:
         block_id = str(block["block_id"])
         chunk_id = block_id if block_id.startswith("chunk-") else f"chunk-{block_id}"
-        if chunk_id in seen_ids:
-            raise ValueError(f"chunk_id 重复: {chunk_id}")
-        seen_ids.add(chunk_id)
         domain = args.domain or str(block.get("domain") or "")
         subject = args.subject or str(block.get("subject") or "")
         source_path = Path(str(block["source_md_path"]))
-        file_path = f"{source_path.name}#L{block['start_line']}-L{block['end_line']}"
+        block_start_line = int(block["start_line"])
+        block_end_line = int(block["end_line"])
+        file_path = file_path_for_range(source_path, block_start_line, block_end_line)
         images = enhance_block_images(block, v2_assets, image_root)
-        record = {
+        base_record = {
             "chunk_id": chunk_id,
             "doc_id": block["doc_id"],
             "block_id": block_id,
-            "chunk_order_index": order,
             "file_path": file_path,
             "source_md_path": str(source_path),
             "domain": domain,
@@ -534,49 +620,109 @@ def run(args: argparse.Namespace) -> Path:
             "chapter_title": block.get("chapter_title", ""),
             "section_title": block.get("section_title", ""),
             "heading_path": block.get("heading_path", []),
-            "start_line": block["start_line"],
-            "end_line": block["end_line"],
+            "start_line": block_start_line,
+            "end_line": block_end_line,
             "images": images,
         }
         for field in BLOCK_METADATA_FIELDS:
             if field in block:
-                record[field] = block.get(field)
+                base_record[field] = block.get(field)
 
         body_content = str(block.get("content") or "")
-        if not record.get("content_scope"):
-            structural_children = record.get("structural_children") or []
+        if not base_record.get("content_scope"):
+            structural_children = base_record.get("structural_children") or []
             if structural_children:
-                record["content_scope"] = (
+                base_record["content_scope"] = (
                     "direct" if body_content.strip() else "structural"
                 )
             else:
-                record["content_scope"] = "leaf"
+                base_record["content_scope"] = "leaf"
         if (
-            "should_extract_kg" not in record
-            or record.get("should_extract_kg") is None
+            "should_extract_kg" not in base_record
+            or base_record.get("should_extract_kg") is None
         ):
-            record["should_extract_kg"] = record["content_scope"] != "structural"
-        elif not isinstance(record["should_extract_kg"], bool):
+            base_record["should_extract_kg"] = (
+                base_record["content_scope"] != "structural"
+            )
+        elif not isinstance(base_record["should_extract_kg"], bool):
             raise ValueError(
                 f"block {block_id} 的 should_extract_kg 必须是 JSON boolean"
             )
 
-        record["content"] = build_content(
+        body_lines = clean_body_lines(body_content, block_start_line)
+        cleaned_body = body_lines_to_text(body_lines)
+        base_content = build_content(
             block,
             domain,
             subject,
             file_path,
-            images=images,
-            include_image_captions=not args.disable_image_caption_content,
+            cleaned_body,
         )
-        if "【图片说明】\n" in record["content"]:
-            caption_section = record["content"].split("【图片说明】\n", 1)[1]
-            caption_section = caption_section.split("\n\n【正文】", 1)[0]
-            image_caption_content_lines += sum(
-                line.startswith("- ") for line in caption_section.splitlines()
-            )
-        record["evidence"] = _build_evidence(record)
-        records.append(record)
+        should_split = (
+            base_record.get("should_extract_kg") is True
+            and len(base_content) > HARD_MAX_KG_CHUNK_CHARS
+            and bool(body_lines)
+        )
+        if should_split:
+            parts = split_body_lines_for_kg(body_lines)
+            if len(parts) > 1:
+                split_long_chunks_count += 1
+                split_generated_chunks_count += len(parts)
+                split_count = len(parts)
+                for split_index, part_lines in enumerate(parts, start=1):
+                    part_start, part_end = line_range_for_part(
+                        part_lines, block_start_line, block_end_line
+                    )
+                    split_suffix = f"__part_{split_index:02d}_of_{split_count:02d}"
+                    part_chunk_id = f"{chunk_id}{split_suffix}"
+                    part_block_id = f"{block_id}{split_suffix}"
+                    if part_chunk_id in seen_ids:
+                        raise ValueError(f"chunk_id 重复: {part_chunk_id}")
+                    seen_ids.add(part_chunk_id)
+                    part_file_path = file_path_for_range(
+                        source_path, part_start, part_end
+                    )
+                    part_record = dict(base_record)
+                    part_record.update(
+                        {
+                            "chunk_id": part_chunk_id,
+                            "block_id": part_block_id,
+                            "parent_chunk_id": chunk_id,
+                            "parent_block_id": block_id,
+                            "parent_file_path": file_path,
+                            "split_index": split_index,
+                            "split_count": split_count,
+                            "split_reason": "content_too_long_for_kg",
+                            "split_target_chars": TARGET_KG_CHUNK_CHARS,
+                            "split_hard_max_chars": HARD_MAX_KG_CHUNK_CHARS,
+                            "file_path": part_file_path,
+                            "start_line": part_start,
+                            "end_line": part_end,
+                            "images": images_for_line_range(
+                                images, part_start, part_end
+                            ),
+                        }
+                    )
+                    part_record["chunk_order_index"] = len(records)
+                    part_record["content"] = build_content(
+                        block,
+                        domain,
+                        subject,
+                        part_file_path,
+                        body_lines_to_text(part_lines),
+                        split_label=f"{split_index}/{split_count}",
+                    )
+                    part_record["evidence"] = _build_evidence(part_record)
+                    records.append(part_record)
+                continue
+
+        if chunk_id in seen_ids:
+            raise ValueError(f"chunk_id 重复: {chunk_id}")
+        seen_ids.add(chunk_id)
+        base_record["chunk_order_index"] = len(records)
+        base_record["content"] = base_content
+        base_record["evidence"] = _build_evidence(base_record)
+        records.append(base_record)
     write_jsonl(output, records)
 
     content_scope_counts = Counter(record["content_scope"] for record in records)
@@ -588,6 +734,19 @@ def run(args: argparse.Namespace) -> Path:
         name: sum(bool(pattern.search(record["content"])) for record in records)
         for name, pattern in CONTENT_IMAGE_CHECKS.items()
     }
+    chunks_with_image_caption_content = sum(
+        "【图片说明】" in record["content"] for record in records
+    )
+    image_caption_content_lines = 0
+    for record in records:
+        if "【图片说明】\n" not in record["content"]:
+            continue
+        caption_section = record["content"].split("【图片说明】\n", 1)[1]
+        caption_section = caption_section.split("\n\n【正文】", 1)[0]
+        image_caption_content_lines += sum(
+            line.startswith("- ") for line in caption_section.splitlines()
+        )
+    content_lengths = [len(record["content"]) for record in records]
     stats = {
         "count": len(records),
         "content_scope": dict(sorted(content_scope_counts.items())),
@@ -603,6 +762,13 @@ def run(args: argparse.Namespace) -> Path:
             image.get("page_idx") is not None for image in all_images
         ),
         "image_caption_content_lines": image_caption_content_lines,
+        "chunks_with_image_caption_content": chunks_with_image_caption_content,
+        "split_long_chunks_count": split_long_chunks_count,
+        "split_generated_chunks_count": split_generated_chunks_count,
+        "max_content_chars_after_split": max(content_lengths) if content_lengths else 0,
+        "chunks_over_hard_max_after_split": sum(
+            length > HARD_MAX_KG_CHUNK_CHARS for length in content_lengths
+        ),
         "chunks_with_url_in_content": content_issue_counts["url"],
         "chunks_with_local_image_path_in_content": content_issue_counts[
             "local_image_path"
