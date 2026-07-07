@@ -22,6 +22,7 @@ General options:
   --query-max-tokens INT                    Default: 4096
 
 Step 6 debug selection:
+  --entity-types-guidance-file PATH         Optional Step 6 LightRAG guidance file
   --max-kg-chunks INT
   --start-chunk-index INT                   Default: 0
   --chunk-title-contains TEXT
@@ -65,6 +66,7 @@ CLI_MAX_LINES="500"
 CLI_MAX_CHARS="12000"
 CLI_IMPORT_METHOD="custom_chunks"
 CLI_QUERY_MAX_TOKENS="4096"
+CLI_ENTITY_TYPES_GUIDANCE_FILE=""
 CLI_MAX_KG_CHUNKS=""
 CLI_START_CHUNK_INDEX="0"
 CLI_CHUNK_TITLE_CONTAINS=""
@@ -138,6 +140,11 @@ while [[ $# -gt 0 ]]; do
     --query-max-tokens)
       need_arg "$1" "${2:-}"
       CLI_QUERY_MAX_TOKENS="$2"
+      shift 2
+      ;;
+    --entity-types-guidance-file)
+      need_arg "$1" "${2:-}"
+      CLI_ENTITY_TYPES_GUIDANCE_FILE="$2"
       shift 2
       ;;
     --max-kg-chunks)
@@ -224,6 +231,11 @@ if [[ -n "$CLI_CHUNK_ID_FILE" ]]; then
   CLI_CHUNK_ID_FILE="$(realpath "$CLI_CHUNK_ID_FILE")"
 fi
 
+if [[ -n "$CLI_ENTITY_TYPES_GUIDANCE_FILE" ]]; then
+  [[ -f "$CLI_ENTITY_TYPES_GUIDANCE_FILE" ]] || die "--entity-types-guidance-file must be an existing file: $CLI_ENTITY_TYPES_GUIDANCE_FILE"
+  CLI_ENTITY_TYPES_GUIDANCE_FILE="$(realpath "$CLI_ENTITY_TYPES_GUIDANCE_FILE")"
+fi
+
 BOOK_FILE="$(basename "$MD_FILE")"
 BOOK_STEM="${BOOK_FILE%.md}"
 
@@ -273,6 +285,7 @@ run_step() {
     6)
       echo "[6/8] Import custom chunks into LightRAG"
       debug_args=()
+      [[ -n "$CLI_ENTITY_TYPES_GUIDANCE_FILE" ]] && debug_args+=(--entity-types-guidance-file "$CLI_ENTITY_TYPES_GUIDANCE_FILE")
       [[ -n "$CLI_MAX_KG_CHUNKS" ]] && debug_args+=(--max-kg-chunks "$CLI_MAX_KG_CHUNKS")
       debug_args+=(--start-chunk-index "$CLI_START_CHUNK_INDEX")
       [[ -n "$CLI_CHUNK_TITLE_CONTAINS" ]] && debug_args+=(--chunk-title-contains "$CLI_CHUNK_TITLE_CONTAINS")

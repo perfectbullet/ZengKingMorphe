@@ -15,8 +15,6 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
-from lightrag import LightRAG
-from lightrag.operate import merge_nodes_and_edges
 
 from common import (
     DEFAULT_WORKING_DIR,
@@ -31,11 +29,13 @@ from common import (
 
 PROJECT_DIR = Path(__file__).resolve().parent
 PROMPTS_DIR = PROJECT_DIR / "prompts"
-PROFILES_DIR = PROMPTS_DIR / "profiles"
+# Legacy long prompts under prompts/ are kept for history, but Step 6 now only
+# injects a short LightRAG entity_types_guidance string by default.
+ENTITY_TYPES_GUIDANCE_DIR = PROMPTS_DIR / "entity_types_guidance"
 SCHEMAS_DIR = PROMPTS_DIR / "schemas"
 DEFAULT_SCHEMA_VERSION = "industrial_training_kg_schema.v1"
-DEFAULT_SCHEMA_MD = SCHEMAS_DIR / "industrial_training_kg_schema.v1.md"
 DEFAULT_SCHEMA_JSON = SCHEMAS_DIR / "industrial_training_kg_schema.v1.json"
+DEFAULT_ENAMEL_GUIDANCE = ENTITY_TYPES_GUIDANCE_DIR / "01_enamel.guidance.md"
 logger = logging.getLogger(__name__)
 CUSTOM_CHUNK_METADATA_FIELDS = [
     "chunk_id",
@@ -114,6 +114,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--profile-prompt", type=Path)
     parser.add_argument("--no-profile-prompt", action="store_true")
     parser.add_argument("--print-prompt-preview", action="store_true")
+    parser.add_argument("--entity-types-guidance-file", type=Path)
     parser.add_argument(
         "--extract-batch-size",
         type=int,
@@ -152,7 +153,13 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--env-file", type=Path, default=PROJECT_DIR.parent / ".env")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.base_prompt or args.profile_prompt or args.no_profile_prompt:
+        parser.error(
+            "Step 6 now uses LightRAG entity_types_guidance. "
+            "Use --entity-types-guidance-file instead."
+        )
+    return args
 
 
 def preload_env() -> Path:
@@ -171,88 +178,54 @@ def preload_env() -> Path:
 def read_text_file(path: Path) -> str:
     resolved = path.expanduser().resolve()
     if not resolved.is_file():
-        raise FileNotFoundError(f"prompt 文件不存在: {resolved}")
+        raise FileNotFoundError(f"guidance 文件不存在: {resolved}")
     return resolved.read_text(encoding="utf-8").strip()
 
 
-def resolve_base_prompt_path(args: argparse.Namespace) -> Path:
-    if args.base_prompt is not None:
-        return args.base_prompt.expanduser().resolve()
-    env_path = os.getenv("MARKDOWN_GRAPH_BASE_PROMPT", "").strip()
-    if env_path:
-        return Path(env_path).expanduser().resolve()
-    for candidate in (
-        PROMPTS_DIR / "graph_extraction_base.md",
-        DEFAULT_SCHEMA_MD,
-        PROMPTS_DIR / "graph_extraction_guidance.md",
-    ):
-        if candidate.is_file():
-            return candidate.resolve()
-    raise FileNotFoundError(
-        "未找到 KG 抽取 base prompt；请提供 --base-prompt 或创建 "
-        f"{PROMPTS_DIR / 'graph_extraction_base.md'}"
-    )
+def resolve_entity_types_guidance_path(args: argparse.Namespace) -> Path:
+    if args.entity_types_guidance_file is not None:
+        guidance_path = args.entity_types_guidance_file.expanduser().resolve()
+        if not guidance_path.is_file():
+            raise FileNotFoundError(
+                f"--entity-types-guidance-file 不存在: {guidance_path}"
+            )
+        return guidance_path
 
-
-def resolve_profile_prompt_path(args: argparse.Namespace) -> Path | None:
-    if args.no_profile_prompt:
-        return None
-    if args.profile_prompt is not None:
-        return args.profile_prompt.expanduser().resolve()
-    env_path = os.getenv("MARKDOWN_GRAPH_PROFILE_PROMPT", "").strip()
-    if env_path:
-        return Path(env_path).expanduser().resolve()
-
-    profile = PROFILES_DIR / "01_enamel.profile.md"
     chunks_name = args.chunks.name.casefold()
     subject = str(args.subject or "").casefold()
     if subject == "enamel" or any(
         marker.casefold() in chunks_name for marker in ("01珐琅工艺", "enamel", "珐琅")
     ):
-        return profile.resolve() if profile.is_file() else None
-    return None
+        if DEFAULT_ENAMEL_GUIDANCE.is_file():
+            return DEFAULT_ENAMEL_GUIDANCE.resolve()
+        raise FileNotFoundError(f"默认 enamel guidance 文件不存在: {DEFAULT_ENAMEL_GUIDANCE}")
+    raise ValueError(
+        "无法根据 subject/chunks 文件名推断 entity_types_guidance；"
+        "请显式传入 --entity-types-guidance-file"
+    )
 
 
 def prompt_sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def build_extraction_prompt(args: argparse.Namespace) -> tuple[str, dict[str, Any]]:
-    base_path = resolve_base_prompt_path(args)
-    base_prompt = read_text_file(base_path)
-    profile_path = resolve_profile_prompt_path(args)
-    profile_prompt = read_text_file(profile_path) if profile_path is not None else ""
-    schema_json_path = args.schema_json.expanduser().resolve()
-    schema_json_exists = schema_json_path.is_file()
-    if not schema_json_exists:
-        logger.warning(
-            "schema json 不存在，仅使用 prompt 文本: %s", schema_json_path
-        )
-
-    final_prompt = base_prompt.strip()
-    if profile_prompt:
-        final_prompt += "\n\n---\n\n# 教材级抽取 Profile\n\n"
-        final_prompt += profile_prompt.strip()
-    prompt_meta = {
-        "schema_version": args.schema_version,
-        "schema_json_path": str(schema_json_path) if schema_json_exists else None,
-        "schema_json_exists": schema_json_exists,
-        "base_prompt_path": str(base_path),
-        "base_prompt_chars": len(base_prompt),
-        "base_prompt_sha256": prompt_sha256(base_prompt),
-        "profile_prompt_enabled": profile_path is not None,
-        "profile_prompt_path": str(profile_path) if profile_path is not None else None,
-        "profile_prompt_chars": len(profile_prompt),
-        "profile_prompt_sha256": (
-            prompt_sha256(profile_prompt) if profile_path is not None else None
-        ),
-        "final_prompt_chars": len(final_prompt),
-        "final_prompt_sha256": prompt_sha256(final_prompt),
+def build_entity_types_guidance(
+    args: argparse.Namespace,
+) -> tuple[str, dict[str, Any]]:
+    guidance_path = resolve_entity_types_guidance_path(args)
+    guidance = read_text_file(guidance_path)
+    guidance_meta = {
+        "guidance_mode": "entity_types_guidance",
+        "guidance_path": str(guidance_path),
+        "guidance_chars": len(guidance),
+        "guidance_sha256": prompt_sha256(guidance),
     }
-    return final_prompt, prompt_meta
+    return guidance, guidance_meta
 
 
-def build_rag(working_dir: Path, extraction_prompt: str) -> LightRAG:
+def build_rag(working_dir: Path, entity_types_guidance: str) -> LightRAG:
+    from lightrag import LightRAG
+
     working_dir.mkdir(parents=True, exist_ok=True)
     return LightRAG(
         working_dir=str(working_dir),
@@ -260,7 +233,7 @@ def build_rag(working_dir: Path, extraction_prompt: str) -> LightRAG:
         enable_llm_cache_for_entity_extract=False,
         addon_params={
             "language": "Chinese",
-            "entity_types_guidance": extraction_prompt,
+            "entity_types_guidance": entity_types_guidance,
         },
         llm_model_func=build_llm_model_func(),
         embedding_func=build_embedding_func(),
@@ -487,6 +460,8 @@ async def extract_and_merge_chunks(
     current_file_number: int,
     total_files: int,
 ) -> tuple[int, int, int]:
+    from lightrag.operate import merge_nodes_and_edges
+
     pipeline_status = {
         "latest_message": "",
         "history_messages": [],
@@ -925,16 +900,15 @@ async def run(args: argparse.Namespace) -> int:
     if args.single_chunk_retry < 0:
         raise ValueError("--single-chunk-retry 不能小于 0")
 
-    extraction_prompt, prompt_meta = build_extraction_prompt(args)
+    entity_types_guidance, prompt_meta = build_entity_types_guidance(args)
     logger.info(
-        "extraction prompt | base=%s profile=%s final_sha256=%s final_chars=%d",
-        prompt_meta["base_prompt_path"],
-        prompt_meta["profile_prompt_path"],
-        prompt_meta["final_prompt_sha256"],
-        prompt_meta["final_prompt_chars"],
+        "entity_types_guidance | path=%s sha256=%s chars=%d",
+        prompt_meta["guidance_path"],
+        prompt_meta["guidance_sha256"],
+        prompt_meta["guidance_chars"],
     )
     if args.print_prompt_preview:
-        logger.info("extraction prompt preview:\n%s", extraction_prompt[:1200])
+        logger.info("entity_types_guidance preview:\n%s", entity_types_guidance[:1200])
 
     llm = resolve_llm_config()
     embedding = resolve_embedding_config()
@@ -946,7 +920,7 @@ async def run(args: argparse.Namespace) -> int:
         embedding["dim"],
         working_dir,
     )
-    rag = build_rag(working_dir, extraction_prompt)
+    rag = build_rag(working_dir, entity_types_guidance)
     await rag.initialize_storages()
     logger.info("LightRAG storages initialized")
     try:
@@ -985,6 +959,7 @@ async def run(args: argparse.Namespace) -> int:
         "content_scope_stats": result["content_scope_stats"],
         "should_extract_kg_stats": result["should_extract_kg_stats"],
         "prompt": prompt_meta,
+        "prompt_meta": prompt_meta,
         "entity_count_after": len(labels),
         "relation_count_after": len(relations),
         "extracted_entity_mentions": result["extracted_entity_mentions"],
