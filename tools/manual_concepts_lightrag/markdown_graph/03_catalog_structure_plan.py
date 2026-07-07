@@ -434,6 +434,58 @@ def invalid_anchor(
     return anchor
 
 
+def is_source_missing_anchor(source: Any) -> bool:
+    """Return True when a manual anchor requests reviewed source_missing state."""
+    return (
+        isinstance(source, dict)
+        and (
+            source.get("review_status") == "source_missing"
+            or source.get("source_missing") is True
+            or source.get("missing_source") is True
+        )
+    )
+
+
+def normalize_source_missing_anchor(
+    source: dict[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
+    """Normalize reviewed source_missing records and collect validation errors."""
+    anchor = dict(source)
+    errors: list[str] = []
+
+    if anchor.get("manual_override") is not True:
+        errors.append("source_missing 必须 manual_override=true")
+
+    if (
+        anchor.get("source_missing") is not True
+        and anchor.get("missing_source") is not True
+    ):
+        if anchor.get("review_status") != "source_missing":
+            errors.append("source_missing 或 missing_source 至少一个必须为 true")
+
+    missing_reason = str(anchor.get("missing_reason") or "").strip()
+    reason = str(anchor.get("reason") or "").strip()
+    if not missing_reason and reason:
+        missing_reason = reason
+        anchor["missing_reason"] = missing_reason
+    if not missing_reason:
+        errors.append("source_missing 的 missing_reason 必须非空")
+
+    anchor["matched"] = False
+    anchor["matched_candidate_id"] = None
+    anchor["matched_start_line"] = None
+    anchor["matched_title_text"] = None
+    anchor["review_status"] = "source_missing"
+    anchor["source_missing"] = True
+    anchor["missing_source"] = True
+    anchor["should_extract_kg"] = False
+    anchor["content_scope"] = "source_missing"
+    if not reason:
+        anchor["reason"] = missing_reason
+
+    return anchor, errors
+
+
 def validate_source_missing_anchor(
     source: Any,
     catalog_index: int,
@@ -441,26 +493,16 @@ def validate_source_missing_anchor(
     candidates: list[dict[str, Any]],
 ) -> dict[str, Any] | None:
     """Validate a manual source_missing record, or return None when not requested."""
-    if not isinstance(source, dict) or source.get("review_status") != "source_missing":
+    if not is_source_missing_anchor(source):
         return None
-    errors: list[str] = []
+    source, errors = normalize_source_missing_anchor(source)
     if source.get("catalog_index") != catalog_index:
         errors.append(
             f"catalog_index 不一致: expected={catalog_index} "
             f"actual={source.get('catalog_index')!r}"
         )
-    if source.get("matched") is not False:
-        errors.append("source_missing 必须 matched=false")
-    if source.get("manual_override") is not True:
-        errors.append("source_missing 必须 manual_override=true")
-    if source.get("missing_source") is not True:
-        errors.append("source_missing 必须 missing_source=true")
     reason = str(source.get("reason") or "").strip()
     missing_reason = str(source.get("missing_reason") or "").strip()
-    if not reason:
-        errors.append("source_missing 的 reason 必须非空")
-    if not missing_reason:
-        errors.append("source_missing 的 missing_reason 必须非空")
     if errors:
         return invalid_anchor(
             catalog_index,
@@ -476,7 +518,7 @@ def validate_source_missing_anchor(
         "matched": False,
         "matched_candidate_id": None,
         "matched_start_line": None,
-        "matched_title_text": "",
+        "matched_title_text": None,
         "confidence": 0.0,
         "reason": reason or missing_reason,
         "missing_reason": missing_reason,
@@ -485,6 +527,8 @@ def validate_source_missing_anchor(
         "review_status": "source_missing",
         "anchor_status": "source_missing",
         "source_missing": True,
+        "should_extract_kg": False,
+        "content_scope": "source_missing",
         "invalid": False,
         "top_candidates": candidates,
     }

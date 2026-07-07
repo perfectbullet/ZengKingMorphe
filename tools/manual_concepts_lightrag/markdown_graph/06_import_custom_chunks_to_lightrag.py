@@ -73,6 +73,23 @@ class EntityExtractionError(RuntimeError):
         self.chunks = chunks
 
 
+def env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return default
+    return value.strip().casefold() in {"1", "true", "yes", "y", "on"}
+
+
+def env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return default
+    try:
+        return int(value.strip())
+    except ValueError as exc:
+        raise ValueError(f"{name} 必须是整数: {value!r}") from exc
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="使用自建 custom chunks 导入 LightRAG")
     parser.add_argument("--chunks", required=True, type=Path)
@@ -97,6 +114,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--profile-prompt", type=Path)
     parser.add_argument("--no-profile-prompt", action="store_true")
     parser.add_argument("--print-prompt-preview", action="store_true")
+    parser.add_argument(
+        "--extract-batch-size",
+        type=int,
+        default=env_int("MARKDOWN_GRAPH_EXTRACT_BATCH_SIZE", 8),
+    )
+    parser.add_argument(
+        "--single-chunk-retry",
+        type=int,
+        default=env_int("MARKDOWN_GRAPH_SINGLE_CHUNK_RETRY", 1),
+    )
+    parser.add_argument(
+        "--continue-on-chunk-error",
+        action="store_true",
+        default=env_bool("MARKDOWN_GRAPH_CONTINUE_ON_CHUNK_ERROR", True),
+    )
+    parser.add_argument(
+        "--failed-chunk-policy",
+        choices=["return_nonzero", "return_zero"],
+        default=os.getenv("MARKDOWN_GRAPH_FAILED_CHUNK_POLICY", "return_nonzero"),
+    )
     parser.add_argument(
         "--schema-version",
         default=os.getenv("MARKDOWN_GRAPH_SCHEMA_VERSION", DEFAULT_SCHEMA_VERSION),
@@ -253,13 +290,159 @@ def validate_chunks(chunks: list[dict]) -> None:
             raise ValueError(f"chunk {chunk_id} 的 should_extract_kg 必须是 JSON boolean")
 
 
+def chunk_batches(
+    chunks: dict[str, dict[str, Any]], batch_size: int
+) -> list[dict[str, dict[str, Any]]]:
+    items = list(chunks.items())
+    return [
+        dict(items[index : index + batch_size])
+        for index in range(0, len(items), batch_size)
+    ]
+
+
+def count_extraction_mentions(
+    extraction_results: Any,
+) -> tuple[int, int, int]:
+    result_count = len(extraction_results or [])
+    entity_mentions = 0
+    relation_mentions = 0
+    for maybe_nodes, maybe_edges in extraction_results or []:
+        entity_mentions += len(maybe_nodes)
+        relation_mentions += len(maybe_edges)
+    return result_count, entity_mentions, relation_mentions
+
+
+def failed_chunk_record(
+    chunk_id: str,
+    chunk: dict[str, Any],
+    exc: BaseException,
+    *,
+    retry_count: int,
+) -> dict[str, Any]:
+    return {
+        "chunk_id": chunk_id,
+        "doc_id": chunk.get("full_doc_id") or chunk.get("doc_id"),
+        "catalog_index": chunk.get("catalog_index"),
+        "catalog_title": chunk.get("catalog_title"),
+        "file_path": chunk.get("file_path"),
+        "content_chars": len(str(chunk.get("content") or "")),
+        "image_count": len(chunk.get("images") or []),
+        "error_type": type(exc).__name__,
+        "error": str(exc),
+        "retry_count": retry_count,
+    }
+
+
+async def extract_and_merge_chunks(
+    rag: LightRAG,
+    chunk_records: dict[str, dict[str, Any]],
+    *,
+    doc_id: str,
+    file_path: str,
+    current_file_number: int,
+    total_files: int,
+) -> tuple[int, int, int]:
+    pipeline_status = {
+        "latest_message": "",
+        "history_messages": [],
+        "cancellation_requested": False,
+    }
+    pipeline_status_lock = asyncio.Lock()
+    extraction_results = await rag._process_extract_entities(
+        chunk_records,
+        pipeline_status,
+        pipeline_status_lock,
+    )
+    result_count, entity_mentions, relation_mentions = count_extraction_mentions(
+        extraction_results
+    )
+    await merge_nodes_and_edges(
+        chunk_results=extraction_results,
+        knowledge_graph_inst=rag.chunk_entity_relation_graph,
+        entity_vdb=rag.entities_vdb,
+        relationships_vdb=rag.relationships_vdb,
+        global_config=rag._build_global_config(),
+        full_entities_storage=rag.full_entities,
+        full_relations_storage=rag.full_relations,
+        doc_id=doc_id,
+        pipeline_status=pipeline_status,
+        pipeline_status_lock=pipeline_status_lock,
+        llm_response_cache=rag.llm_response_cache,
+        entity_chunks_storage=rag.entity_chunks,
+        relation_chunks_storage=rag.relation_chunks,
+        current_file_number=current_file_number,
+        total_files=total_files,
+        file_path=file_path,
+    )
+    return result_count, entity_mentions, relation_mentions
+
+
+async def extract_single_chunk_with_retry(
+    rag: LightRAG,
+    chunk_id: str,
+    chunk: dict[str, Any],
+    *,
+    doc_id: str,
+    file_path: str,
+    current_file_number: int,
+    total_files: int,
+    single_chunk_retry: int,
+) -> tuple[bool, dict[str, Any] | None, int, int, int]:
+    attempts = max(single_chunk_retry, 0) + 1
+    last_error: BaseException | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            result_count, entity_mentions, relation_mentions = await extract_and_merge_chunks(
+                rag,
+                {chunk_id: chunk},
+                doc_id=doc_id,
+                file_path=file_path,
+                current_file_number=current_file_number,
+                total_files=total_files,
+            )
+            logger.info(
+                "extract single done | chunk_id=%s ent=%d rel=%d",
+                chunk_id,
+                entity_mentions,
+                relation_mentions,
+            )
+            return True, None, result_count, entity_mentions, relation_mentions
+        except Exception as exc:
+            last_error = exc
+            if attempt < attempts:
+                logger.warning(
+                    "extract single retry | chunk_id=%s attempt=%d/%d error=%s",
+                    chunk_id,
+                    attempt,
+                    attempts,
+                    exc,
+                )
+    assert last_error is not None
+    logger.error("extract single failed | chunk_id=%s error=%s", chunk_id, last_error)
+    return (
+        False,
+        failed_chunk_record(
+            chunk_id,
+            chunk,
+            last_error,
+            retry_count=max(single_chunk_retry, 0),
+        ),
+        0,
+        0,
+        0,
+    )
+
+
 async def import_custom_chunks(
     rag: LightRAG,
     chunks: list[dict],
     *,
     replace: bool = False,
+    extract_batch_size: int = 8,
+    single_chunk_retry: int = 1,
+    continue_on_chunk_error: bool = True,
 ) -> dict:
-    """Write caller-owned chunks, then run entity/relation extraction once."""
+    """Write caller-owned chunks, then extract KG with chunk-level failure isolation."""
     validate_chunks(chunks)
     grouped: dict[str, list[dict]] = defaultdict(list)
     for chunk in chunks:
@@ -338,14 +521,22 @@ async def import_custom_chunks(
         extraction_result_count = 0
         extracted_entity_mentions = 0
         extracted_relation_mentions = 0
-        total_kg_docs = sum(
-            any(
-                record.get("should_extract_kg", True) is not False
-                for record in doc_records.values()
+        succeeded_kg_chunk_count = 0
+        failed_chunks: list[dict[str, Any]] = []
+        total_batches = sum(
+            len(
+                chunk_batches(
+                    {
+                        chunk_id: record
+                        for chunk_id, record in doc_records.items()
+                        if record.get("should_extract_kg", True) is not False
+                    },
+                    extract_batch_size,
+                )
             )
             for doc_records in inserting_chunks_by_doc.values()
         )
-        current_kg_doc = 0
+        current_batch = 0
         for doc_id, doc_chunks in inserting_chunks_by_doc.items():
             kg_doc_chunks = {
                 chunk_id: record
@@ -354,52 +545,143 @@ async def import_custom_chunks(
             }
             if not kg_doc_chunks:
                 continue
-            current_kg_doc += 1
-            pipeline_status = {
-                "latest_message": "",
-                "history_messages": [],
-                "cancellation_requested": False,
-            }
-            pipeline_status_lock = asyncio.Lock()
-            try:
-                extraction_results = await rag._process_extract_entities(
-                    kg_doc_chunks,
-                    pipeline_status,
-                    pipeline_status_lock,
+            batches = chunk_batches(kg_doc_chunks, extract_batch_size)
+            for batch_index, batch_chunks in enumerate(batches, start=1):
+                current_batch += 1
+                logger.info(
+                    "extract batch | doc_id=%s batch=%d/%d chunks=%d",
+                    doc_id,
+                    batch_index,
+                    len(batches),
+                    len(batch_chunks),
                 )
-                extraction_result_count += len(extraction_results or [])
-                for maybe_nodes, maybe_edges in extraction_results or []:
-                    extracted_entity_mentions += len(maybe_nodes)
-                    extracted_relation_mentions += len(maybe_edges)
-                await merge_nodes_and_edges(
-                    chunk_results=extraction_results,
-                    knowledge_graph_inst=rag.chunk_entity_relation_graph,
-                    entity_vdb=rag.entities_vdb,
-                    relationships_vdb=rag.relationships_vdb,
-                    global_config=rag._build_global_config(),
-                    full_entities_storage=rag.full_entities,
-                    full_relations_storage=rag.full_relations,
-                    doc_id=doc_id,
-                    pipeline_status=pipeline_status,
-                    pipeline_status_lock=pipeline_status_lock,
-                    llm_response_cache=rag.llm_response_cache,
-                    entity_chunks_storage=rag.entity_chunks,
-                    relation_chunks_storage=rag.relation_chunks,
-                    current_file_number=current_kg_doc,
-                    total_files=total_kg_docs,
-                    file_path=new_docs[doc_id]["file_path"],
-                )
-            except Exception as exc:
-                failed_doc_chunks = grouped[doc_id]
-                raise EntityExtractionError(
-                    f"实体关系抽取或合并失败: {type(exc).__name__}: {exc}",
-                    failed_doc_chunks,
-                ) from exc
+                try:
+                    (
+                        result_count,
+                        entity_mentions,
+                        relation_mentions,
+                    ) = await extract_and_merge_chunks(
+                        rag,
+                        batch_chunks,
+                        doc_id=doc_id,
+                        file_path=new_docs[doc_id]["file_path"],
+                        current_file_number=current_batch,
+                        total_files=total_batches,
+                    )
+                    extraction_result_count += result_count
+                    extracted_entity_mentions += entity_mentions
+                    extracted_relation_mentions += relation_mentions
+                    succeeded_kg_chunk_count += len(batch_chunks)
+                    logger.info(
+                        "extract batch done | doc_id=%s batch=%d/%d chunks=%d "
+                        "ent=%d rel=%d",
+                        doc_id,
+                        batch_index,
+                        len(batches),
+                        len(batch_chunks),
+                        entity_mentions,
+                        relation_mentions,
+                    )
+                    continue
+                except Exception as exc:
+                    if len(batch_chunks) <= 1:
+                        chunk_id, chunk = next(iter(batch_chunks.items()))
+                        logger.warning(
+                            "extract batch failed, retry as single chunk | "
+                            "doc_id=%s batch=%d/%d chunk_id=%s error=%s",
+                            doc_id,
+                            batch_index,
+                            len(batches),
+                            chunk_id,
+                            exc,
+                        )
+                        (
+                            success,
+                            failed_chunk,
+                            result_count,
+                            entity_mentions,
+                            relation_mentions,
+                        ) = await extract_single_chunk_with_retry(
+                            rag,
+                            chunk_id,
+                            chunk,
+                            doc_id=doc_id,
+                            file_path=new_docs[doc_id]["file_path"],
+                            current_file_number=current_batch,
+                            total_files=total_batches,
+                            single_chunk_retry=single_chunk_retry,
+                        )
+                        if success:
+                            succeeded_kg_chunk_count += 1
+                            extraction_result_count += result_count
+                            extracted_entity_mentions += entity_mentions
+                            extracted_relation_mentions += relation_mentions
+                        elif failed_chunk is not None:
+                            failed_chunks.append(failed_chunk)
+                            if not continue_on_chunk_error:
+                                raise EntityExtractionError(
+                                    "实体关系抽取或合并失败: "
+                                    f"{failed_chunk['error_type']}: "
+                                    f"{failed_chunk['error']}",
+                                    failed_chunks,
+                                ) from exc
+                        continue
+                    logger.warning(
+                        "extract batch failed, fallback to single chunks | "
+                        "doc_id=%s batch=%d/%d error=%s",
+                        doc_id,
+                        batch_index,
+                        len(batches),
+                        exc,
+                    )
+
+                for chunk_id, chunk in batch_chunks.items():
+                    (
+                        success,
+                        failed_chunk,
+                        result_count,
+                        entity_mentions,
+                        relation_mentions,
+                    ) = await extract_single_chunk_with_retry(
+                        rag,
+                        chunk_id,
+                        chunk,
+                        doc_id=doc_id,
+                        file_path=new_docs[doc_id]["file_path"],
+                        current_file_number=current_batch,
+                        total_files=total_batches,
+                        single_chunk_retry=single_chunk_retry,
+                    )
+                    if success:
+                        succeeded_kg_chunk_count += 1
+                        extraction_result_count += result_count
+                        extracted_entity_mentions += entity_mentions
+                        extracted_relation_mentions += relation_mentions
+                    elif failed_chunk is not None:
+                        failed_chunks.append(failed_chunk)
+                        if not continue_on_chunk_error:
+                            raise EntityExtractionError(
+                                "实体关系抽取或合并失败: "
+                                f"{failed_chunk['error_type']}: {failed_chunk['error']}",
+                                failed_chunks,
+                            )
+        failed_kg_chunk_count = len(failed_chunks)
+        logger.info(
+            "custom chunks result | total=%d kg=%d succeeded=%d failed=%d skipped=%d",
+            len(chunks),
+            kg_chunk_count,
+            succeeded_kg_chunk_count,
+            failed_kg_chunk_count,
+            skipped_kg_chunk_count,
+        )
         return {
             "doc_count": len(new_docs),
             "chunk_count": len(inserting_chunks),
             "kg_chunk_count": kg_chunk_count,
+            "succeeded_kg_chunk_count": succeeded_kg_chunk_count,
+            "failed_kg_chunk_count": failed_kg_chunk_count,
             "skipped_kg_chunk_count": skipped_kg_chunk_count,
+            "failed_chunks": failed_chunks,
             "content_scope_stats": content_scope_stats,
             "should_extract_kg_stats": should_extract_kg_stats,
             "extraction_result_count": extraction_result_count,
@@ -465,9 +747,12 @@ async def run(args: argparse.Namespace) -> int:
         "kg_chunk_count": sum(
             chunk.get("should_extract_kg", True) is not False for chunk in chunks
         ),
+        "succeeded_kg_chunk_count": 0,
+        "failed_kg_chunk_count": 0,
         "skipped_kg_chunk_count": sum(
             chunk.get("should_extract_kg") is False for chunk in chunks
         ),
+        "failed_chunks": [],
         "content_scope_stats": dict(
             sorted(Counter(chunk.get("content_scope") for chunk in chunks).items())
         ),
@@ -480,6 +765,10 @@ async def run(args: argparse.Namespace) -> int:
         "extracted_entity_mentions": 0,
         "extracted_relation_mentions": 0,
     }
+    if args.extract_batch_size <= 0:
+        raise ValueError("--extract-batch-size 必须大于 0")
+    if args.single_chunk_retry < 0:
+        raise ValueError("--single-chunk-retry 不能小于 0")
 
     extraction_prompt, prompt_meta = build_extraction_prompt(args)
     logger.info(
@@ -507,30 +796,36 @@ async def run(args: argparse.Namespace) -> int:
     logger.info("LightRAG storages initialized")
     try:
         try:
-            result = await import_custom_chunks(rag, chunks, replace=args.replace)
+            result = await import_custom_chunks(
+                rag,
+                chunks,
+                replace=args.replace,
+                extract_batch_size=args.extract_batch_size,
+                single_chunk_retry=args.single_chunk_retry,
+                continue_on_chunk_error=args.continue_on_chunk_error,
+            )
         except EntityExtractionError as exc:
             error_message = str(exc)
-            failures = [
-                {
-                    "chunk_id": chunk.get("chunk_id"),
-                    "doc_id": chunk.get("doc_id"),
-                    "file_path": chunk.get("file_path"),
-                    "error": error_message,
-                }
-                for chunk in exc.chunks
-            ]
+            failures = exc.chunks
+            result["failed_chunks"] = failures
+            result["failed_kg_chunk_count"] = len(failures)
         labels = await rag.get_graph_labels()
         relations = await rag.chunk_entity_relation_graph.get_all_edges()
     finally:
         await rag.finalize_storages()
         logger.info("LightRAG storages finalized")
 
+    failures = list(result.get("failed_chunks") or failures)
+    failed_kg_chunk_count = int(result.get("failed_kg_chunk_count") or len(failures))
+    succeeded_kg_chunk_count = int(result.get("succeeded_kg_chunk_count") or 0)
     write_jsonl(failed_path, failures)
     report = {
         "working_dir": str(working_dir),
         "doc_count": result["doc_count"],
         "chunk_count": result["chunk_count"],
         "kg_chunk_count": result["kg_chunk_count"],
+        "succeeded_kg_chunk_count": succeeded_kg_chunk_count,
+        "failed_kg_chunk_count": failed_kg_chunk_count,
         "skipped_kg_chunk_count": result["skipped_kg_chunk_count"],
         "content_scope_stats": result["content_scope_stats"],
         "should_extract_kg_stats": result["should_extract_kg_stats"],
@@ -540,7 +835,8 @@ async def run(args: argparse.Namespace) -> int:
         "extracted_entity_mentions": result["extracted_entity_mentions"],
         "extracted_relation_mentions": result["extracted_relation_mentions"],
         "replace": bool(args.replace),
-        "failures": len(failures),
+        "failures": failed_kg_chunk_count,
+        "failed_chunk_ids": [chunk.get("chunk_id") for chunk in failures],
         "started_at": started.isoformat(),
         "finished_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -548,9 +844,9 @@ async def run(args: argparse.Namespace) -> int:
         report["error"] = error_message
     write_json(report_path, report)
     logger.info("导入报告 | %s", report_path)
-    if failures:
-        logger.error("导入存在失败 chunks=%d | %s", len(failures), failed_path)
-        return 1
+    if failed_kg_chunk_count:
+        logger.error("导入存在失败 chunks=%d | %s", failed_kg_chunk_count, failed_path)
+        return 1 if args.failed_chunk_policy == "return_nonzero" else 0
     return 0
 
 

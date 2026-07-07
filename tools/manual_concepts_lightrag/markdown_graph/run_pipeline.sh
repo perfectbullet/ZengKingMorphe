@@ -12,6 +12,7 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MD_FILE="$(realpath "$1")"
+INPUT_DIR="$(dirname "$MD_FILE")"
 SELECTED_STEP="all"
 if [[ $# -eq 3 ]]; then
   if [[ "$2" != "-step" || ! "$3" =~ ^[1-8]$ ]]; then
@@ -49,6 +50,7 @@ MAX_UNMATCHED="${MAX_UNMATCHED_CATALOG_ITEMS:-0}"
 USE_EXISTING_ANCHOR_PLAN="${MARKDOWN_GRAPH_USE_EXISTING_ANCHOR_PLAN:-false}"
 SCHEMA_VERSION="${MARKDOWN_GRAPH_SCHEMA_VERSION:-industrial_training_kg_schema.v1}"
 SCHEMA_JSON="${MARKDOWN_GRAPH_SCHEMA_JSON:-$SCRIPT_DIR/prompts/schemas/industrial_training_kg_schema.v1.json}"
+CONTENT_LIST_V2="${MARKDOWN_GRAPH_CONTENT_LIST_V2:-}"
 
 PREPARED="$SCRIPT_DIR/outputs/01_prepared/$BOOK_STEM.prepared.json"
 OUTLINE="$SCRIPT_DIR/outputs/02_outline/$BOOK_STEM.book_outline.json"
@@ -94,7 +96,21 @@ run_step() {
       ;;
     5)
       echo "[5/8] Build LightRAG custom chunks"
-      "$PYTHON_BIN" "$SCRIPT_DIR/05_build_lightrag_chunks.py" --blocks "$BLOCKS" --output "$CHUNKS" --domain "$DOMAIN" --subject "$SUBJECT"
+      content_list_v2_args=()
+      if [[ -n "$CONTENT_LIST_V2" ]]; then
+        content_list_v2_args+=(--content-list-v2 "$CONTENT_LIST_V2")
+      else
+        shopt -s nullglob
+        content_list_v2_matches=("$INPUT_DIR"/*_content_list_v2.json)
+        shopt -u nullglob
+        if (( ${#content_list_v2_matches[@]} == 1 )); then
+          content_list_v2_args+=(--content-list-v2 "${content_list_v2_matches[0]}")
+        elif (( ${#content_list_v2_matches[@]} > 1 )); then
+          echo "Found multiple *_content_list_v2.json files under $INPUT_DIR; set MARKDOWN_GRAPH_CONTENT_LIST_V2 explicitly" >&2
+          exit 2
+        fi
+      fi
+      "$PYTHON_BIN" "$SCRIPT_DIR/05_build_lightrag_chunks.py" --blocks "$BLOCKS" --output "$CHUNKS" --domain "$DOMAIN" --subject "$SUBJECT" --mineru-dir "$INPUT_DIR" "${content_list_v2_args[@]}"
       ;;
     6)
       echo "[6/8] Import custom chunks into LightRAG"
