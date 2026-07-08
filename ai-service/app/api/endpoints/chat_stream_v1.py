@@ -1234,7 +1234,6 @@ async def generate_openai_stream_v1(
                 logger.info(
                     f"Using RAG stream | backend={backend} | include_history={str(include_history).lower()} | query={query[:80]} | mode={mode}"
                 )
-                rag_retrieval_empty = False
                 rag_stream_error = False
                 debug_meta = {
                     "chat_id": chat_id,
@@ -1297,14 +1296,20 @@ async def generate_openai_stream_v1(
                             f"📊 RAG召回: backend={backend}, "
                             f"entities={content.get('entities_count', 0)}, "
                             f"relationships={content.get('relationships_count', 0)}, "
-                            f"chunks={content.get('chunks_count', 0)}"
+                            f"chunks={content.get('chunks_count', 0)}, "
+                            f"references={content.get('references_count', 0)}, "
+                            f"candidate_chunks={content.get('candidate_chunks_count')}, "
+                            f"final_chunks={content.get('final_chunks_count')}"
                         )
                         if (
                             int(content.get("entities_count", 0) or 0) == 0
                             and int(content.get("chunks_count", 0) or 0) == 0
                             and int(content.get("relationships_count", 0) or 0) == 0
                         ):
-                            rag_retrieval_empty = True
+                            logger.warning(
+                                f"RAG sources_info is empty | backend={backend} | "
+                                f"mode={content.get('mode') or mode}"
+                            )
                     elif chunk_type == "sources":
                         sources = content
                         if sources.get("entities"):
@@ -1366,14 +1371,11 @@ async def generate_openai_stream_v1(
                     yield json.dumps(chunk_data)
 
                 stripped_answer = (full_answer or "").strip()
-                need_rag_fallback = (
-                    rag_stream_error or rag_retrieval_empty or not stripped_answer
-                )
+                need_rag_fallback = rag_stream_error or not stripped_answer
                 if need_rag_fallback and _training_rag_general_fallback_enabled():
                     logger.info(
                         "RAG → general_llm fallback triggered | "
                         f"rag_stream_error={rag_stream_error}, "
-                        f"rag_retrieval_empty={rag_retrieval_empty}, "
                         f"answer_length={len(stripped_answer)}"
                     )
                     try:

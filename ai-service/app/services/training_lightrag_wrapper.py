@@ -3,7 +3,9 @@ LightRAG 文件知识库包装器。
 
 职责：
 - 读取已构建好的 LightRAG working_dir
-- 调用 aquery() 进行流式问答
+- 调用 aquery_llm() 获取完整检索源数据与流式 LLM 响应
+- 从 result["data"] 提取 entities / relationships / chunks / references
+- 从 result["llm_response"]["response_iterator"] 输出流式文本
 - 适配为 ai-service 统一 RAG 事件格式
 - 保存 raw / normalized debug JSONL
 """
@@ -245,40 +247,6 @@ def _to_plain_dict(value: Any) -> dict[str, Any] | None:
     return None
 
 
-def _normalize_raw_data(raw_data: Any) -> tuple[dict[str, Any], dict[str, Any]]:
-    raw = _to_plain_dict(raw_data) or {}
-    data = raw.get("data") if isinstance(raw.get("data"), dict) else raw
-    entities = list(data.get("entities") or [])
-    relationships = list(data.get("relationships") or [])
-    chunks = list(data.get("chunks") or [])
-    info = {
-        "entities_count": len(entities),
-        "relationships_count": len(relationships),
-        "chunks_count": len(chunks),
-        "raw_data_available": bool(raw),
-        "raw_data_keys": list(raw.keys()) if isinstance(raw, dict) else [],
-    }
-    sources = {
-        "entities": entities,
-        "relationships": relationships,
-        "chunks": chunks,
-    }
-    return info, sources
-
-
-def _extract_raw_data(resp: Any) -> Any:
-    if isinstance(resp, dict):
-        if "raw_data" in resp:
-            return resp.get("raw_data")
-        if "data" in resp and any(
-            key in resp.get("data", {}) for key in ("entities", "relationships", "chunks")
-        ):
-            return resp
-    if hasattr(resp, "raw_data"):
-        return getattr(resp, "raw_data")
-    return None
-
-
 def _extract_text_from_item(item: Any) -> str:
     if item is None:
         return ""
@@ -313,24 +281,28 @@ def _build_query_param(mode: str, prefer_zh_output: bool) -> Any:
     user_prompt = (
         "请使用简体中文回答，只根据工训教材知识库作答；"
         "尽量给出章节路径或来源线索；若资料不足，请明确说明“当前知识库资料不足”。"
+        "当用户询问“基本流程/制作流程”时，优先按教材中的核心步骤回答；"
+        "进阶效果、案例、延伸技法只作为补充，不要列为主流程步骤。"
         if prefer_zh_output
         else "Answer in English only based on the training knowledge base. "
-        "If context is insufficient, say the knowledge base lacks enough material."
-    )
-    system_prompt = (
-        "你是工业实训教材问答助手。只根据当前知识库回答，不要编造教材外知识。"
+        "If context is insufficient, say the knowledge base lacks enough material. "
+        "When the user asks for a basic workflow, prioritize core textbook steps "
+        "and keep advanced effects or extensions only as supplementary notes."
     )
 
     candidate_kwargs = {
         "mode": mode,
         "stream": True,
-        "top_k": int(os.getenv("TRAINING_RAG_TOP_K", "40")),
-        "chunk_top_k": int(os.getenv("TRAINING_RAG_CHUNK_TOP_K", "10")),
-        "response_type": os.getenv("TRAINING_RAG_RESPONSE_TYPE", "Multiple Paragraphs"),
+        "top_k": int(os.getenv("TRAINING_RAG_TOP_K", "12")),
+        "chunk_top_k": int(os.getenv("TRAINING_RAG_CHUNK_TOP_K", "4")),
+        "response_type": os.getenv("TRAINING_RAG_RESPONSE_TYPE", "Single Paragraph"),
+        "max_entity_tokens": int(os.getenv("TRAINING_RAG_MAX_ENTITY_TOKENS", "6000")),
+        "max_relation_tokens": int(os.getenv("TRAINING_RAG_MAX_RELATION_TOKENS", "8000")),
+        "max_total_tokens": int(os.getenv("TRAINING_RAG_MAX_TOTAL_TOKENS", "30000")),
         "user_prompt": user_prompt,
-        "system_prompt": system_prompt,
         "conversation_history": [],
-        "enable_rerank": False,
+        "enable_rerank": _env_bool("TRAINING_RAG_ENABLE_RERANK", False),
+        "include_references": _env_bool("TRAINING_RAG_INCLUDE_REFERENCES", True),
     }
     supported = inspect.signature(QueryParam).parameters
     kwargs = {
@@ -339,21 +311,15 @@ def _build_query_param(mode: str, prefer_zh_output: bool) -> Any:
     return QueryParam(**kwargs), kwargs
 
 
-def _build_non_stream_query_param(mode: str, prefer_zh_output: bool) -> Any:
-    from lightrag.base import QueryParam
-
-    param, kwargs = _build_query_param(mode, prefer_zh_output)
-    supported = inspect.signature(QueryParam).parameters
-    if "stream" in supported:
-        kwargs["stream"] = False
-    return QueryParam(**kwargs)
+def _build_system_prompt() -> str:
+    return "你是工业实训教材问答助手。只根据当前知识库回答，不要编造教材外知识。"
 
 
 def _build_llm_model_func():
     from lightrag.llm.openai import openai_complete_if_cache
 
     llm = _resolve_llm_config()
-    default_max_tokens = int(os.getenv("TRAINING_RAG_QUERY_MAX_TOKENS", "4096"))
+    default_max_tokens = int(os.getenv("TRAINING_RAG_QUERY_MAX_TOKENS", "512"))
 
     async def _llm_model_func(
         prompt: str,
@@ -474,82 +440,112 @@ async def get_training_lightrag_stream(
         rag = await get_training_lightrag_instance()
         working_dir = _resolve_working_dir()
         param, param_kwargs = _build_query_param(mode, prefer_zh_output)
+        system_prompt = _build_system_prompt()
 
         _write_raw_debug(
             raw_debug_path,
             {
                 "ts": _now_ts(),
                 "trace_id": trace_id,
-                "stage": "before_aquery",
+                "stage": "before_aquery_llm",
                 "backend": backend,
                 "query": query[: _rag_debug_max_text()],
                 "mode": mode,
                 "working_dir": str(working_dir),
                 "param_kwargs": param_kwargs,
+                "system_prompt": _safe_preview(system_prompt, _rag_debug_max_text()),
                 "debug_meta": _safe_preview(debug_meta or {}, _rag_debug_max_text()),
             },
         )
 
-        resp = await rag.aquery(query, param=param)
-        raw_data = _extract_raw_data(resp)
+        result = await rag.aquery_llm(query, param=param, system_prompt=system_prompt)
+        result_dict = _to_plain_dict(result) or {}
+        data = result_dict.get("data") or {}
+        metadata = result_dict.get("metadata") or {}
+        llm_response = result_dict.get("llm_response") or {}
+        processing_info = metadata.get("processing_info") or {}
+
+        entities = list(data.get("entities") or [])
+        relationships = list(data.get("relationships") or [])
+        chunks = list(data.get("chunks") or [])
+        references = list(data.get("references") or [])
+        response_iterator = llm_response.get("response_iterator")
+        is_streaming = bool(llm_response.get("is_streaming"))
+        content = llm_response.get("content") or ""
+
         _write_raw_debug(
             raw_debug_path,
             {
                 "ts": _now_ts(),
                 "trace_id": trace_id,
-                "stage": "after_aquery",
+                "stage": "after_aquery_llm",
                 "backend": backend,
-                "python_type": type(resp).__name__,
-                "has_response_iterator": hasattr(resp, "response_iterator"),
-                "has_raw_data": raw_data is not None,
-                "has_content": hasattr(resp, "content"),
-                "is_async_iterable": _is_async_iterable(resp),
-                "preview": _safe_preview(resp, _rag_debug_max_text()),
+                "python_type": type(result).__name__,
+                "result_keys": list(result_dict.keys()),
+                "data_keys": list(data.keys()) if isinstance(data, dict) else [],
+                "metadata_keys": list(metadata.keys()) if isinstance(metadata, dict) else [],
+                "llm_response_keys": list(llm_response.keys()) if isinstance(llm_response, dict) else [],
+                "is_streaming": is_streaming,
+                "has_response_iterator": response_iterator is not None,
+                "entities_count": len(entities),
+                "relationships_count": len(relationships),
+                "chunks_count": len(chunks),
+                "references_count": len(references),
+                "preview": _safe_preview(result_dict, _rag_debug_max_text()),
             },
         )
 
-        sources_info: dict[str, Any]
-        sources_payload = {
-            "entities": [],
-            "relationships": [],
-            "chunks": [],
+        sources_info = {
+            "entities_count": len(entities),
+            "relationships_count": len(relationships),
+            "chunks_count": len(chunks),
+            "references_count": len(references),
+            "mode": mode,
             "backend": backend,
+            "working_dir": str(working_dir),
+            "raw_data_available": bool(data),
+            "metadata_available": bool(metadata),
+            "query_mode": metadata.get("query_mode") or mode,
+            "candidate_chunks_count": (
+                processing_info.get("merged_chunks_count")
+                or processing_info.get("total_chunks_found")
+                or processing_info.get("candidate_chunks_count")
+            ),
+            "final_chunks_count": (
+                processing_info.get("final_chunks_count")
+                or len(chunks)
+            ),
         }
-        if raw_data is not None:
-            info, parsed_sources = _normalize_raw_data(raw_data)
-            sources_info = {
-                "entities_count": info["entities_count"],
-                "relationships_count": info["relationships_count"],
-                "chunks_count": info["chunks_count"],
-                "mode": mode,
+        sources_payload = {
+            "entities": entities,
+            "relationships": relationships,
+            "chunks": chunks,
+            "references": references,
+            "metadata": metadata,
+            "backend": backend,
+            "mode": mode,
+            "working_dir": str(working_dir),
+        }
+        _write_raw_debug(
+            raw_debug_path,
+            {
+                "ts": _now_ts(),
+                "trace_id": trace_id,
+                "stage": "aquery_llm_data",
                 "backend": backend,
-                "working_dir": str(working_dir),
-                "raw_data_available": info["raw_data_available"],
-            }
-            sources_payload.update(parsed_sources)
-            _write_raw_debug(
-                raw_debug_path,
-                {
-                    "ts": _now_ts(),
-                    "trace_id": trace_id,
-                    "stage": "raw_data",
-                    "backend": backend,
-                    "entities_count": info["entities_count"],
-                    "relationships_count": info["relationships_count"],
-                    "chunks_count": info["chunks_count"],
-                    "raw_data_keys": info["raw_data_keys"],
-                },
-            )
-        else:
-            sources_info = {
-                "entities_count": 0,
-                "relationships_count": 0,
-                "chunks_count": 0,
-                "mode": mode,
-                "backend": backend,
-                "working_dir": str(working_dir),
-                "raw_data_available": False,
-            }
+                "entities_count": len(entities),
+                "relationships_count": len(relationships),
+                "chunks_count": len(chunks),
+                "references_count": len(references),
+                "processing_info": _safe_preview(processing_info, _rag_debug_max_text()),
+                "first_chunk_preview": _safe_preview(chunks[0], _rag_debug_max_text())
+                if chunks
+                else None,
+                "first_reference_preview": _safe_preview(references[0], _rag_debug_max_text())
+                if references
+                else None,
+            },
+        )
 
         event_index += 1
         async for event in _yield_event(
@@ -564,10 +560,9 @@ async def get_training_lightrag_stream(
 
         emitted_answer = False
 
-        if hasattr(resp, "response_iterator"):
-            iterator = getattr(resp, "response_iterator")
+        if is_streaming and response_iterator is not None:
             raw_index = 0
-            async for item in iterator:
+            async for item in response_iterator:
                 raw_index += 1
                 text = _extract_text_from_item(item)
                 item_dict = _to_plain_dict(item)
@@ -597,52 +592,8 @@ async def get_training_lightrag_stream(
                     event_index=event_index,
                 ):
                     yield event
-        elif _is_async_iterable(resp):
-            raw_index = 0
-            async for item in resp:
-                raw_index += 1
-                text = _extract_text_from_item(item)
-                item_dict = _to_plain_dict(item)
-                _write_raw_debug(
-                    raw_debug_path,
-                    {
-                        "ts": _now_ts(),
-                        "trace_id": trace_id,
-                        "stage": "raw_stream_item",
-                        "index": raw_index,
-                        "backend": backend,
-                        "python_type": type(item).__name__,
-                        "keys": list(item_dict.keys()) if item_dict else [],
-                        "content_len": len(text),
-                        "preview": _safe_preview(item, _rag_debug_max_text()),
-                    },
-                )
-                if not text:
-                    continue
-                emitted_answer = True
-                event_index += 1
-                async for event in _yield_event(
-                    {"type": "chunk", "content": text},
-                    trace_id=trace_id,
-                    backend=backend,
-                    normalized_path=normalized_debug_path,
-                    event_index=event_index,
-                ):
-                    yield event
-        else:
-            text = ""
-            if isinstance(resp, str):
-                text = resp
-            elif isinstance(resp, dict):
-                text = (
-                    str(resp.get("content") or "")
-                    or str(resp.get("response") or "")
-                    or str(resp.get("answer") or "")
-                )
-            elif hasattr(resp, "content") and isinstance(getattr(resp, "content"), str):
-                text = getattr(resp, "content")
-
-            for piece in _iter_text_chunks(text):
+        elif content:
+            for piece in _iter_text_chunks(str(content)):
                 emitted_answer = True
                 event_index += 1
                 async for event in _yield_event(

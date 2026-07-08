@@ -5,6 +5,7 @@
 
 分类类别:
 - math_problem: 数学题目解答
+- industrial_training_query: 工训教材 / 工业实训知识库问题
 - concept_explain: 概念解释
 - greeting: 问候语
 - english_query: 英语问题
@@ -150,6 +151,7 @@ def augment_dialog_with_persisted_turns(
 # =============================================================================
 ClassificationLabel = Literal[
     "math_problem",
+    "industrial_training_query",
     "concept_explain",
     "greeting",
     "english_query",
@@ -183,6 +185,7 @@ class QueryClassifier:
     # 分类标签名称映射
     LABEL_NAMES = {
         "math_problem": "数学题目解答",
+        "industrial_training_query": "工业实训知识库问答",
         "concept_explain": "概念解释",
         "greeting": "问候语",
         "english_query": "英语问题",
