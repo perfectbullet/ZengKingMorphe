@@ -33,7 +33,7 @@ from app.utils.think_tag_buffer import ThinkTagBuffer
 from app.utils.tts_formatter import strip_markdown_for_tts
 from app.utils.text_mapping import map_english_to_chinese, replace_en_math_verbs
 from app.utils.common import sanitize_filename, detect_dominant_language
-from app.services.raganything_wrapper import get_raganything_stream
+from app.services.rag_stream_wrapper import get_rag_stream
 from app.services.math_debug_dump import (
     build_base_debug_payload,
     create_math_debug_file,
@@ -70,6 +70,23 @@ CHUNK_TYPE_ROLE = "role"
 CHUNK_TYPE_TOKEN = "token"
 CHUNK_TYPE_DONE = "done"
 CHUNK_TYPE_ERROR = "error"
+
+
+def _training_rag_general_fallback_enabled() -> bool:
+    return os.getenv("TRAINING_RAG_GENERAL_FALLBACK", "false").lower() in (
+        "true",
+        "1",
+        "yes",
+    )
+
+
+def _training_rag_empty_message(prefer_zh_output: bool) -> str:
+    if prefer_zh_output:
+        return "当前工训知识库暂时没有召回到足够资料，请换一种问法，或确认知识库是否已完成导入。"
+    return (
+        "The training knowledge base did not retrieve enough supporting material. "
+        "Please rephrase the question or check whether the knowledge base has been imported."
+    )
 
 
 # =============================================================================
@@ -502,6 +519,9 @@ _STATE_DEFAULTS: ConversationState = {
     "streaming_type": None,
     "streaming_llm": None,
     "streaming_messages": None,
+    "rag_query": None,
+    "rag_mode": None,
+    "rag_backend": None,
     "raganything_query": None,
     "raganything_mode": None,
     # ── 客户端附加上下文 ──
@@ -1146,10 +1166,13 @@ async def generate_openai_stream_v1(
                 logger.info(f"First token received | ttfb_ms={ttfb_ms}")
             model_name = streaming_type or model_name
             # 根据 streaming_type 选择不同的流式输出方式
-            if streaming_type == "raganything_stream":
-                # RAGAnything 流式输出
-                raw_query = current_state.get(
-                    "raganything_query", current_state.get("user_query", "")
+            if streaming_type in ("rag_stream", "raganything_stream"):
+                raw_query = (
+                    current_state.get("rag_query")
+                    or current_state.get("raganything_query")
+                    or current_state.get("rewritten_query")
+                    or current_state.get("user_query")
+                    or ""
                 )
 
                 # 拼接最近对话历史（已按本轮语言过滤掉异种语言历史，避免语言污染）
@@ -1186,25 +1209,39 @@ async def generate_openai_stream_v1(
 
                 query = (history_prefix or "") + lang_lead + raw_query + lang_tail
 
-                mode = current_state.get("raganything_mode", "hybrid")
-                logger.info(
-                    f"Using RAGAnything stream | query={query[:50]} | mode={mode}"
+                mode = (
+                    current_state.get("rag_mode")
+                    or current_state.get("raganything_mode")
+                    or os.getenv("TRAINING_RAG_QUERY_MODE", "hybrid")
                 )
-                # RAG 召回 / 错误状态跟踪：
-                # - rag_retrieval_empty：sources_info 显示 entities/chunks 都为 0 时置真，
-                #   作为 "RAG 没有结果" → 通用 LLM 兜底的"召回侧"判据；
-                # - rag_stream_error：RAGAnything 内部抛错时置真，避免空回答给到用户。
-                # 任何一者命中 + full_answer 为空 → 后续走通用 LLM 重答（保留 RAG 结果不影响显示，
-                # 因为 full_answer 本身就是空的，不会出现"两段答案叠加"的诡异体验）。
+                backend = (
+                    current_state.get("rag_backend")
+                    or os.getenv("TRAINING_RAG_BACKEND", "lightrag_file")
+                )
+                logger.info(
+                    f"Using RAG stream | backend={backend} | query={query[:80]} | mode={mode}"
+                )
                 rag_retrieval_empty = False
                 rag_stream_error = False
-                async for chunk in get_raganything_stream(
-                    query, mode=mode, prefer_zh_output=prefer_zh_output
+                debug_meta = {
+                    "chat_id": chat_id,
+                    "session_id": session_id,
+                    "user_id": request.user_id,
+                    "employee_id": request.employee_id,
+                    "backend": backend,
+                    "mode": mode,
+                    "streaming_type": streaming_type,
+                }
+
+                async for chunk in get_rag_stream(
+                    query=query,
+                    mode=mode,
+                    prefer_zh_output=prefer_zh_output,
+                    debug_meta=debug_meta,
                 ):
                     chunk_type = chunk.get("type")
                     content = chunk.get("content")
                     if chunk_type == "chunk":
-                        # 跳过 None 内容
                         if content is None:
                             continue
                         full_answer += content
@@ -1217,7 +1254,7 @@ async def generate_openai_stream_v1(
                             request.employee_id,
                             content,
                             raw_token_index,
-                            "raganything",
+                            "rag_stream",
                             current_state.get("conversation_id"),
                         )
                         segment = sentence_buffer.add(content)
@@ -1238,81 +1275,61 @@ async def generate_openai_stream_v1(
                                 current_state.get("conversation_id"),
                                 prefer_zh_output=prefer_zh_output,
                                 enable_math_sentence_conversion=enable_math_sentence_conversion,
-                                log_prefix="RAGAnything",
+                                log_prefix="RAGStream",
                             )
                             yield json.dumps(chunk_data)
                     elif chunk_type == "sources_info":
                         content: dict
                         logger.info(
-                            f"📊 检索到: {content['entities_count']} 个实体, "
-                            f"{content['relationships_count']} 个关系, "
-                            f"{content['chunks_count']} 个文档块"
+                            f"📊 RAG召回: backend={backend}, "
+                            f"entities={content.get('entities_count', 0)}, "
+                            f"relationships={content.get('relationships_count', 0)}, "
+                            f"chunks={content.get('chunks_count', 0)}"
                         )
-                        # 召回完全为空时记录"RAG 无召回"标记；不立刻打断流，
-                        # 让 RAGAnything 走完它自己的输出，最后再统一判断是否需要兜底。
                         if (
                             int(content.get("entities_count", 0) or 0) == 0
                             and int(content.get("chunks_count", 0) or 0) == 0
                             and int(content.get("relationships_count", 0) or 0) == 0
                         ):
                             rag_retrieval_empty = True
-                            logger.info(
-                                "RAG retrieval empty (entities=0/chunks=0/relations=0); "
-                                "will fallback to general LLM if no answer text emitted"
-                            )
                     elif chunk_type == "sources":
-                        # 捕获 RAGAnything 返回的 sources
                         sources = content
-
-                        # 【调试代码】
-                        try:
-                            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                            os.makedirs("json格式数据", exist_ok=True)
-                            json_file_path = f"json格式数据/{timestamp}_sources.json"
-                            with open(json_file_path, "w", encoding="utf-8") as f:
-                                json.dump(sources, f, ensure_ascii=False, indent=2)
-                            print(f"📁 来源数据已保存到: {json_file_path}")
-                        except Exception as e:
-                            logger.warning(
-                                f"Failed to save sources debug json: error={e}"
-                            )
-                        # 【调试代码】
-
-                        # 处理实体引用
                         if sources.get("entities"):
-                            entities = sources["entities"]
                             current_state["sources"].append(
                                 {
                                     "type": "entity",
                                     "from": "【知识图谱】",
+                                    "backend": backend,
                                     "entities": sources["entities"],
                                 }
                             )
-                            logger.info(
-                                f"RAGAnything entities | count={len(entities)} | 添加到 state['sources']"
+                        if sources.get("relationships"):
+                            current_state["sources"].append(
+                                {
+                                    "type": "relationship",
+                                    "from": "【知识图谱关系】",
+                                    "backend": backend,
+                                    "relationships": sources["relationships"],
+                                }
                             )
-                        # 处理文档块引用
                         if sources.get("chunks"):
-                            chunks = sources["chunks"]
                             current_state["sources"].append(
                                 {
                                     "type": "chunk",
                                     "from": "【文档块】",
-                                    "chunks": chunks,
+                                    "backend": backend,
+                                    "chunks": sources["chunks"],
                                 }
                             )
-                            logger.info(
-                                f"RAGAnything chunks | count={len(chunks)} | 添加到 state['sources']"
-                            )
                     elif chunk_type == "error":
-                        logger.error(f"RAGAnything error | {chunk['content']}")
+                        logger.error(
+                            f"RAG stream error | backend={backend} | {chunk['content']}"
+                        )
                         rag_stream_error = True
 
-                # 客户端断开后不再做最终 segment 的语音转换
                 if await stop_if_disconnected("before_rag_final_segment"):
                     return
 
-                # 刷新 buffer 中剩余内容
                 final_segment = await sentence_buffer.flush(is_final=True)
                 if final_segment:
                     (
@@ -1331,27 +1348,15 @@ async def generate_openai_stream_v1(
                         current_state.get("conversation_id"),
                         prefer_zh_output=prefer_zh_output,
                         enable_math_sentence_conversion=enable_math_sentence_conversion,
-                        log_prefix="RAGAnything FinalSegment",
+                        log_prefix="RAGStream FinalSegment",
                     )
                     yield json.dumps(chunk_data)
 
-                # === RAG → 通用 LLM 兜底（运行期）===
-                # 触发条件（任一）：
-                #   1) RAG 报错（rag_stream_error=True）
-                #   2) RAG 召回完全为空（rag_retrieval_empty=True）
-                #   3) RAG 输出被裁后实际为空（full_answer.strip() == ""）
-                # 满足兜底条件时，立刻用 LangChain 通用 LLM 再生成一遍，把答案补给用户。
-                # 设计要点：
-                #   - 不丢弃 RAG 已 yield 的内容（这些内容本身就是空 / 错误提示，
-                #     不会出现"两段答案叠加"的视觉异常）；
-                #   - 复用 build_generation_messages 与 get_streaming_llm，避免重复实现；
-                #   - 失败保守：兜底 LLM 自身异常时只记日志，不再二次抛出，
-                #     保留原 RAG 路径的最终态。
                 stripped_answer = (full_answer or "").strip()
-                need_general_fallback = (
+                need_rag_fallback = (
                     rag_stream_error or rag_retrieval_empty or not stripped_answer
                 )
-                if need_general_fallback:
+                if need_rag_fallback and _training_rag_general_fallback_enabled():
                     logger.info(
                         "RAG → general_llm fallback triggered | "
                         f"rag_stream_error={rag_stream_error}, "
@@ -1442,6 +1447,40 @@ async def generate_openai_stream_v1(
                             f"RAG → general_llm fallback failed | error={fallback_exc}",
                             exc_info=True,
                         )
+                elif need_rag_fallback:
+                    fixed_message = _training_rag_empty_message(prefer_zh_output)
+                    full_answer = fixed_message
+                    raw_token_index += 1
+                    await save_raw_token(
+                        db,
+                        chat_id,
+                        session_id,
+                        request.user_id,
+                        request.employee_id,
+                        fixed_message,
+                        raw_token_index,
+                        "rag_stream",
+                        current_state.get("conversation_id"),
+                    )
+                    (
+                        chunk_sequence,
+                        chunk_data,
+                    ) = await _stream_segment_with_formula_conversion(
+                        fixed_message,
+                        chat_id,
+                        created,
+                        SERVER_MODEL,
+                        db,
+                        chunk_sequence,
+                        session_id,
+                        request.user_id,
+                        request.employee_id,
+                        current_state.get("conversation_id"),
+                        prefer_zh_output=prefer_zh_output,
+                        enable_math_sentence_conversion=enable_math_sentence_conversion,
+                        log_prefix="RAGStream EmptyFallback",
+                    )
+                    yield json.dumps(chunk_data)
 
                 final_state = current_state
                 final_state["final_answer"] = full_answer

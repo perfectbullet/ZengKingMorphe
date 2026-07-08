@@ -419,7 +419,7 @@ async def get_raganything_instance():
     return _raganything_instance
 
 
-async def get_raganything_stream(
+async def get_legacy_raganything_stream(
     query: str, mode: str = "hybrid", prefer_zh_output: bool = True
 ) -> AsyncIterator[Dict[str, Any]]:
     """
@@ -466,6 +466,26 @@ async def get_raganything_stream(
         enable_rerank=True,  # (默认True) - 是否启用重排序
     ):
         yield chunk
+
+
+async def get_raganything_stream(
+    query: str,
+    mode: str = "hybrid",
+    prefer_zh_output: bool = True,
+    debug_meta: dict | None = None,
+) -> AsyncIterator[Dict[str, Any]]:
+    logger.warning(
+        "get_raganything_stream is deprecated; use get_rag_stream instead."
+    )
+    from app.services.rag_stream_wrapper import get_rag_stream
+
+    async for item in get_rag_stream(
+        query=query,
+        mode=mode,
+        prefer_zh_output=prefer_zh_output,
+        debug_meta=debug_meta,
+    ):
+        yield item
 
 
 async def reset_raganything_instance():

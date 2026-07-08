@@ -186,6 +186,38 @@ def _resolve_employee_rag_disabled(cfg) -> bool:
     return False
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return default
+    return value.strip().lower() in {"true", "1", "yes", "on"}
+
+
+def _training_rag_backend() -> str:
+    return os.getenv("TRAINING_RAG_BACKEND", "lightrag_file").strip() or "lightrag_file"
+
+
+def _training_rag_enabled() -> bool:
+    return _env_bool("TRAINING_RAG_ENABLED", True)
+
+
+def _training_trigger_keywords() -> list[str]:
+    raw = os.getenv(
+        "TRAINING_RAG_TRIGGER_KEYWORDS",
+        "珐琅,釉料,金属底板,掐丝,平铺珐琅,画珐琅,灰度绘,透空珐琅,内填珐琅,雕金珐琅,金箔,银箔,珐琅炉,首饰设计",
+    )
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _match_training_trigger_keyword(text: str) -> str | None:
+    if not text:
+        return None
+    for keyword in _training_trigger_keywords():
+        if keyword in text:
+            return keyword
+    return None
+
+
 def _extract_weather_location(query: str) -> str | None:
     """
     从自然语言天气问句中提取地点，失败时返回 None。
@@ -1426,6 +1458,24 @@ class ConversationNodes:
                         reason="heuristic_concept",
                     )
 
+            if (
+                _training_rag_backend() == "lightrag_file"
+                and _training_rag_enabled()
+                and result.label in {"general_knowledge", "chit_chat", "other", "english_query"}
+            ):
+                matched_keyword = _match_training_trigger_keyword(resolved or query)
+                if matched_keyword:
+                    logger.info(
+                        "Industrial training heuristic promoted to concept_explain: "
+                        f"keyword={matched_keyword}, prev_label={result.label}, "
+                        f"query={resolved[:80]}"
+                    )
+                    result = ClassificationResult(
+                        label="concept_explain",
+                        confidence=result.confidence,
+                        reason=f"industrial_training_keyword:{matched_keyword}",
+                    )
+
             logger.info(
                 f"LLM classification: label={result.label}, confidence={result.confidence}, "
                 f"reason={result.reason}, query={resolved[:50]}"
@@ -1602,6 +1652,14 @@ class ConversationNodes:
             state["concept_retrieval_reason"] = None
             state["concept_context"] = None
             state["concept_context_source"] = None
+
+            backend = _training_rag_backend()
+            if backend == "lightrag_file":
+                state["concept_retrieval_enabled"] = False
+                state["concept_retrieval_hit"] = False
+                state["concept_retrieval_reason"] = "skip_training_lightrag_backend"
+                logger.info("Concept retrieval skipped for training LightRAG backend")
+                return state
 
             # 只处理 concept_explain 意图
             label = state.get("classification_label")
@@ -2194,10 +2252,10 @@ class ConversationNodes:
 
         设置的状态字段：
         - state["streaming_llm"]     : 流式输出对象（LLM 或 None）
-        - state["streaming_type"]   : "langchain_llm" 或 "raganything_stream"
+        - state["streaming_type"]   : "langchain_llm" / "rag_stream" / legacy 类型
         - state["streaming_messages"]: messages（LangChain LLM 使用）
-        - state["raganything_query"] : 查询文本（RAGAnything 使用）
-        - state["raganything_mode"]  : 检索模式（RAGAnything 使用）
+        - state["rag_query"]        : 查询文本（统一 RAG 使用）
+        - state["rag_mode"]         : 检索模式（统一 RAG 使用）
         - state["confidence"]        : 置信度分数
 
         实际的流式输出在 chat_stream_v1.py 中根据这些配置执行。
@@ -2487,16 +2545,12 @@ class ConversationNodes:
                 )
             elif effective_mode == AnswerMode.RAG_WITH_FALLBACK.value:
                 employee_config = state.get("employee_config", {})
-                # RAGAnything 是全局单一知识库（Milvus + Neo4j），kb_ids 已是空也仍能召回到全局图谱/向量；
-                # 因此路由仅看全局开关 raganything_enabled 与员工级 rag_disabled，不再用 kb_ids 作为门。
-                raganything_enabled = getattr(settings, "raganything_enabled", True)
+                training_rag_enabled = _training_rag_enabled()
                 rag_disabled = _resolve_employee_rag_disabled(employee_config)
-                kb_ids = _resolve_employee_kb_ids(employee_config)
+                backend = _training_rag_backend()
+                mode = os.getenv("TRAINING_RAG_QUERY_MODE", "hybrid").strip() or "hybrid"
 
-                # 全局未启用 或 员工显式禁用 RAG → 降级为普通 LLM 生成。
-                # 这是 "RAG 没有 → 通用 LLM" 兜底逻辑的"前置门"分支：
-                # 当 RAG 完全不可用时直接走通用 LLM，避免 RAGAnything 抛错或返回空。
-                if (not raganything_enabled) or rag_disabled:
+                if (not training_rag_enabled) or rag_disabled:
                     messages = build_generation_messages(state)
                     streaming_llm, model_name = self.workflow.get_streaming_llm(state)
                     state["streaming_llm"] = streaming_llm
@@ -2504,33 +2558,23 @@ class ConversationNodes:
                     state["streaming_type"] = "langchain_llm"
                     logger.info(
                         f"Streaming configured: type=langchain_llm (rag_fallback), "
-                        f"reason={'raganything_disabled' if not raganything_enabled else 'employee_rag_disabled'}, "
+                        f"reason={'training_rag_disabled' if not training_rag_enabled else 'employee_rag_disabled'}, "
                         f"answer_mode={answer_mode}, model={model_name}"
                     )
                 else:
-                    # 启用 RAG → 使用 RAGAnything 混合检索；
-                    # 召回为空时由 chat_stream_v1.py 中的运行期兜底（rag_empty）转通用 LLM。
                     state["streaming_llm"] = None
                     state["streaming_messages"] = None
-                    state["streaming_type"] = "raganything_stream"
-                    # 优先使用上下文消歧后的改写问句作为 RAG 的检索锚点：
-                    # 当用户用「他/这个/它」等指代承接上一轮（如先问「勾股定理」、再问
-                    # 「举例说明他在生活中的应用?」）时，原始 user_query 中的代词无法
-                    # 命中 KG/向量库里的具体实体，而 classify_query_type 节点已经把它
-                    # 改写为「举例说明勾股定理在生活中的应用?」并存入 rewritten_query。
-                    # 这里直接用改写后的版本，让 RAG 拿到含明确主语的 query，避免出现
-                    # 「请问您指的是哪方面的应用？」这类失忆式回答。
-                    # rewritten_query 缺失或为空时回退到原始 user_query，向后兼容老路径。
+                    state["streaming_type"] = "rag_stream"
                     rewritten_for_rag = (state.get("rewritten_query") or "").strip()
-                    state["raganything_query"] = (
-                        rewritten_for_rag or state["user_query"]
-                    )
-                    state["raganything_mode"] = "hybrid"
+                    state["rag_query"] = rewritten_for_rag or state["user_query"]
+                    state["rag_mode"] = mode
+                    state["rag_backend"] = backend
+                    state["raganything_query"] = state["rag_query"]
+                    state["raganything_mode"] = state["rag_mode"]
 
                     logger.info(
-                        f"Streaming configured: type=raganything_stream, "
-                        f"answer_mode={answer_mode}, mode=hybrid, kb_ids_meta={kb_ids}, "
-                        f"query={state['user_query'][:50]}..."
+                        f"Streaming configured: type=rag_stream, backend={backend}, "
+                        f"mode={mode}, query={state['rag_query'][:80]}"
                     )
             else:
                 # GENERAL_LLM（含 greeting / english_query / general_knowledge / chit_chat /
