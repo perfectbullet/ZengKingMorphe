@@ -222,6 +222,20 @@ class ChatStreamV1Tester:
                             logger.info(f"Sources: {len(sources)} 条")
                             for src in sources:
                                 logger.info(f"  - from={src.get('from', 'unknown')}, text={src.get('text', 'N/A')}, citations={len(src.get('citations', []))}")
+                                if src.get("type") == "chunk":
+                                    for idx, citation in enumerate(src.get("citations", [])[:5], 1):
+                                        logger.info(
+                                            "    citation[%d]: reference_id=%s file_path=%s "
+                                            "chunk_id=%s rerank_score=%s text=%s"
+                                            % (
+                                                idx,
+                                                citation.get("reference_id"),
+                                                citation.get("file_path"),
+                                                citation.get("chunk_id"),
+                                                citation.get("rerank_score"),
+                                                (citation.get("text") or "")[:80],
+                                            )
+                                        )
 
             except json.JSONDecodeError as e:
                 logger.warning(f"Chunk JSON 解析失败: {e}, chunk={chunk_str[:100]}")
@@ -287,7 +301,13 @@ class ChatStreamV1Tester:
                 print(f"Citations: {len(citations)} 条")
                 if citations:
                     for i, citation in enumerate(citations, 1):
-                        print(f"  {i}. {str(citation)}")
+                        print(
+                            f"  {i}. reference_id={citation.get('reference_id')} "
+                            f"file_path={citation.get('file_path')} "
+                            f"chunk_id={citation.get('chunk_id')} "
+                            f"rerank_score={citation.get('rerank_score')} "
+                            f"text={str(citation.get('text', ''))[:120]}"
+                        )
                 print("-" * 40)
 
         print("=" * 60)

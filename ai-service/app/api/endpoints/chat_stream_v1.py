@@ -45,7 +45,6 @@ from app.services.math_debug_dump import (
 )
 
 logger = get_logger(__name__)
-
 # =============================================================================
 # 常量
 # =============================================================================
@@ -95,6 +94,90 @@ def _training_rag_empty_message(prefer_zh_output: bool) -> str:
         "The training knowledge base did not retrieve enough supporting material. "
         "Please rephrase the question or check whether the knowledge base has been imported."
     )
+
+
+def _short_text(text: Any, max_len: int = 400) -> str:
+    if not text:
+        return ""
+    cleaned = " ".join(str(text).split())
+    if len(cleaned) <= max_len:
+        return cleaned
+    return cleaned[:max_len] + "..."
+
+
+def _build_chunk_citations_from_chunks(
+    chunks: list[dict] | None, *, max_text_len: int = 400
+) -> list[dict]:
+    citations: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for chunk in chunks or []:
+        if not isinstance(chunk, dict):
+            continue
+        file_path = str(chunk.get("file_path") or chunk.get("source") or "").strip()
+        chunk_id = str(chunk.get("chunk_id") or "").strip()
+        reference_id = str(chunk.get("reference_id") or "").strip()
+        dedupe_key = (file_path, chunk_id or reference_id)
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        citation_source = file_path or chunk_id or reference_id
+        citation = {
+            "reference_id": reference_id,
+            "source": citation_source,
+            "file_path": file_path,
+            "chunk_id": chunk_id,
+            "text": _short_text(chunk.get("content"), max_text_len),
+        }
+        if "rerank_score" in chunk:
+            citation["rerank_score"] = chunk.get("rerank_score")
+        citations.append(citation)
+    return citations
+
+
+def _build_chunk_citations_from_sources(
+    sources: list[dict] | None, *, max_text_len: int = 400
+) -> list[dict]:
+    citations: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for source in sources or []:
+        if not isinstance(source, dict):
+            continue
+        for citation in _build_chunk_citations_from_chunks(
+            source.get("chunks") or [], max_text_len=max_text_len
+        ):
+            dedupe_key = (
+                str(citation.get("file_path") or ""),
+                str(citation.get("chunk_id") or citation.get("reference_id") or ""),
+            )
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            citations.append(citation)
+    return citations
+
+
+def _attach_citations_to_lightrag_sources(
+    sources: list[dict] | None, *, max_text_len: int = 400
+) -> list[dict]:
+    normalized: list[dict] = []
+    for source in sources or []:
+        if not isinstance(source, dict):
+            continue
+        item = dict(source)
+        if item.get("type") == "chunk":
+            citations = _build_chunk_citations_from_chunks(
+                item.get("chunks") or [], max_text_len=max_text_len
+            )
+            item["citations"] = citations
+            if citations and not item.get("text"):
+                item["text"] = citations[0].get("text") or ""
+            else:
+                item.setdefault("text", None)
+        else:
+            item.setdefault("citations", [])
+            item.setdefault("text", None)
+        normalized.append(item)
+    return normalized
 
 
 # =============================================================================
@@ -649,6 +732,7 @@ def _update_finish_chunk_metadata(
     sources: list,
 ) -> None:
     """用最终状态信息更新结束块数据。"""
+    normalized_sources = _attach_citations_to_lightrag_sources(sources)
     finish_chunk_data["usage"] = {
         "prompt_tokens": len(user_query),
         "completion_tokens": len(final_state.get("final_answer", "")),
@@ -659,7 +743,8 @@ def _update_finish_chunk_metadata(
         "confidence": final_state.get("confidence", 0.0),
         "kb_used": final_state.get("kb_used", []),
         "web_search_used": final_state.get("web_search_used", False),
-        "sources": sources,
+        "sources": normalized_sources,
+        "citations": _build_chunk_citations_from_sources(normalized_sources),
         "intent": final_state.get("intent", ""),
         "is_realtime_query": final_state.get("is_realtime_query", False),
         "realtime_category": final_state.get("realtime_category", ""),
@@ -1100,8 +1185,12 @@ async def generate_openai_stream_v1(
                 finish_chunk_data["metadata"]["conversation_id"] = current_state.get(
                     "conversation_id", ""
                 )
-                finish_chunk_data["metadata"]["sources"] = current_state.get(
-                    "sources", []
+                normalized_sources = _attach_citations_to_lightrag_sources(
+                    current_state.get("sources", [])
+                )
+                finish_chunk_data["metadata"]["sources"] = normalized_sources
+                finish_chunk_data["metadata"]["citations"] = (
+                    _build_chunk_citations_from_sources(normalized_sources)
                 )
                 finish_chunk_data["metadata"]["intent"] = current_state.get(
                     "intent", ""
