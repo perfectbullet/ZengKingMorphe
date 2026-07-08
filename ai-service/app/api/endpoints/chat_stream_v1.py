@@ -80,6 +80,14 @@ def _training_rag_general_fallback_enabled() -> bool:
     )
 
 
+def _training_rag_include_history() -> bool:
+    return os.getenv("TRAINING_RAG_INCLUDE_HISTORY", "false").lower() in (
+        "true",
+        "1",
+        "yes",
+    )
+
+
 def _training_rag_empty_message(prefer_zh_output: bool) -> str:
     if prefer_zh_output:
         return "当前工训知识库暂时没有召回到足够资料，请换一种问法，或确认知识库是否已完成导入。"
@@ -1167,47 +1175,19 @@ async def generate_openai_stream_v1(
             model_name = streaming_type or model_name
             # 根据 streaming_type 选择不同的流式输出方式
             if streaming_type in ("rag_stream", "raganything_stream"):
-                raw_query = (
+                base_query = (
                     current_state.get("rag_query")
-                    or current_state.get("raganything_query")
+                    or current_state.get("effective_query")
                     or current_state.get("rewritten_query")
                     or current_state.get("user_query")
                     or ""
                 )
-
-                # 拼接最近对话历史（已按本轮语言过滤掉异种语言历史，避免语言污染）
-                # 动态上下文记忆：把上游 classify_query_type 的判定结果一起传进来，
-                # 当本轮与历史无关时直接拿到空前缀，等价于"全新对话"走 RAG。
-                context_messages = (current_state.get("context") or {}).get(
-                    "messages"
-                ) or []
-                history_prefix = _build_history_prefix_for_query(
-                    context_messages=context_messages,
-                    prefer_zh_output=prefer_zh_output,
-                    context_dependence=current_state.get("context_dependence"),
+                legacy_raw_query = (
+                    current_state.get("raganything_query")
+                    or current_state.get("rewritten_query")
+                    or current_state.get("user_query")
+                    or ""
                 )
-                # 语言锁定（三道防线，针对 qwen3:14b 这类对中文有偏向的模型）：
-                # 1) history_prefix 之后立刻给出本轮语言指令；
-                # 2) 在 raw_query 前再次重申；
-                # 3) 在 raw_query 之后追加最终强约束（利用 LLM 的 recency bias）。
-                # 这是针对“同一会话里中英文交错切换时，前一轮语言污染本轮输出”的兜底。
-                if prefer_zh_output:
-                    lang_lead = "本轮请使用简体中文回答以下问题。\n\n"
-                    lang_tail = (
-                        "\n\n[语言约束] 上文“对话历史”仅作上下文参考；"
-                        "本次回复必须完整使用简体中文，不要输出英文段落或中英混合句子。"
-                    )
-                else:
-                    lang_lead = (
-                        "Please answer the following question in English only.\n\n"
-                    )
-                    lang_tail = (
-                        "\n\n[LANGUAGE CONSTRAINT] The conversation history above is only "
-                        "for context reference. Your reply MUST be written entirely in English. "
-                        "Do not output any Chinese characters or mixed Chinese-English sentences."
-                    )
-
-                query = (history_prefix or "") + lang_lead + raw_query + lang_tail
 
                 mode = (
                     current_state.get("rag_mode")
@@ -1218,8 +1198,41 @@ async def generate_openai_stream_v1(
                     current_state.get("rag_backend")
                     or os.getenv("TRAINING_RAG_BACKEND", "lightrag_file")
                 )
+                include_history = not (
+                    backend == "lightrag_file" and not _training_rag_include_history()
+                )
+                if include_history:
+                    raw_query = (
+                        legacy_raw_query if backend == "raganything" else base_query
+                    )
+                    context_messages = (current_state.get("context") or {}).get(
+                        "messages"
+                    ) or []
+                    history_prefix = _build_history_prefix_for_query(
+                        context_messages=context_messages,
+                        prefer_zh_output=prefer_zh_output,
+                        context_dependence=current_state.get("context_dependence"),
+                    )
+                    if prefer_zh_output:
+                        lang_lead = "本轮请使用简体中文回答以下问题。\n\n"
+                        lang_tail = (
+                            "\n\n[语言约束] 上文“对话历史”仅作上下文参考；"
+                            "本次回复必须完整使用简体中文，不要输出英文段落或中英混合句子。"
+                        )
+                    else:
+                        lang_lead = (
+                            "Please answer the following question in English only.\n\n"
+                        )
+                        lang_tail = (
+                            "\n\n[LANGUAGE CONSTRAINT] The conversation history above is only "
+                            "for context reference. Your reply MUST be written entirely in English. "
+                            "Do not output any Chinese characters or mixed Chinese-English sentences."
+                        )
+                    query = (history_prefix or "") + lang_lead + raw_query + lang_tail
+                else:
+                    query = base_query
                 logger.info(
-                    f"Using RAG stream | backend={backend} | query={query[:80]} | mode={mode}"
+                    f"Using RAG stream | backend={backend} | include_history={str(include_history).lower()} | query={query[:80]} | mode={mode}"
                 )
                 rag_retrieval_empty = False
                 rag_stream_error = False

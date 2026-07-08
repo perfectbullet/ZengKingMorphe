@@ -201,10 +201,14 @@ def _training_rag_enabled() -> bool:
     return _env_bool("TRAINING_RAG_ENABLED", True)
 
 
+def _training_rag_domain_gate_enabled() -> bool:
+    return _env_bool("TRAINING_RAG_DOMAIN_GATE_ENABLED", True)
+
+
 def _training_trigger_keywords() -> list[str]:
     raw = os.getenv(
         "TRAINING_RAG_TRIGGER_KEYWORDS",
-        "珐琅,釉料,金属底板,掐丝,平铺珐琅,画珐琅,灰度绘,透空珐琅,内填珐琅,雕金珐琅,金箔,银箔,珐琅炉,首饰设计",
+        "珐琅,釉料,金属底板,掐丝,平铺珐琅,画珐琅,灰度绘,透空珐琅,内填珐琅,雕金珐琅,金箔,银箔,珐琅炉,首饰设计,烧制,底釉,背釉,透明釉料,不透明釉料",
     )
     return [item.strip() for item in raw.split(",") if item.strip()]
 
@@ -1461,19 +1465,34 @@ class ConversationNodes:
             if (
                 _training_rag_backend() == "lightrag_file"
                 and _training_rag_enabled()
-                and result.label in {"general_knowledge", "chit_chat", "other", "english_query"}
+                and _training_rag_domain_gate_enabled()
             ):
                 matched_keyword = _match_training_trigger_keyword(resolved or query)
-                if matched_keyword:
+                if matched_keyword and result.label not in {
+                    "math_problem",
+                    "realtime_query",
+                    "greeting",
+                    "noise",
+                }:
                     logger.info(
-                        "Industrial training heuristic promoted to concept_explain: "
+                        "Industrial training domain gate promoted to industrial_training_query: "
                         f"keyword={matched_keyword}, prev_label={result.label}, "
                         f"query={resolved[:80]}"
                     )
                     result = ClassificationResult(
-                        label="concept_explain",
+                        label="industrial_training_query",
                         confidence=result.confidence,
                         reason=f"industrial_training_keyword:{matched_keyword}",
+                    )
+                elif result.label == "concept_explain":
+                    logger.info(
+                        "Generic concept_explain downgraded to general_knowledge by training domain gate: "
+                        f"query={resolved[:80]}"
+                    )
+                    result = ClassificationResult(
+                        label="general_knowledge",
+                        confidence=result.confidence,
+                        reason="generic_concept_not_industrial_training",
                     )
 
             logger.info(

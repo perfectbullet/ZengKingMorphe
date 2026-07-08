@@ -31,7 +31,8 @@
 按用户需求映射 QueryClassifier 的 9 种标签：
 
     数学题目（math_problem）         → MATH_LLM
-    数学概念 / 教材知识（concept_explain）→ RAG_WITH_FALLBACK
+    工训教材 / 工业实训知识库问题（industrial_training_query）→ RAG_WITH_FALLBACK
+    通用概念解释（concept_explain）      → GENERAL_LLM
     问候（greeting）                  → GENERAL_LLM
     英语问答（english_query）         → GENERAL_LLM
     常识性问题（general_knowledge）   → GENERAL_LLM
@@ -85,8 +86,10 @@ class AnswerMode(str, Enum):
 INTENT_TO_ANSWER_MODE: Mapping[str, AnswerMode] = {
     # 数学题目 → 数学模型推理，不走 RAG
     "math_problem": AnswerMode.MATH_LLM,
-    # 数学概念 / 教材知识 / 公式解释 / 知识点问答 → RAG（无召回时降级 LLM）
-    "concept_explain": AnswerMode.RAG_WITH_FALLBACK,
+    # 工训教材 / 工业实训知识库问题 → RAG（无召回时降级 LLM）
+    "industrial_training_query": AnswerMode.RAG_WITH_FALLBACK,
+    # 通用概念解释 → 通用 LLM，不进入工训 LightRAG
+    "concept_explain": AnswerMode.GENERAL_LLM,
     # 问候 / 英语 / 常识 / 闲聊 → 直接通用 LLM
     "greeting": AnswerMode.GENERAL_LLM,
     "english_query": AnswerMode.GENERAL_LLM,
@@ -136,7 +139,7 @@ def resolve_answer_mode(classification_label: str | None) -> AnswerMode:
 ROUTE_BRANCH_GREETING = "greeting"  # 含 noise，走 generate_answer 直出
 ROUTE_BRANCH_REALTIME = "realtime"  # 走 web_search 后再 generate_answer
 ROUTE_BRANCH_MATH = "math"          # 走 generate_answer（数学模型）
-ROUTE_BRANCH_RAG = "rag"            # 走 concept_retrieval → evaluate_complexity / generate_answer（RAGAnything）
+ROUTE_BRANCH_RAG = "rag"            # 走 concept_retrieval → evaluate_complexity / generate_answer（training RAG / legacy raganything）
 ROUTE_BRANCH_GENERAL = "general"    # 走 generate_answer（通用 LLM，不走 RAG）
 # 概念检索后的路由分支
 ROUTE_BRANCH_CONCEPT_HIT = "concept_hit"      # 命中人工概念库，直接走 generate_answer
