@@ -39,6 +39,11 @@ def _env_bool(name: str, default: bool) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def _parse_csv_env(name: str, default: str) -> list[str]:
+    raw = os.getenv(name, default)
+    return [part.strip() for part in str(raw).split(",") if part.strip()]
+
+
 def _pick_env(candidates: list[str], default: str | None = None) -> str | None:
     for name in candidates:
         value = os.getenv(name)
@@ -325,6 +330,12 @@ def _is_async_iterable(value: Any) -> bool:
     return hasattr(value, "__aiter__")
 
 
+async def _maybe_await(value: Any) -> Any:
+    if inspect.isawaitable(value):
+        return await value
+    return value
+
+
 def _to_plain_dict(value: Any) -> dict[str, Any] | None:
     if isinstance(value, dict):
         return value
@@ -338,6 +349,117 @@ def _to_plain_dict(value: Any) -> dict[str, Any] | None:
         except Exception:
             return None
     return None
+
+
+def _normalize_keyword_value(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return []
+        if "," in text:
+            return [part.strip() for part in text.split(",") if part.strip()]
+        return [text]
+    if isinstance(value, (list, tuple, set)):
+        items: list[Any] = []
+        for item in value:
+            if item is None:
+                continue
+            if isinstance(item, str):
+                text = item.strip()
+                if text:
+                    items.append(text)
+            else:
+                items.append(item)
+        return items
+    if isinstance(value, dict):
+        return value
+    return value
+
+
+def _find_keyword_fields(payload: Any, prefix: str = "") -> dict[str, Any]:
+    found: dict[str, Any] = {}
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            key_text = str(key)
+            path = f"{prefix}.{key_text}" if prefix else key_text
+            lowered = key_text.lower()
+            if lowered in {
+                "keywords",
+                "hl_keywords",
+                "ll_keywords",
+                "high_level_keywords",
+                "low_level_keywords",
+            }:
+                found[path] = _normalize_keyword_value(value)
+            if isinstance(value, (dict, list, tuple)):
+                found.update(_find_keyword_fields(value, path))
+    elif isinstance(payload, (list, tuple)):
+        for idx, item in enumerate(payload):
+            path = f"{prefix}[{idx}]" if prefix else f"[{idx}]"
+            if isinstance(item, (dict, list, tuple)):
+                found.update(_find_keyword_fields(item, path))
+    return found
+
+
+def _extract_lightrag_keywords(
+    *,
+    result_dict: dict[str, Any],
+    metadata: dict[str, Any],
+    data: dict[str, Any],
+    processing_info: dict[str, Any],
+) -> dict[str, Any]:
+    combined: dict[str, Any] = {}
+    for scope_name, payload in (
+        ("result_dict", result_dict),
+        ("metadata", metadata),
+        ("data", data),
+        ("processing_info", processing_info),
+    ):
+        hits = _find_keyword_fields(payload)
+        for key, value in hits.items():
+            combined[f"{scope_name}.{key}"] = value
+
+    high_level_keywords = None
+    low_level_keywords = None
+    for key, value in combined.items():
+        lowered = key.lower()
+        if high_level_keywords is None and (
+            lowered.endswith("high_level_keywords") or lowered.endswith("hl_keywords")
+        ):
+            high_level_keywords = value
+        if low_level_keywords is None and (
+            lowered.endswith("low_level_keywords") or lowered.endswith("ll_keywords")
+        ):
+            low_level_keywords = value
+
+    if high_level_keywords is None:
+        for key, value in combined.items():
+            lowered = key.lower()
+            if lowered.endswith("keywords") and isinstance(value, dict):
+                high_level_keywords = _normalize_keyword_value(
+                    value.get("high_level") or value.get("highLevel")
+                )
+                if high_level_keywords:
+                    break
+
+    if low_level_keywords is None:
+        for key, value in combined.items():
+            lowered = key.lower()
+            if lowered.endswith("keywords") and isinstance(value, dict):
+                low_level_keywords = _normalize_keyword_value(
+                    value.get("low_level") or value.get("lowLevel")
+                )
+                if low_level_keywords:
+                    break
+
+    return {
+        "found": bool(combined),
+        "high_level_keywords": high_level_keywords,
+        "low_level_keywords": low_level_keywords,
+        "keyword_fields": combined,
+    }
 
 
 def _extract_text_from_item(item: Any) -> str:
@@ -366,6 +488,165 @@ def _extract_text_from_item(item: Any) -> str:
     if hasattr(item, "content") and isinstance(getattr(item, "content"), str):
         return getattr(item, "content")
     return ""
+
+
+def _to_json_safe_scalar(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if hasattr(value, "item"):
+        try:
+            return value.item()
+        except Exception:
+            return repr(value)
+    return repr(value)
+
+
+def _match_guard_terms(query: str, terms: list[str]) -> list[str]:
+    if not query or not terms:
+        return []
+    matches: list[tuple[int, int, str]] = []
+    occupied: list[tuple[int, int]] = []
+    for term in sorted(set(terms), key=lambda x: (-len(x), x)):
+        start = query.find(term)
+        while start != -1:
+            end = start + len(term)
+            overlap = any(not (end <= s or start >= e) for s, e in occupied)
+            if not overlap:
+                matches.append((start, end, term))
+                occupied.append((start, end))
+            start = query.find(term, start + 1)
+    matches.sort(key=lambda item: item[0])
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for _, _, term in matches:
+        if term not in seen:
+            seen.add(term)
+            ordered.append(term)
+    return ordered
+
+
+def _expand_guard_alias_terms(matched_terms: list[str], all_terms: list[str]) -> list[str]:
+    expanded: list[str] = []
+    seen: set[str] = set()
+    for term in matched_terms:
+        for candidate in (term, term.removesuffix("工艺")):
+            candidate = candidate.strip()
+            if (
+                candidate
+                and candidate in all_terms
+                and candidate not in seen
+            ):
+                seen.add(candidate)
+                expanded.append(candidate)
+    return expanded
+
+
+def _build_high_level_retrieval_intents(
+    query: str,
+    matched_terms: list[str],
+    all_terms: list[str],
+) -> list[str]:
+    intents: list[str] = []
+    seen: set[str] = set()
+    low_terms = _expand_guard_alias_terms(matched_terms, all_terms) or matched_terms
+    query_no_punct = query.replace("？", "").replace("?", "").replace("。", "").strip()
+    suffixes: list[str] = []
+    if "基本制作流程" in query:
+        suffixes.extend(["基本制作流程", "制作流程"])
+    elif "制作流程" in query:
+        suffixes.append("制作流程")
+    elif "流程" in query:
+        suffixes.append("流程")
+    elif "区别" in query:
+        suffixes.append("区别")
+    elif "作用" in query:
+        suffixes.append("作用")
+    elif "特点" in query:
+        suffixes.append("特点")
+
+    for term in matched_terms:
+        for suffix in suffixes:
+            candidate = f"{term}{suffix}"
+            if candidate not in seen:
+                seen.add(candidate)
+                intents.append(candidate)
+        if term not in seen:
+            seen.add(term)
+            intents.append(term)
+    for term in low_terms:
+        if term not in seen:
+            seen.add(term)
+            intents.append(term)
+    if query_no_punct and query_no_punct not in seen:
+        seen.add(query_no_punct)
+        intents.append(query_no_punct)
+    return intents
+
+
+def _build_entity_guarded_query(
+    query: str,
+    matched_terms: list[str],
+    prefer_zh_output: bool,
+    *,
+    include_domain_intent: bool,
+    all_terms: list[str],
+) -> tuple[str, list[str], list[str]]:
+    protected_terms = _expand_guard_alias_terms(matched_terms, all_terms) or matched_terms
+    high_level_intents = _build_high_level_retrieval_intents(query, matched_terms, all_terms)
+    if prefer_zh_output:
+        header = (
+            "【检索约束】\n"
+            if include_domain_intent
+            else ""
+        )
+        domain = (
+            "当前问题属于工业实训教材《珐琅工艺》的领域问答。\n"
+            if include_domain_intent
+            else ""
+        )
+        guarded_query = (
+            f"{header}"
+            f"{domain}"
+            "以下术语是不可拆分的工训教材实体，请优先作为 low-level entity keywords 处理，"
+            "不要拆成单字词、修饰词或泛化实体：\n"
+            + "\n".join(f"- {term}" for term in protected_terms)
+            + "\n\n请优先保留以下 high-level retrieval intents：\n"
+            + "\n".join(f"- {item}" for item in high_level_intents)
+            + f"\n\n【用户问题】\n{query}"
+        )
+    else:
+        guarded_query = (
+            "[Retrieval constraints]\n"
+            + (
+                "This is an industrial-training textbook query about enamel craft.\n"
+                if include_domain_intent
+                else ""
+            )
+            + "The following terms are atomic domain entities and should be treated as "
+              "low-level entity keywords without being split into generic fragments:\n"
+            + "\n".join(f"- {term}" for term in protected_terms)
+            + "\n\nPrefer the following high-level retrieval intents:\n"
+            + "\n".join(f"- {item}" for item in high_level_intents)
+            + f"\n\n[User question]\n{query}"
+        )
+    return guarded_query, protected_terms, high_level_intents
+
+
+def _build_compact_query(
+    query: str,
+    matched_terms: list[str],
+    all_terms: list[str],
+) -> str:
+    protected_terms = _expand_guard_alias_terms(matched_terms, all_terms) or matched_terms
+    high_level_intents = _build_high_level_retrieval_intents(query, matched_terms, all_terms)
+    tokens: list[str] = []
+    seen: set[str] = set()
+    for item in protected_terms + high_level_intents + ["工业实训教材", "珐琅工艺"]:
+        text = str(item).strip()
+        if text and text not in seen:
+            seen.add(text)
+            tokens.append(text)
+    return " ".join(tokens)
 
 
 def _build_query_param(mode: str, prefer_zh_output: bool) -> Any:
@@ -401,7 +682,14 @@ def _build_query_param(mode: str, prefer_zh_output: bool) -> Any:
     kwargs = {
         key: value for key, value in candidate_kwargs.items() if key in supported
     }
-    return QueryParam(**kwargs), kwargs
+    debug_info = {
+        "query_param_supported_keys": list(supported.keys()),
+        "candidate_kwargs_keys": list(candidate_kwargs.keys()),
+        "actual_param_kwargs": kwargs,
+        "chunk_top_k_in_supported": "chunk_top_k" in supported,
+        "chunk_top_k_in_actual_kwargs": "chunk_top_k" in kwargs,
+    }
+    return QueryParam(**kwargs), kwargs, debug_info
 
 
 def _build_system_prompt() -> str:
@@ -564,6 +852,128 @@ async def _yield_event(
     yield event
 
 
+async def _probe_chunk_storage(
+    rag: Any,
+    *,
+    original_query: str,
+    effective_query: str,
+    compact_query: str,
+) -> list[dict[str, Any]]:
+    if not _env_bool("TRAINING_RAG_CHUNK_PROBE_ENABLED", False):
+        return []
+
+    probe_top_k = int(os.getenv("TRAINING_RAG_CHUNK_PROBE_TOP_K", "10"))
+    chunks_vdb = getattr(rag, "chunks_vdb", None)
+    text_chunks = getattr(rag, "text_chunks", None)
+    if chunks_vdb is None:
+        logger.info("Training RAG chunk probe skipped | reason=chunks_vdb_missing")
+        return [
+            {
+                "query_type": "storage",
+                "reason": "chunks_vdb_missing",
+            }
+        ]
+
+    public_methods = [name for name in dir(chunks_vdb) if not name.startswith("_")]
+    query_method = getattr(chunks_vdb, "query", None)
+    search_method = getattr(chunks_vdb, "search", None)
+    cosine_threshold = getattr(chunks_vdb, "cosine_better_than_threshold", None)
+    logger.info(
+        f"Training RAG chunk probe storage | type={type(chunks_vdb).__name__} | "
+        f"methods={public_methods[:30]} | cosine_threshold={cosine_threshold}"
+    )
+
+    query_specs = [
+        ("original", original_query),
+        ("effective", effective_query),
+        ("compact", compact_query),
+    ]
+    probe_records: list[dict[str, Any]] = [
+        {
+            "query_type": "storage",
+            "storage_type": type(chunks_vdb).__name__,
+            "methods": public_methods,
+            "has_query": callable(query_method),
+            "has_search": callable(search_method),
+            "cosine_better_than_threshold": cosine_threshold,
+        }
+    ]
+
+    for query_type, probe_query in query_specs:
+        record: dict[str, Any] = {
+            "query_type": query_type,
+            "query": probe_query,
+            "results_count": 0,
+            "results_preview": [],
+        }
+        try:
+            if callable(query_method):
+                raw_results = await _maybe_await(query_method(probe_query, top_k=probe_top_k))
+            elif callable(search_method):
+                raw_results = await _maybe_await(search_method(probe_query, top_k=probe_top_k))
+            else:
+                record["reason"] = "no_query_or_search_method"
+                probe_records.append(record)
+                logger.info(
+                    f"Training RAG chunk probe | query_type={query_type} | "
+                    f"results_count=0 | reason=no_query_or_search_method"
+                )
+                continue
+
+            results = list(raw_results or [])
+            previews: list[dict[str, Any]] = []
+            first_scores: list[Any] = []
+            for item in results[:probe_top_k]:
+                if not isinstance(item, dict):
+                    previews.append({"python_type": type(item).__name__, "repr": repr(item)[:300]})
+                    continue
+                chunk_id = (
+                    item.get("chunk_id")
+                    or item.get("id")
+                    or item.get("__id__")
+                    or item.get("_id")
+                )
+                file_path = item.get("file_path") or item.get("source")
+                score = item.get("score")
+                if score is None:
+                    score = item.get("distance")
+                if score is None:
+                    score = item.get("similarity")
+                score = _to_json_safe_scalar(score)
+                if score is not None and len(first_scores) < 5:
+                    first_scores.append(score)
+                content = item.get("content") or item.get("text")
+                if not content and chunk_id and text_chunks is not None and hasattr(text_chunks, "get_by_id"):
+                    fetched = await _maybe_await(text_chunks.get_by_id(chunk_id))
+                    if isinstance(fetched, dict):
+                        content = fetched.get("content") or fetched.get("text")
+                        file_path = file_path or fetched.get("file_path") or fetched.get("source")
+                previews.append(
+                    {
+                        "id": item.get("id") or item.get("__id__") or item.get("_id"),
+                        "chunk_id": chunk_id,
+                        "file_path": file_path,
+                        "score": score,
+                        "content_preview": _safe_preview(content, 300) if content else None,
+                    }
+                )
+            record["results_count"] = len(results)
+            record["results_preview"] = previews
+            probe_records.append(record)
+            logger.info(
+                f"Training RAG chunk probe | query_type={query_type} | "
+                f"results_count={len(results)} | first_scores={first_scores}"
+            )
+        except Exception as exc:
+            record["reason"] = f"{type(exc).__name__}: {exc}"
+            probe_records.append(record)
+            logger.warning(
+                f"Training RAG chunk probe failed | query_type={query_type} | error={exc}"
+            )
+
+    return probe_records
+
+
 async def get_training_lightrag_stream(
     query: str,
     mode: str = "hybrid",
@@ -581,8 +991,47 @@ async def get_training_lightrag_stream(
     try:
         rag = await get_training_lightrag_instance()
         working_dir = _resolve_working_dir()
-        param, param_kwargs = _build_query_param(mode, prefer_zh_output)
+        param, param_kwargs, query_param_debug = _build_query_param(mode, prefer_zh_output)
         system_prompt = _build_system_prompt()
+        original_query = query
+        entity_guard_enabled = _env_bool("TRAINING_RAG_ENTITY_GUARD_ENABLED", False)
+        entity_guard_include_domain_intent = _env_bool(
+            "TRAINING_RAG_ENTITY_GUARD_INCLUDE_DOMAIN_INTENT", True
+        )
+        entity_guard_terms = _parse_csv_env(
+            "TRAINING_RAG_ENTITY_GUARD_TERMS",
+            "平铺珐琅工艺,平铺珐琅,掐丝珐琅工艺,掐丝珐琅,画珐琅工艺,画珐琅,灰度绘,透空珐琅,内填珐琅,雕金珐琅,透明釉料,不透明釉料,背釉,底釉,金属底板",
+        )
+        matched_guard_terms = (
+            _match_guard_terms(original_query, entity_guard_terms)
+            if entity_guard_enabled
+            else []
+        )
+        entity_guard_applied = bool(entity_guard_enabled and matched_guard_terms)
+        if entity_guard_applied:
+            effective_query, protected_terms, entity_guard_high_level_intents = _build_entity_guarded_query(
+                original_query,
+                matched_guard_terms,
+                prefer_zh_output,
+                include_domain_intent=entity_guard_include_domain_intent,
+                all_terms=entity_guard_terms,
+            )
+            logger.info(
+                f"Training RAG entity guard applied | terms={matched_guard_terms} | "
+                f"high_level_intents={entity_guard_high_level_intents} | "
+                f"original_query={original_query[:80]} | "
+                f"effective_query_preview={effective_query[:200]}"
+            )
+        else:
+            effective_query = original_query
+            protected_terms = []
+            entity_guard_high_level_intents = []
+        compact_query = _build_compact_query(
+            original_query,
+            matched_guard_terms,
+            entity_guard_terms,
+        ) if matched_guard_terms else original_query
+
         rerank_debug = {
             "training_rag_enable_rerank": _env_bool("TRAINING_RAG_ENABLE_RERANK", False),
             "rerank_binding": _resolve_rerank_binding(),
@@ -595,6 +1044,11 @@ async def get_training_lightrag_stream(
             "cosine_threshold": _resolve_cosine_threshold(),
             "query_param_enable_rerank": param_kwargs.get("enable_rerank"),
         }
+        logger.info(
+            f"Training RAG QueryParam built | mode={mode} | "
+            f"chunk_top_k_supported={query_param_debug.get('chunk_top_k_in_supported')} | "
+            f"actual_kwargs={query_param_debug.get('actual_param_kwargs')}"
+        )
 
         _write_raw_debug(
             raw_debug_path,
@@ -603,22 +1057,47 @@ async def get_training_lightrag_stream(
                 "trace_id": trace_id,
                 "stage": "before_aquery_llm",
                 "backend": backend,
-                "query": query[: _rag_debug_max_text()],
+                "query": original_query[: _rag_debug_max_text()],
+                "original_query": original_query[: _rag_debug_max_text()],
+                "effective_query": effective_query[: _rag_debug_max_text()],
                 "mode": mode,
                 "working_dir": str(working_dir),
                 "param_kwargs": param_kwargs,
+                "query_param_supported_keys": query_param_debug.get("query_param_supported_keys"),
+                "candidate_kwargs_keys": query_param_debug.get("candidate_kwargs_keys"),
+                "actual_param_kwargs": query_param_debug.get("actual_param_kwargs"),
+                "chunk_top_k_in_supported": query_param_debug.get("chunk_top_k_in_supported"),
+                "chunk_top_k_in_actual_kwargs": query_param_debug.get("chunk_top_k_in_actual_kwargs"),
+                "entity_guard_enabled": entity_guard_enabled,
+                "entity_guard_applied": entity_guard_applied,
+                "entity_guard_terms_matched": matched_guard_terms,
+                "entity_guard_terms_protected": protected_terms,
+                "entity_guard_high_level_intents": entity_guard_high_level_intents,
+                "compact_query": compact_query[: _rag_debug_max_text()],
                 "rerank_debug": rerank_debug,
                 "system_prompt": _safe_preview(system_prompt, _rag_debug_max_text()),
                 "debug_meta": _safe_preview(debug_meta or {}, _rag_debug_max_text()),
             },
         )
+        chunk_probe = await _probe_chunk_storage(
+            rag,
+            original_query=original_query,
+            effective_query=effective_query,
+            compact_query=compact_query,
+        )
 
-        result = await rag.aquery_llm(query, param=param, system_prompt=system_prompt)
+        result = await rag.aquery_llm(effective_query, param=param, system_prompt=system_prompt)
         result_dict = _to_plain_dict(result) or {}
         data = result_dict.get("data") or {}
         metadata = result_dict.get("metadata") or {}
         llm_response = result_dict.get("llm_response") or {}
         processing_info = metadata.get("processing_info") or {}
+        keyword_debug = _extract_lightrag_keywords(
+            result_dict=result_dict,
+            metadata=metadata,
+            data=data,
+            processing_info=processing_info,
+        )
 
         entities = list(data.get("entities") or [])
         relationships = list(data.get("relationships") or [])
@@ -646,6 +1125,11 @@ async def get_training_lightrag_stream(
                 "relationships_count": len(relationships),
                 "chunks_count": len(chunks),
                 "references_count": len(references),
+                "keyword_debug": keyword_debug,
+                "processing_info_keys": list(processing_info.keys())
+                if isinstance(processing_info, dict)
+                else [],
+                "chunk_probe": chunk_probe,
                 "rerank_metadata": _safe_preview(
                     {
                         key: metadata.get(key)
@@ -657,6 +1141,21 @@ async def get_training_lightrag_stream(
                 "preview": _safe_preview(result_dict, _rag_debug_max_text()),
             },
         )
+
+        if keyword_debug.get("found"):
+            logger.info(
+                f"LightRAG keywords extracted | "
+                f"low_level_keywords={keyword_debug.get('low_level_keywords')} | "
+                f"high_level_keywords={keyword_debug.get('high_level_keywords')} | "
+                f"query={original_query[:80]}"
+            )
+        else:
+            logger.info(
+                f"LightRAG keywords not exposed in aquery_llm result | "
+                f"metadata_keys={list(metadata.keys()) if isinstance(metadata, dict) else []} | "
+                f"processing_info_keys={list(processing_info.keys()) if isinstance(processing_info, dict) else []} | "
+                f"query={original_query[:80]}"
+            )
 
         sources_info = {
             "entities_count": len(entities),
@@ -701,6 +1200,11 @@ async def get_training_lightrag_stream(
                 "chunks_count": len(chunks),
                 "references_count": len(references),
                 "processing_info": _safe_preview(processing_info, _rag_debug_max_text()),
+                "processing_info_keys": list(processing_info.keys())
+                if isinstance(processing_info, dict)
+                else [],
+                "keyword_debug": keyword_debug,
+                "chunk_probe": chunk_probe,
                 "rerank_metadata": _safe_preview(
                     {
                         key: metadata.get(key)
