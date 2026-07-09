@@ -649,7 +649,23 @@ def _build_compact_query(
     return " ".join(tokens)
 
 
-def _build_query_param(mode: str, prefer_zh_output: bool) -> Any:
+def _resolve_keyword_injection_mode() -> str:
+    raw = (os.getenv("TRAINING_RAG_KEYWORD_INJECTION_MODE", "query_param") or "").strip().lower()
+    allowed = {"query_param", "compact_query", "verbose_query"}
+    if raw in allowed:
+        return raw
+    logger.warning(
+        f"Invalid TRAINING_RAG_KEYWORD_INJECTION_MODE={raw!r}, fallback to 'query_param'"
+    )
+    return "query_param"
+
+
+def _build_query_param(
+    mode: str,
+    prefer_zh_output: bool,
+    hl_keywords: list[str] | None = None,
+    ll_keywords: list[str] | None = None,
+) -> Any:
     from lightrag.base import QueryParam
 
     user_prompt = (
@@ -677,6 +693,8 @@ def _build_query_param(mode: str, prefer_zh_output: bool) -> Any:
         "conversation_history": [],
         "enable_rerank": _env_bool("TRAINING_RAG_ENABLE_RERANK", False),
         "include_references": _env_bool("TRAINING_RAG_INCLUDE_REFERENCES", True),
+        "hl_keywords": hl_keywords or [],
+        "ll_keywords": ll_keywords or [],
     }
     supported = inspect.signature(QueryParam).parameters
     kwargs = {
@@ -688,6 +706,12 @@ def _build_query_param(mode: str, prefer_zh_output: bool) -> Any:
         "actual_param_kwargs": kwargs,
         "chunk_top_k_in_supported": "chunk_top_k" in supported,
         "chunk_top_k_in_actual_kwargs": "chunk_top_k" in kwargs,
+        "hl_keywords_in_supported": "hl_keywords" in supported,
+        "ll_keywords_in_supported": "ll_keywords" in supported,
+        "hl_keywords_in_actual_kwargs": "hl_keywords" in kwargs,
+        "ll_keywords_in_actual_kwargs": "ll_keywords" in kwargs,
+        "injected_hl_keywords": hl_keywords or [],
+        "injected_ll_keywords": ll_keywords or [],
     }
     return QueryParam(**kwargs), kwargs, debug_info
 
@@ -991,7 +1015,6 @@ async def get_training_lightrag_stream(
     try:
         rag = await get_training_lightrag_instance()
         working_dir = _resolve_working_dir()
-        param, param_kwargs, query_param_debug = _build_query_param(mode, prefer_zh_output)
         system_prompt = _build_system_prompt()
         original_query = query
         entity_guard_enabled = _env_bool("TRAINING_RAG_ENTITY_GUARD_ENABLED", False)
@@ -1008,29 +1031,103 @@ async def get_training_lightrag_stream(
             else []
         )
         entity_guard_applied = bool(entity_guard_enabled and matched_guard_terms)
+        keyword_injection_mode = _resolve_keyword_injection_mode()
+        protected_terms = (
+            _expand_guard_alias_terms(matched_guard_terms, entity_guard_terms)
+            if entity_guard_applied
+            else []
+        ) or matched_guard_terms
+        entity_guard_high_level_intents = (
+            _build_high_level_retrieval_intents(
+                original_query,
+                matched_guard_terms,
+                entity_guard_terms,
+            )
+            if entity_guard_applied
+            else []
+        )
+        compact_query = _build_compact_query(
+            original_query,
+            matched_guard_terms,
+            entity_guard_terms,
+        ) if matched_guard_terms else original_query
+        verbose_guarded_query = original_query
         if entity_guard_applied:
-            effective_query, protected_terms, entity_guard_high_level_intents = _build_entity_guarded_query(
+            verbose_guarded_query, _, _ = _build_entity_guarded_query(
                 original_query,
                 matched_guard_terms,
                 prefer_zh_output,
                 include_domain_intent=entity_guard_include_domain_intent,
                 all_terms=entity_guard_terms,
             )
-            logger.info(
-                f"Training RAG entity guard applied | terms={matched_guard_terms} | "
-                f"high_level_intents={entity_guard_high_level_intents} | "
-                f"original_query={original_query[:80]} | "
-                f"effective_query_preview={effective_query[:200]}"
+
+        hl_keywords: list[str] = []
+        ll_keywords: list[str] = []
+        effective_query = original_query
+
+        if entity_guard_applied:
+            if keyword_injection_mode == "query_param":
+                hl_keywords = entity_guard_high_level_intents
+                ll_keywords = protected_terms
+                effective_query = original_query
+            elif keyword_injection_mode == "compact_query":
+                effective_query = compact_query
+            else:
+                effective_query = verbose_guarded_query
+
+        param, param_kwargs, query_param_debug = _build_query_param(
+            mode,
+            prefer_zh_output,
+            hl_keywords=hl_keywords,
+            ll_keywords=ll_keywords,
+        )
+        hl_supported = bool(query_param_debug.get("hl_keywords_in_supported"))
+        ll_supported = bool(query_param_debug.get("ll_keywords_in_supported"))
+        if (
+            entity_guard_applied
+            and keyword_injection_mode == "query_param"
+            and not hl_supported
+            and not ll_supported
+        ):
+            logger.warning(
+                "Training RAG QueryParam keyword injection unsupported | "
+                f"hl_supported={hl_supported} | ll_supported={ll_supported} | "
+                "fallback=compact_query"
             )
-        else:
-            effective_query = original_query
-            protected_terms = []
-            entity_guard_high_level_intents = []
-        compact_query = _build_compact_query(
-            original_query,
-            matched_guard_terms,
-            entity_guard_terms,
-        ) if matched_guard_terms else original_query
+            effective_query = compact_query
+            hl_keywords = []
+            ll_keywords = []
+            param, param_kwargs, query_param_debug = _build_query_param(
+                mode,
+                prefer_zh_output,
+                hl_keywords=hl_keywords,
+                ll_keywords=ll_keywords,
+            )
+            hl_supported = bool(query_param_debug.get("hl_keywords_in_supported"))
+            ll_supported = bool(query_param_debug.get("ll_keywords_in_supported"))
+            keyword_injection_mode = "compact_query"
+        elif entity_guard_applied and keyword_injection_mode == "query_param" and (
+            not hl_supported or not ll_supported
+        ):
+            logger.warning(
+                "Training RAG QueryParam keyword injection partially unsupported | "
+                f"hl_supported={hl_supported} | ll_supported={ll_supported}"
+            )
+
+        if entity_guard_applied:
+            logger.info(
+                "Training RAG entity guard applied | "
+                f"injection_mode={keyword_injection_mode} | "
+                f"terms={matched_guard_terms} | "
+                f"ll_keywords={ll_keywords or protected_terms} | "
+                f"hl_keywords={hl_keywords or entity_guard_high_level_intents} | "
+                f"original_query={original_query[:80]} | "
+                + (
+                    "aquery_llm_query=original_query"
+                    if effective_query == original_query
+                    else f"effective_query_preview={effective_query[:200]}"
+                )
+            )
 
         rerank_debug = {
             "training_rag_enable_rerank": _env_bool("TRAINING_RAG_ENABLE_RERANK", False),
@@ -1047,6 +1144,8 @@ async def get_training_lightrag_stream(
         logger.info(
             f"Training RAG QueryParam built | mode={mode} | "
             f"chunk_top_k_supported={query_param_debug.get('chunk_top_k_in_supported')} | "
+            f"hl_keywords_supported={query_param_debug.get('hl_keywords_in_supported')} | "
+            f"ll_keywords_supported={query_param_debug.get('ll_keywords_in_supported')} | "
             f"actual_kwargs={query_param_debug.get('actual_param_kwargs')}"
         )
 
@@ -1060,6 +1159,8 @@ async def get_training_lightrag_stream(
                 "query": original_query[: _rag_debug_max_text()],
                 "original_query": original_query[: _rag_debug_max_text()],
                 "effective_query": effective_query[: _rag_debug_max_text()],
+                "aquery_llm_query_is_original": effective_query == original_query,
+                "keyword_injection_mode": keyword_injection_mode,
                 "mode": mode,
                 "working_dir": str(working_dir),
                 "param_kwargs": param_kwargs,
@@ -1068,6 +1169,12 @@ async def get_training_lightrag_stream(
                 "actual_param_kwargs": query_param_debug.get("actual_param_kwargs"),
                 "chunk_top_k_in_supported": query_param_debug.get("chunk_top_k_in_supported"),
                 "chunk_top_k_in_actual_kwargs": query_param_debug.get("chunk_top_k_in_actual_kwargs"),
+                "hl_keywords_in_supported": query_param_debug.get("hl_keywords_in_supported"),
+                "ll_keywords_in_supported": query_param_debug.get("ll_keywords_in_supported"),
+                "hl_keywords_in_actual_kwargs": query_param_debug.get("hl_keywords_in_actual_kwargs"),
+                "ll_keywords_in_actual_kwargs": query_param_debug.get("ll_keywords_in_actual_kwargs"),
+                "injected_hl_keywords": query_param_debug.get("injected_hl_keywords"),
+                "injected_ll_keywords": query_param_debug.get("injected_ll_keywords"),
                 "entity_guard_enabled": entity_guard_enabled,
                 "entity_guard_applied": entity_guard_applied,
                 "entity_guard_terms_matched": matched_guard_terms,
