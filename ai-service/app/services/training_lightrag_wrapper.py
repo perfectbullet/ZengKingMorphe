@@ -16,6 +16,7 @@ import asyncio
 import inspect
 import json
 import os
+import re
 import traceback
 import uuid
 from dataclasses import asdict, is_dataclass
@@ -42,6 +43,12 @@ def _env_bool(name: str, default: bool) -> bool:
 def _parse_csv_env(name: str, default: str) -> list[str]:
     raw = os.getenv(name, default)
     return [part.strip() for part in str(raw).split(",") if part.strip()]
+
+
+def _split_csv_like(value: str) -> list[str]:
+    if not value:
+        return []
+    return [part.strip() for part in re.split(r"[，,]", value) if part.strip()]
 
 
 def _pick_env(candidates: list[str], default: str | None = None) -> str | None:
@@ -525,74 +532,226 @@ def _match_guard_terms(query: str, terms: list[str]) -> list[str]:
     return ordered
 
 
-def _expand_guard_alias_terms(matched_terms: list[str], all_terms: list[str]) -> list[str]:
-    expanded: list[str] = []
+def _allow_short_entity_term(entity_type: str | None) -> bool:
+    return (entity_type or "").strip() in {"材料", "元素"}
+
+
+def _sanitize_keyword(text: str, *, max_chars: int) -> str:
+    cleaned = re.sub(r"\s+", " ", str(text or "")).strip(" \t\r\n，,。；;：:")
+    if not cleaned:
+        return ""
+    if len(cleaned) > max_chars:
+        cleaned = cleaned[:max_chars].rstrip()
+    return cleaned
+
+
+def _dedupe_keywords(values: list[str], *, max_count: int, max_chars: int) -> list[str]:
+    result: list[str] = []
     seen: set[str] = set()
-    for term in matched_terms:
-        for candidate in (term, term.removesuffix("工艺")):
-            candidate = candidate.strip()
-            if (
-                candidate
-                and candidate in all_terms
-                and candidate not in seen
-            ):
-                seen.add(candidate)
-                expanded.append(candidate)
-    return expanded
+    for raw in values:
+        text = _sanitize_keyword(raw, max_chars=max_chars)
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+        if len(result) >= max_count:
+            break
+    return result
 
 
-def _build_high_level_retrieval_intents(
+def _load_entity_terms_from_file(path: str) -> list[dict[str, Any]]:
+    file_path = Path(path).expanduser()
+    if not file_path.is_absolute():
+        file_path = (_service_root() / file_path).resolve()
+    if not file_path.is_file():
+        raise FileNotFoundError(f"TRAINING_RAG_ENTITY_TERMS_FILE 不存在: {file_path}")
+
+    entities: list[dict[str, Any]] = []
+    for raw_line in file_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = [part.strip() for part in line.split("|")]
+        canonical = parts[0].strip()
+        if not canonical:
+            continue
+        entry: dict[str, Any] = {
+            "canonical": canonical,
+            "aliases": [],
+            "type": None,
+            "chapter": [],
+        }
+        for part in parts[1:]:
+            if "=" not in part:
+                continue
+            key, value = part.split("=", 1)
+            key = key.strip().lower()
+            value = value.strip()
+            if key == "alias":
+                entry["aliases"] = _split_csv_like(value)
+            elif key == "type":
+                entry["type"] = value or None
+            elif key == "chapter":
+                entry["chapter"] = _split_csv_like(value)
+
+        terms: list[str] = []
+        for term in [canonical, *entry["aliases"]]:
+            term = term.strip()
+            if not term:
+                continue
+            if len(term) < 2 and not _allow_short_entity_term(entry.get("type")):
+                continue
+            terms.append(term)
+        if not terms:
+            continue
+        entry["canonical"] = terms[0]
+        entry["aliases"] = [term for term in terms[1:] if term != terms[0]]
+        entry["match_terms"] = sorted(set([entry["canonical"], *entry["aliases"]]), key=lambda x: (-len(x), x))
+        entities.append(entry)
+    return entities
+
+
+def _resolve_entity_terms() -> tuple[list[dict[str, Any]], str, str | None]:
+    entity_file = (os.getenv("TRAINING_RAG_ENTITY_TERMS_FILE", "") or "").strip()
+    if entity_file:
+        entities = _load_entity_terms_from_file(entity_file)
+        logger.info(
+            f"Training RAG entity terms loaded | source=file | count={len(entities)} | path={entity_file}"
+        )
+        return entities, "file", entity_file
+
+    raw_terms = _parse_csv_env(
+        "TRAINING_RAG_ENTITY_GUARD_TERMS",
+        "平铺珐琅工艺,平铺珐琅,掐丝珐琅工艺,掐丝珐琅,画珐琅工艺,画珐琅,灰度绘,透空珐琅,内填珐琅,雕金珐琅,透明釉料,不透明釉料,背釉,底釉,金属底板",
+    )
+    entities: list[dict[str, Any]] = []
+    for term in raw_terms:
+        if len(term) < 2:
+            continue
+        entities.append(
+            {
+                "canonical": term,
+                "aliases": [],
+                "type": None,
+                "chapter": [],
+                "match_terms": [term],
+            }
+        )
+    logger.info(
+        f"Training RAG entity terms loaded | source=csv | count={len(entities)} | path=None"
+    )
+    return entities, "csv", None
+
+
+def _match_entity_terms(
     query: str,
-    matched_terms: list[str],
-    all_terms: list[str],
-) -> list[str]:
-    intents: list[str] = []
-    seen: set[str] = set()
-    low_terms = _expand_guard_alias_terms(matched_terms, all_terms) or matched_terms
-    query_no_punct = query.replace("？", "").replace("?", "").replace("。", "").strip()
-    suffixes: list[str] = []
-    if "基本制作流程" in query:
-        suffixes.extend(["基本制作流程", "制作流程"])
-    elif "制作流程" in query:
-        suffixes.append("制作流程")
-    elif "流程" in query:
-        suffixes.append("流程")
-    elif "区别" in query:
-        suffixes.append("区别")
-    elif "作用" in query:
-        suffixes.append("作用")
-    elif "特点" in query:
-        suffixes.append("特点")
+    entities: list[dict[str, Any]],
+) -> tuple[list[str], list[str], list[str]]:
+    if not query or not entities:
+        return [], [], []
+    matches: list[dict[str, Any]] = []
+    occupied: list[tuple[int, int]] = []
+    sortable: list[tuple[str, str, str]] = []
+    for entry in entities:
+        canonical = str(entry.get("canonical") or "").strip()
+        for term in entry.get("match_terms") or []:
+            if term:
+                sortable.append((term, canonical, term))
+    for term, canonical, matched_value in sorted(sortable, key=lambda item: (-len(item[0]), item[0])):
+        start = query.find(term)
+        while start != -1:
+            end = start + len(term)
+            overlap = any(not (end <= s or start >= e) for s, e in occupied)
+            if not overlap:
+                matches.append(
+                    {
+                        "start": start,
+                        "end": end,
+                        "canonical": canonical,
+                        "matched": matched_value,
+                    }
+                )
+                occupied.append((start, end))
+            start = query.find(term, start + 1)
+    matches.sort(key=lambda item: item["start"])
 
-    for term in matched_terms:
+    canonical_terms: list[str] = []
+    aliases: list[str] = []
+    ll_keywords: list[str] = []
+    seen_canonical: set[str] = set()
+    seen_ll: set[str] = set()
+    for match in matches:
+        canonical = match["canonical"]
+        matched = match["matched"]
+        if canonical not in seen_canonical:
+            seen_canonical.add(canonical)
+            canonical_terms.append(canonical)
+        if canonical not in seen_ll:
+            seen_ll.add(canonical)
+            ll_keywords.append(canonical)
+        if matched != canonical and matched not in seen_ll:
+            seen_ll.add(matched)
+            ll_keywords.append(matched)
+            aliases.append(matched)
+    return ll_keywords, canonical_terms, aliases
+
+
+def _build_high_level_keywords_from_query(query: str, ll_keywords: list[str]) -> list[str]:
+    max_count = max(1, int(os.getenv("TRAINING_RAG_MAX_HL_KEYWORDS", "10")))
+    max_chars = max(8, int(os.getenv("TRAINING_RAG_MAX_KEYWORD_CHARS", "50")))
+    query_no_punct = re.sub(r"[？?。！!；;：:，,、\s]+", "", query or "")
+    intents: list[str] = []
+    def add_term_suffix(term: str, suffixes: list[str]) -> None:
         for suffix in suffixes:
-            candidate = f"{term}{suffix}"
-            if candidate not in seen:
-                seen.add(candidate)
-                intents.append(candidate)
-        if term not in seen:
-            seen.add(term)
-            intents.append(term)
-    for term in low_terms:
-        if term not in seen:
-            seen.add(term)
-            intents.append(term)
-    if query_no_punct and query_no_punct not in seen:
-        seen.add(query_no_punct)
+            if not term or term.endswith(suffix) or suffix in term:
+                continue
+            intents.append(f"{term}{suffix}")
+
+    pairs = []
+    if len(ll_keywords) >= 2:
+        pairs.append(f"{ll_keywords[0]}与{ll_keywords[1]}")
+
+    if any(token in query for token in ("区别", "差异", "不同", "对比")):
+        for pair in pairs:
+            intents.extend([f"{pair}区别", f"{pair}核心区别", f"{pair}差异"])
+    if any(token in query for token in ("成分", "化学成分", "组成")):
+        for term in ll_keywords:
+            add_term_suffix(term, ["核心化学成分", "成分组成"])
+    if any(token in query for token in ("温度", "熔化温度", "烧制温度", "烧成温度")):
+        for term in ll_keywords:
+            add_term_suffix(term, ["熔化温度", "烧制温度"])
+        if len(ll_keywords) >= 2:
+            intents.append("温度差异")
+    if any(token in query for token in ("实操", "问题", "影响", "带来哪些问题")):
+        for term in ll_keywords:
+            add_term_suffix(term, ["实操问题", "烧制问题"])
+    if any(token in query for token in ("检测", "判断", "好坏", "标准")):
+        for term in ll_keywords:
+            add_term_suffix(term, ["检测方法", "质量标准", "好坏判断标准"])
+    if any(token in query for token in ("适配", "适合", "用于", "特点")):
+        for term in ll_keywords:
+            add_term_suffix(term, ["特点", "适配工艺"])
+    if any(token in query for token in ("为什么", "原理")):
+        for term in ll_keywords:
+            add_term_suffix(term, ["核心原理", "显色原理"])
+    if any(token in query for token in ("流程", "步骤", "制作", "操作")):
+        for term in ll_keywords:
+            add_term_suffix(term, ["制作流程", "操作步骤", "工艺流程"])
+
+    intents.extend(ll_keywords)
+    if query_no_punct:
         intents.append(query_no_punct)
-    return intents
+    return _dedupe_keywords(intents, max_count=max_count, max_chars=max_chars)
 
 
 def _build_entity_guarded_query(
     query: str,
-    matched_terms: list[str],
+    protected_terms: list[str],
+    high_level_intents: list[str],
     prefer_zh_output: bool,
     *,
     include_domain_intent: bool,
-    all_terms: list[str],
-) -> tuple[str, list[str], list[str]]:
-    protected_terms = _expand_guard_alias_terms(matched_terms, all_terms) or matched_terms
-    high_level_intents = _build_high_level_retrieval_intents(query, matched_terms, all_terms)
+) -> str:
     if prefer_zh_output:
         header = (
             "【检索约束】\n"
@@ -629,19 +788,17 @@ def _build_entity_guarded_query(
             + "\n".join(f"- {item}" for item in high_level_intents)
             + f"\n\n[User question]\n{query}"
         )
-    return guarded_query, protected_terms, high_level_intents
+    return guarded_query
 
 
 def _build_compact_query(
     query: str,
-    matched_terms: list[str],
-    all_terms: list[str],
+    ll_keywords: list[str],
+    hl_keywords: list[str],
 ) -> str:
-    protected_terms = _expand_guard_alias_terms(matched_terms, all_terms) or matched_terms
-    high_level_intents = _build_high_level_retrieval_intents(query, matched_terms, all_terms)
     tokens: list[str] = []
     seen: set[str] = set()
-    for item in protected_terms + high_level_intents + ["工业实训教材", "珐琅工艺"]:
+    for item in ll_keywords + hl_keywords + ["工业实训教材", "珐琅工艺"]:
         text = str(item).strip()
         if text and text not in seen:
             seen.add(text)
@@ -669,15 +826,17 @@ def _build_query_param(
     from lightrag.base import QueryParam
 
     user_prompt = (
-        "请使用简体中文回答，只根据工训教材知识库作答；"
-        # "尽量给出章节路径或来源线索；若资料不足，请明确说明“当前知识库资料不足”。"
-        # "当用户询问“基本流程/制作流程”时，优先按教材中的核心步骤回答；"
-        # "进阶效果、案例、延伸技法只作为补充，不要列为主流程步骤。"
+        "请使用简体中文回答。答案必须严格依据当前检索到的工训教材上下文；"
+        "不要使用教材外常识补全。涉及步骤、温度、成分、材料差异、检测方法、"
+        "适配工艺、实操问题和原理解释时，必须能从上下文中找到依据。"
+        "若当前上下文不足，请明确说明“当前知识库资料不足”，不要编造。"
         if prefer_zh_output
-        else "Answer in English only based on the training knowledge base. "
-        "If context is insufficient, say the knowledge base lacks enough material. "
-        "When the user asks for a basic workflow, prioritize core textbook steps "
-        "and keep advanced effects or extensions only as supplementary notes."
+        else "Answer in English. Your answer must be strictly grounded in the retrieved "
+        "industrial-training textbook context. Do not fill gaps with outside knowledge. "
+        "For steps, temperatures, compositions, material differences, testing methods, "
+        "applicable processes, practical issues, and principle explanations, every claim "
+        "must be supported by the retrieved context. If the context is insufficient, say "
+        "\"当前知识库资料不足\" and do not fabricate details."
     )
 
     candidate_kwargs = {
@@ -717,7 +876,10 @@ def _build_query_param(
 
 
 def _build_system_prompt() -> str:
-    return "你是工业实训教材问答助手。只根据当前知识库回答，不要编造教材外知识。"
+    return (
+        "你是工业实训教材问答助手。你的回答必须基于当前检索上下文，"
+        "不要编造教材外知识。上下文不足时，应明确说明“当前知识库资料不足”。"
+    )
 
 
 def _build_llm_model_func():
@@ -1021,44 +1183,53 @@ async def get_training_lightrag_stream(
         entity_guard_include_domain_intent = _env_bool(
             "TRAINING_RAG_ENTITY_GUARD_INCLUDE_DOMAIN_INTENT", True
         )
-        entity_guard_terms = _parse_csv_env(
-            "TRAINING_RAG_ENTITY_GUARD_TERMS",
-            "平铺珐琅工艺,平铺珐琅,掐丝珐琅工艺,掐丝珐琅,画珐琅工艺,画珐琅,灰度绘,透空珐琅,内填珐琅,雕金珐琅,透明釉料,不透明釉料,背釉,底釉,金属底板",
-        )
-        matched_guard_terms = (
-            _match_guard_terms(original_query, entity_guard_terms)
-            if entity_guard_enabled
-            else []
-        )
+        entity_terms, entity_terms_source, entity_terms_file = _resolve_entity_terms()
+        matched_guard_terms: list[str] = []
+        matched_canonical_terms: list[str] = []
+        matched_aliases: list[str] = []
+        if entity_guard_enabled:
+            matched_guard_terms, matched_canonical_terms, matched_aliases = _match_entity_terms(
+                original_query,
+                entity_terms,
+            )
         entity_guard_applied = bool(entity_guard_enabled and matched_guard_terms)
         keyword_injection_mode = _resolve_keyword_injection_mode()
+        max_ll_keywords = max(1, int(os.getenv("TRAINING_RAG_MAX_LL_KEYWORDS", "12")))
+        max_hl_keywords = max(1, int(os.getenv("TRAINING_RAG_MAX_HL_KEYWORDS", "10")))
+        max_keyword_chars = max(8, int(os.getenv("TRAINING_RAG_MAX_KEYWORD_CHARS", "50")))
         protected_terms = (
-            _expand_guard_alias_terms(matched_guard_terms, entity_guard_terms)
-            if entity_guard_applied
-            else []
-        ) or matched_guard_terms
-        entity_guard_high_level_intents = (
-            _build_high_level_retrieval_intents(
-                original_query,
+            _dedupe_keywords(
                 matched_guard_terms,
-                entity_guard_terms,
+                max_count=max_ll_keywords,
+                max_chars=max_keyword_chars,
             )
             if entity_guard_applied
             else []
         )
+        entity_guard_high_level_intents = (
+            _build_high_level_keywords_from_query(original_query, protected_terms)
+            if entity_guard_applied
+            else []
+        )
+        if len(entity_guard_high_level_intents) > max_hl_keywords:
+            entity_guard_high_level_intents = entity_guard_high_level_intents[:max_hl_keywords]
         compact_query = _build_compact_query(
             original_query,
-            matched_guard_terms,
-            entity_guard_terms,
-        ) if matched_guard_terms else original_query
+            protected_terms,
+            entity_guard_high_level_intents,
+        ) if protected_terms else original_query
         verbose_guarded_query = original_query
         if entity_guard_applied:
-            verbose_guarded_query, _, _ = _build_entity_guarded_query(
+            logger.info(
+                "Training RAG entity terms matched | "
+                f"canonical_terms={matched_canonical_terms} | aliases={matched_aliases}"
+            )
+            verbose_guarded_query = _build_entity_guarded_query(
                 original_query,
-                matched_guard_terms,
+                protected_terms,
+                entity_guard_high_level_intents,
                 prefer_zh_output,
                 include_domain_intent=entity_guard_include_domain_intent,
-                all_terms=entity_guard_terms,
             )
 
         hl_keywords: list[str] = []
@@ -1175,9 +1346,13 @@ async def get_training_lightrag_stream(
                 "ll_keywords_in_actual_kwargs": query_param_debug.get("ll_keywords_in_actual_kwargs"),
                 "injected_hl_keywords": query_param_debug.get("injected_hl_keywords"),
                 "injected_ll_keywords": query_param_debug.get("injected_ll_keywords"),
+                "entity_terms_source": entity_terms_source,
+                "entity_terms_file": entity_terms_file,
                 "entity_guard_enabled": entity_guard_enabled,
                 "entity_guard_applied": entity_guard_applied,
                 "entity_guard_terms_matched": matched_guard_terms,
+                "entity_guard_canonical_terms": matched_canonical_terms,
+                "entity_guard_aliases": matched_aliases,
                 "entity_guard_terms_protected": protected_terms,
                 "entity_guard_high_level_intents": entity_guard_high_level_intents,
                 "compact_query": compact_query[: _rag_debug_max_text()],

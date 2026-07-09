@@ -1,0 +1,74 @@
+# 教材：珐琅工艺
+# 版本：v1
+
+## QA-001
+question: 平铺珐琅工艺的基本制作流程是什么？
+type: 流程类
+expected_keywords: 平铺珐琅工艺, 平铺珐琅, 背釉, 底釉, 正面图案烧制
+must_include: 凸形处理, 酸洗, 背釉烧制, 底釉烧制, 正面图案烧制
+must_not_include: 制胎, 抛光, 包装, 镀层
+source_hint: 01珐琅工艺_full.md#L1087-L1090; 01珐琅工艺_full.md#L1179-L1302
+
+## QA-002
+question: 什么是高温大明火珐琅，和冷珐琅核心区别是什么？
+type: 对比类
+expected_keywords: 高温大明火珐琅, 高温珐琅, 冷珐琅
+must_include:
+must_not_include:
+source_hint:
+
+## QA-003
+question: 珐琅釉核心化学成分为何？
+type: 成分类
+expected_keywords: 珐琅釉核心化学成分, 珐琅釉料
+must_include:
+must_not_include:
+source_hint:
+
+## QA-004
+question: 国内外釉料成分有哪些区别？
+type: 对比类
+expected_keywords: 法国釉料, 日本釉料, 国产釉料, 釉料
+must_include:
+must_not_include:
+source_hint:
+
+## QA-005
+question: 法国、日本、国产珐琅釉料各有什么特点，适配什么工艺？
+type: 特点类
+expected_keywords: 法国釉料, 日本釉料, 国产釉料
+must_include:
+must_not_include:
+source_hint:
+
+## QA-006
+question: 透明釉与不透明釉熔化温度相差多少，实操会带来哪些烧制问题？
+type: 参数类
+expected_keywords: 透明釉料, 不透明釉料, 熔化温度
+must_include:
+must_not_include:
+source_hint:
+
+## QA-007
+question: 判断珐琅釉好坏的三大核心标准，实操中如何检测？
+type: 检测类
+expected_keywords: 珐琅釉料, 检测方法
+must_include:
+must_not_include:
+source_hint:
+
+## QA-008
+question: 透明釉烧制在金、银、铜底板颜色会不一样吗？核心原理是什么？
+type: 原理类
+expected_keywords: 透明釉料, 金底板, 银底板, 铜底板, 显色原理
+must_include:
+must_not_include:
+source_hint:
+
+## QA-009
+question: 什么是土豆什么是马铃薯？
+type: 通识类
+expected_keywords:
+must_include:
+must_not_include:
+source_hint:
