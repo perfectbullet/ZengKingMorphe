@@ -722,7 +722,14 @@ def _resolve_entity_terms() -> tuple[list[dict[str, Any]], str, list[str]]:
             raise FileNotFoundError(f"TRAINING_RAG_BOOK_ENTITY_DIR 不存在: {dir_path}")
         entities: list[dict[str, Any]] = []
         files: list[str] = []
-        for file_path in sorted(list(dir_path.glob("*_entity.txt")) + list(dir_path.glob("*_entity.example.txt"))):
+        formal_files = {p.stem: p for p in dir_path.glob("*_entity.txt")}
+        selected_files: list[Path] = sorted(formal_files.values())
+        for example_file in sorted(dir_path.glob("*_entity.example.txt")):
+            formal_stem = example_file.stem.replace(".example", "")
+            if formal_stem in formal_files:
+                continue
+            selected_files.append(example_file)
+        for file_path in selected_files:
             entities.extend(_load_entity_terms_from_file(str(file_path), books_config))
             files.append(str(file_path))
         if global_entity_file:
@@ -956,17 +963,17 @@ def _build_query_param(
     from lightrag.base import QueryParam
 
     user_prompt = (
-        "请使用简体中文回答。答案必须严格依据当前检索到的工训教材上下文；"
-        "不要使用教材外常识补全。涉及步骤、温度、成分、材料差异、检测方法、"
-        "适配工艺、实操问题和原理解释时，必须能从上下文中找到依据。"
-        "若当前上下文不足，请明确说明“当前知识库资料不足”，不要编造。"
+        "请使用简体中文回答。请优先依据当前检索到的工训教材上下文作答，"
+        "不要使用教材外常识补全。可以对多个相关片段进行归纳整理，"
+        "但不要加入上下文没有支持的新步骤、新参数、新材料或新结论。"
+        "若检索上下文没有覆盖问题核心内容，再明确说明“当前知识库资料不足”。"
         if prefer_zh_output
-        else "Answer in English. Your answer must be strictly grounded in the retrieved "
-        "industrial-training textbook context. Do not fill gaps with outside knowledge. "
-        "For steps, temperatures, compositions, material differences, testing methods, "
-        "applicable processes, practical issues, and principle explanations, every claim "
-        "must be supported by the retrieved context. If the context is insufficient, say "
-        "\"当前知识库资料不足\" and do not fabricate details."
+        else "Answer in English. Prefer grounding your answer in the retrieved industrial-"
+        "training textbook context and do not fill gaps with outside knowledge. You may "
+        "synthesize multiple relevant passages, but do not add new steps, parameters, "
+        "materials, or conclusions that are not supported by the context. Only say "
+        "\"当前知识库资料不足\" when the retrieved context does not cover the core content "
+        "of the question."
     )
 
     candidate_kwargs = {
@@ -1007,8 +1014,9 @@ def _build_query_param(
 
 def _build_system_prompt() -> str:
     return (
-        "你是工业实训教材问答助手。你的回答必须基于当前检索上下文，"
-        "不要编造教材外知识。上下文不足时，应明确说明“当前知识库资料不足”。"
+        "你是工业实训教材问答助手。你的回答应基于当前检索上下文，"
+        "可以对多个教材片段进行归纳整理，但不要编造教材外知识。"
+        "上下文未覆盖问题核心内容时，应明确说明资料不足。"
     )
 
 
