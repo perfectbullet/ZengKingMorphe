@@ -1,0 +1,104 @@
+{
+  "books": [
+    {
+      "book_id": "01",
+      "book_name": "珐琅工艺",
+      "subject": "enamel",
+      "domain": "industrial_training",
+      "category": "jewelry_craft",
+      "aliases": ["珐琅", "珐琅工艺", "enamel"],
+      "default_entity_file": "entities/01_珐琅工艺_entity.example.txt",
+      "default_qa_file": "qa/01_珐琅工艺_QA.example.txt"
+    },
+    {
+      "book_id": "02",
+      "book_name": "珠宝手绘效果图表现",
+      "subject": "jewelry_hand_rendering",
+      "domain": "industrial_training",
+      "category": "jewelry_design",
+      "aliases": ["珠宝手绘", "手绘效果图", "珠宝效果图"],
+      "default_entity_file": "entities/02_珠宝手绘效果图表现_entity.example.txt",
+      "default_qa_file": "qa/02_珠宝手绘效果图表现_QA.example.txt"
+    },
+    {
+      "book_id": "03",
+      "book_name": "首饰设计与创意方法",
+      "subject": "jewelry_design_creativity",
+      "domain": "industrial_training",
+      "category": "jewelry_design",
+      "aliases": ["首饰设计", "创意方法"],
+      "default_entity_file": "entities/03_首饰设计与创意方法_entity.example.txt",
+      "default_qa_file": "qa/03_首饰设计与创意方法_QA.example.txt"
+    },
+    {
+      "book_id": "04",
+      "book_name": "玉石雕刻工艺",
+      "subject": "jade_carving",
+      "domain": "industrial_training",
+      "category": "jewelry_craft",
+      "aliases": ["玉石雕刻", "玉雕"],
+      "default_entity_file": "entities/04_玉石雕刻工艺_entity.example.txt",
+      "default_qa_file": "qa/04_玉石雕刻工艺_QA.example.txt"
+    },
+    {
+      "book_id": "05",
+      "book_name": "首饰雕蜡工艺",
+      "subject": "jewelry_wax_carving",
+      "domain": "industrial_training",
+      "category": "jewelry_craft",
+      "aliases": ["雕蜡", "首饰雕蜡"],
+      "default_entity_file": "entities/05_首饰雕蜡工艺_entity.example.txt",
+      "default_qa_file": "qa/05_首饰雕蜡工艺_QA.example.txt"
+    },
+    {
+      "book_id": "06",
+      "book_name": "首饰设计表现",
+      "subject": "jewelry_design_rendering",
+      "domain": "industrial_training",
+      "category": "jewelry_design",
+      "aliases": ["设计表现", "首饰设计表现"],
+      "default_entity_file": "entities/06_首饰设计表现_entity.example.txt",
+      "default_qa_file": "qa/06_首饰设计表现_QA.example.txt"
+    },
+    {
+      "book_id": "07",
+      "book_name": "首饰金属工艺",
+      "subject": "jewelry_metal_craft",
+      "domain": "industrial_training",
+      "category": "jewelry_craft",
+      "aliases": ["金属工艺", "首饰金工"],
+      "default_entity_file": "entities/07_首饰金属工艺_entity.example.txt",
+      "default_qa_file": "qa/07_首饰金属工艺_QA.example.txt"
+    },
+    {
+      "book_id": "08",
+      "book_name": "宝石镶嵌工艺",
+      "subject": "gem_setting",
+      "domain": "industrial_training",
+      "category": "jewelry_craft",
+      "aliases": ["宝石镶嵌", "镶嵌工艺"],
+      "default_entity_file": "entities/08_宝石镶嵌工艺_entity.example.txt",
+      "default_qa_file": "qa/08_宝石镶嵌工艺_QA.example.txt"
+    },
+    {
+      "book_id": "09",
+      "book_name": "首饰效果图表现",
+      "subject": "jewelry_rendering",
+      "domain": "industrial_training",
+      "category": "jewelry_design",
+      "aliases": ["首饰效果图", "效果图表现"],
+      "default_entity_file": "entities/09_首饰效果图表现_entity.example.txt",
+      "default_qa_file": "qa/09_首饰效果图表现_QA.example.txt"
+    },
+    {
+      "book_id": "10",
+      "book_name": "金工实习",
+      "subject": "metalworking_practice",
+      "domain": "industrial_training",
+      "category": "metalworking",
+      "aliases": ["金工", "金工实训", "金工实习"],
+      "default_entity_file": "entities/10_金工实习_entity.example.txt",
+      "default_qa_file": "qa/10_金工实习_QA.example.txt"
+    }
+  ]
+}

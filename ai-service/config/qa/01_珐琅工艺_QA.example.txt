@@ -1,0 +1,57 @@
+# book_id: 01
+# book_name: 珐琅工艺
+# subject: enamel
+# domain: industrial_training
+# category: jewelry_craft
+# version: v1
+
+## QA-001
+question: 平铺珐琅工艺的基本制作流程是什么？
+type: 流程类
+expected_route: lightrag_file
+expected_books: 01
+allow_cross_book: false
+difficulty: basic
+expected_keywords: 平铺珐琅工艺, 平铺珐琅, 背釉, 底釉, 正面图案烧制
+must_include: 凸形处理, 酸洗, 背釉烧制, 底釉烧制, 正面图案烧制
+must_not_include: 制胎, 抛光, 包装, 镀层
+source_hint: 01珐琅工艺_full.md#L1087-L1090; 01珐琅工艺_full.md#L1179-L1302
+
+## QA-002
+question: 什么是高温大明火珐琅，和冷珐琅核心区别是什么？
+type: 对比类
+expected_route: lightrag_file
+expected_books: 01
+allow_cross_book: false
+difficulty: basic
+expected_keywords: 高温大明火珐琅, 高温珐琅, 冷珐琅
+must_include:
+must_not_include:
+source_hint:
+
+## QA-009
+question: 什么是土豆什么是马铃薯？
+type: 通识类
+expected_route: general_knowledge
+expected_books:
+allow_cross_book: false
+difficulty: basic
+expected_keywords:
+must_include:
+must_not_include:
+source_hint:
+
+## QA-120
+question: 珐琅工艺中的金属底板处理，和首饰金属工艺中的金属表面处理有什么区别？
+type: 跨教材对比类
+book_id: multi
+book_name: 多教材
+subject: enamel,jewelry_metal_craft
+expected_route: lightrag_file
+expected_books: 01,07
+allow_cross_book: true
+difficulty: advanced
+expected_keywords: 金属底板处理, 首饰金属工艺, 酸洗, 打磨, 抛光
+must_include:
+must_not_include:
+source_hint:

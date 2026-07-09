@@ -51,6 +51,12 @@ def _split_csv_like(value: str) -> list[str]:
     return [part.strip() for part in re.split(r"[，,]", value) if part.strip()]
 
 
+def _split_semicolon_like(value: str) -> list[str]:
+    if not value:
+        return []
+    return [part.strip() for part in re.split(r"[;；]", value) if part.strip()]
+
+
 def _pick_env(candidates: list[str], default: str | None = None) -> str | None:
     for name in candidates:
         value = os.getenv(name)
@@ -61,6 +67,20 @@ def _pick_env(candidates: list[str], default: str | None = None) -> str | None:
 
 def _service_root() -> Path:
     return Path(__file__).resolve().parents[2]
+
+
+def _resolve_books_config_path() -> Path:
+    value = (
+        os.getenv(
+            "TRAINING_RAG_BOOKS_CONFIG",
+            str(_service_root() / "config" / "training_books.json"),
+        )
+        or ""
+    ).strip()
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = (_service_root() / path).resolve()
+    return path
 
 
 def _resolve_working_dir() -> Path:
@@ -559,15 +579,80 @@ def _dedupe_keywords(values: list[str], *, max_count: int, max_chars: int) -> li
     return result
 
 
-def _load_entity_terms_from_file(path: str) -> list[dict[str, Any]]:
+def _load_books_config() -> dict[str, dict[str, Any]]:
+    path = _resolve_books_config_path()
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger.warning(f"Failed to load TRAINING_RAG_BOOKS_CONFIG: {path} | error={exc}")
+        return {}
+    books: dict[str, dict[str, Any]] = {}
+    for item in data.get("books") or []:
+        if not isinstance(item, dict):
+            continue
+        book_id = str(item.get("book_id") or "").strip()
+        if not book_id:
+            continue
+        books[book_id] = item
+    return books
+
+
+def _parse_header_metadata(lines: list[str]) -> dict[str, Any]:
+    meta: dict[str, Any] = {}
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line.startswith("#"):
+            continue
+        line = line.lstrip("#").strip()
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        meta[key.strip()] = value.strip()
+    return meta
+
+
+def _normalize_book_metadata(meta: dict[str, Any], books_config: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    result = dict(meta or {})
+    book_id = str(result.get("book_id") or "").strip()
+    config_meta = books_config.get(book_id, {}) if book_id else {}
+    merged = {
+        "book_id": book_id or str(config_meta.get("book_id") or "").strip() or None,
+        "book_name": str(result.get("book_name") or config_meta.get("book_name") or "").strip() or None,
+        "subject": str(result.get("subject") or config_meta.get("subject") or "").strip() or None,
+        "domain": str(result.get("domain") or config_meta.get("domain") or "").strip() or None,
+        "category": str(result.get("category") or config_meta.get("category") or "").strip() or None,
+        "version": str(result.get("version") or "").strip() or None,
+    }
+    aliases = config_meta.get("aliases") or []
+    if aliases:
+        merged["book_aliases"] = [str(alias).strip() for alias in aliases if str(alias).strip()]
+    return merged
+
+
+def _inherit_metadata(defaults: dict[str, Any], overrides: dict[str, Any], books_config: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    merged = dict(defaults or {})
+    for key, value in (overrides or {}).items():
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        merged[key] = value
+    return _normalize_book_metadata(merged, books_config)
+
+
+def _load_entity_terms_from_file(path: str, books_config: dict[str, dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     file_path = Path(path).expanduser()
     if not file_path.is_absolute():
         file_path = (_service_root() / file_path).resolve()
     if not file_path.is_file():
         raise FileNotFoundError(f"TRAINING_RAG_ENTITY_TERMS_FILE 不存在: {file_path}")
-
+    books_config = books_config or {}
+    raw_lines = file_path.read_text(encoding="utf-8").splitlines()
+    defaults = _normalize_book_metadata(_parse_header_metadata(raw_lines), books_config)
     entities: list[dict[str, Any]] = []
-    for raw_line in file_path.read_text(encoding="utf-8").splitlines():
+    for raw_line in raw_lines:
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
@@ -575,6 +660,7 @@ def _load_entity_terms_from_file(path: str) -> list[dict[str, Any]]:
         canonical = parts[0].strip()
         if not canonical:
             continue
+        overrides: dict[str, Any] = {}
         entry: dict[str, Any] = {
             "canonical": canonical,
             "aliases": [],
@@ -593,6 +679,8 @@ def _load_entity_terms_from_file(path: str) -> list[dict[str, Any]]:
                 entry["type"] = value or None
             elif key == "chapter":
                 entry["chapter"] = _split_csv_like(value)
+            elif key in {"book_id", "book_name", "subject", "domain", "category", "version"}:
+                overrides[key] = value or None
 
         terms: list[str] = []
         for term in [canonical, *entry["aliases"]]:
@@ -607,18 +695,48 @@ def _load_entity_terms_from_file(path: str) -> list[dict[str, Any]]:
         entry["canonical"] = terms[0]
         entry["aliases"] = [term for term in terms[1:] if term != terms[0]]
         entry["match_terms"] = sorted(set([entry["canonical"], *entry["aliases"]]), key=lambda x: (-len(x), x))
+        entry.update(_inherit_metadata(defaults, overrides, books_config))
+        entry["term"] = entry["canonical"]
+        entry["file_path"] = str(file_path)
         entities.append(entry)
     return entities
 
 
-def _resolve_entity_terms() -> tuple[list[dict[str, Any]], str, str | None]:
+def _resolve_entity_terms() -> tuple[list[dict[str, Any]], str, list[str]]:
+    books_config = _load_books_config()
     entity_file = (os.getenv("TRAINING_RAG_ENTITY_TERMS_FILE", "") or "").strip()
     if entity_file:
-        entities = _load_entity_terms_from_file(entity_file)
+        entities = _load_entity_terms_from_file(entity_file, books_config)
         logger.info(
             f"Training RAG entity terms loaded | source=file | count={len(entities)} | path={entity_file}"
         )
-        return entities, "file", entity_file
+        return entities, "file", [entity_file]
+
+    entity_dir = (os.getenv("TRAINING_RAG_BOOK_ENTITY_DIR", "") or "").strip()
+    global_entity_file = (os.getenv("TRAINING_RAG_GLOBAL_ENTITY_FILE", "") or "").strip()
+    if entity_dir:
+        dir_path = Path(entity_dir).expanduser()
+        if not dir_path.is_absolute():
+            dir_path = (_service_root() / dir_path).resolve()
+        if not dir_path.is_dir():
+            raise FileNotFoundError(f"TRAINING_RAG_BOOK_ENTITY_DIR 不存在: {dir_path}")
+        entities: list[dict[str, Any]] = []
+        files: list[str] = []
+        for file_path in sorted(list(dir_path.glob("*_entity.txt")) + list(dir_path.glob("*_entity.example.txt"))):
+            entities.extend(_load_entity_terms_from_file(str(file_path), books_config))
+            files.append(str(file_path))
+        if global_entity_file:
+            try:
+                entities.extend(_load_entity_terms_from_file(global_entity_file, books_config))
+                files.append(global_entity_file)
+            except FileNotFoundError:
+                logger.warning(
+                    f"TRAINING_RAG_GLOBAL_ENTITY_FILE 不存在，已跳过: {global_entity_file}"
+                )
+        logger.info(
+            f"Training RAG entity terms loaded | source=dir | count={len(entities)} | files={files}"
+        )
+        return entities, "dir", files
 
     raw_terms = _parse_csv_env(
         "TRAINING_RAG_ENTITY_GUARD_TERMS",
@@ -635,29 +753,36 @@ def _resolve_entity_terms() -> tuple[list[dict[str, Any]], str, str | None]:
                 "type": None,
                 "chapter": [],
                 "match_terms": [term],
+                "term": term,
+                "book_id": None,
+                "book_name": None,
+                "subject": None,
+                "domain": None,
+                "category": None,
+                "version": None,
             }
         )
     logger.info(
         f"Training RAG entity terms loaded | source=csv | count={len(entities)} | path=None"
     )
-    return entities, "csv", None
+    return entities, "csv", []
 
 
 def _match_entity_terms(
     query: str,
     entities: list[dict[str, Any]],
-) -> tuple[list[str], list[str], list[str]]:
+) -> tuple[list[str], list[str], list[str], list[dict[str, Any]]]:
     if not query or not entities:
-        return [], [], []
+        return [], [], [], []
     matches: list[dict[str, Any]] = []
     occupied: list[tuple[int, int]] = []
-    sortable: list[tuple[str, str, str]] = []
+    sortable: list[tuple[str, dict[str, Any], str]] = []
     for entry in entities:
-        canonical = str(entry.get("canonical") or "").strip()
         for term in entry.get("match_terms") or []:
             if term:
-                sortable.append((term, canonical, term))
-    for term, canonical, matched_value in sorted(sortable, key=lambda item: (-len(item[0]), item[0])):
+                sortable.append((term, entry, term))
+    for term, entry, matched_value in sorted(sortable, key=lambda item: (-len(item[0]), item[0])):
+        canonical = str(entry.get("canonical") or "").strip()
         start = query.find(term)
         while start != -1:
             end = start + len(term)
@@ -669,6 +794,7 @@ def _match_entity_terms(
                         "end": end,
                         "canonical": canonical,
                         "matched": matched_value,
+                        "entity": entry,
                     }
                 )
                 occupied.append((start, end))
@@ -678,6 +804,7 @@ def _match_entity_terms(
     canonical_terms: list[str] = []
     aliases: list[str] = []
     ll_keywords: list[str] = []
+    matched_entities: list[dict[str, Any]] = []
     seen_canonical: set[str] = set()
     seen_ll: set[str] = set()
     for match in matches:
@@ -686,6 +813,9 @@ def _match_entity_terms(
         if canonical not in seen_canonical:
             seen_canonical.add(canonical)
             canonical_terms.append(canonical)
+            entity = dict(match["entity"])
+            entity["matched_value"] = matched
+            matched_entities.append(entity)
         if canonical not in seen_ll:
             seen_ll.add(canonical)
             ll_keywords.append(canonical)
@@ -693,7 +823,7 @@ def _match_entity_terms(
             seen_ll.add(matched)
             ll_keywords.append(matched)
             aliases.append(matched)
-    return ll_keywords, canonical_terms, aliases
+    return ll_keywords, canonical_terms, aliases, matched_entities
 
 
 def _build_high_level_keywords_from_query(query: str, ll_keywords: list[str]) -> list[str]:
@@ -1183,12 +1313,13 @@ async def get_training_lightrag_stream(
         entity_guard_include_domain_intent = _env_bool(
             "TRAINING_RAG_ENTITY_GUARD_INCLUDE_DOMAIN_INTENT", True
         )
-        entity_terms, entity_terms_source, entity_terms_file = _resolve_entity_terms()
+        entity_terms, entity_terms_source, entity_terms_files = _resolve_entity_terms()
         matched_guard_terms: list[str] = []
         matched_canonical_terms: list[str] = []
         matched_aliases: list[str] = []
+        matched_entities: list[dict[str, Any]] = []
         if entity_guard_enabled:
-            matched_guard_terms, matched_canonical_terms, matched_aliases = _match_entity_terms(
+            matched_guard_terms, matched_canonical_terms, matched_aliases, matched_entities = _match_entity_terms(
                 original_query,
                 entity_terms,
             )
@@ -1222,7 +1353,8 @@ async def get_training_lightrag_stream(
         if entity_guard_applied:
             logger.info(
                 "Training RAG entity terms matched | "
-                f"canonical_terms={matched_canonical_terms} | aliases={matched_aliases}"
+                f"canonical_terms={matched_canonical_terms} | aliases={matched_aliases} | "
+                f"matched_entities={matched_entities}"
             )
             verbose_guarded_query = _build_entity_guarded_query(
                 original_query,
@@ -1347,12 +1479,28 @@ async def get_training_lightrag_stream(
                 "injected_hl_keywords": query_param_debug.get("injected_hl_keywords"),
                 "injected_ll_keywords": query_param_debug.get("injected_ll_keywords"),
                 "entity_terms_source": entity_terms_source,
-                "entity_terms_file": entity_terms_file,
+                "entity_terms_file": entity_terms_files[0] if entity_terms_files else None,
+                "entity_terms_files": entity_terms_files,
                 "entity_guard_enabled": entity_guard_enabled,
                 "entity_guard_applied": entity_guard_applied,
                 "entity_guard_terms_matched": matched_guard_terms,
                 "entity_guard_canonical_terms": matched_canonical_terms,
                 "entity_guard_aliases": matched_aliases,
+                "matched_entities": matched_entities,
+                "matched_entity_books": sorted(
+                    {
+                        item.get("book_id")
+                        for item in matched_entities
+                        if item.get("book_id")
+                    }
+                ),
+                "matched_entity_subjects": sorted(
+                    {
+                        item.get("subject")
+                        for item in matched_entities
+                        if item.get("subject")
+                    }
+                ),
                 "entity_guard_terms_protected": protected_terms,
                 "entity_guard_high_level_intents": entity_guard_high_level_intents,
                 "compact_query": compact_query[: _rag_debug_max_text()],

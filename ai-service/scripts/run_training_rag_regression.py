@@ -20,38 +20,143 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 
 
+def _split_csv_like(text: str) -> list[str]:
+    return [part.strip() for part in re.split(r"[，,]", text or "") if part.strip()]
+
+
+def _split_semicolon_like(text: str) -> list[str]:
+    return [part.strip() for part in re.split(r"[;；]", text or "") if part.strip()]
+
+
+def _resolve_books_config_path() -> Path:
+    value = (
+        os.getenv(
+            "TRAINING_RAG_BOOKS_CONFIG",
+            str(ROOT / "config" / "training_books.json"),
+        )
+        or ""
+    ).strip()
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = (ROOT / path).resolve()
+    return path
+
+
+def _load_books_config() -> dict[str, dict[str, Any]]:
+    path = _resolve_books_config_path()
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger.warning(f"Failed to load books config: {path} | error={exc}")
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for item in data.get("books") or []:
+        if isinstance(item, dict) and item.get("book_id"):
+            out[str(item["book_id"]).strip()] = item
+    return out
+
+
+def _parse_header_metadata(lines: list[str]) -> dict[str, Any]:
+    meta: dict[str, Any] = {}
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line.startswith("#"):
+            continue
+        text = line.lstrip("#").strip()
+        if ":" not in text:
+            continue
+        key, value = text.split(":", 1)
+        meta[key.strip()] = value.strip()
+    return meta
+
+
+def _normalize_book_metadata(meta: dict[str, Any], books_config: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    result = dict(meta or {})
+    book_id = str(result.get("book_id") or "").strip()
+    config_meta = books_config.get(book_id, {}) if book_id else {}
+    return {
+        "book_id": book_id or str(config_meta.get("book_id") or "").strip() or None,
+        "book_name": str(result.get("book_name") or config_meta.get("book_name") or "").strip() or None,
+        "subject": str(result.get("subject") or config_meta.get("subject") or "").strip() or None,
+        "domain": str(result.get("domain") or config_meta.get("domain") or "").strip() or None,
+        "category": str(result.get("category") or config_meta.get("category") or "").strip() or None,
+        "version": str(result.get("version") or "").strip() or None,
+    }
+
+
+def _inherit_metadata(defaults: dict[str, Any], overrides: dict[str, Any], books_config: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    merged = dict(defaults or {})
+    for key, value in (overrides or {}).items():
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        merged[key] = value
+    return _normalize_book_metadata(merged, books_config)
+
+
 @dataclass
 class QAItem:
     qa_id: str
     question: str
     qa_type: str
+    book_id: str | None
+    book_name: str | None
+    subject: str | None
+    domain: str | None
+    category: str | None
+    version: str | None
+    expected_route: str | None
+    expected_books: list[str]
+    allow_cross_book: bool
+    difficulty: str | None
     expected_keywords: list[str]
     must_include: list[str]
     must_not_include: list[str]
     source_hint: str
 
 
-def _split_csv_like(text: str) -> list[str]:
-    return [part.strip() for part in re.split(r"[，,]", text or "") if part.strip()]
+def _parse_bool(value: str | None, default: bool = False) -> bool:
+    if value is None:
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 def _parse_qa_file(path: Path) -> list[QAItem]:
     if not path.is_file():
         raise FileNotFoundError(f"TRAINING_RAG_QA_FILE 不存在: {path}")
+    books_config = _load_books_config()
+    lines = path.read_text(encoding="utf-8").splitlines()
+    defaults = _normalize_book_metadata(_parse_header_metadata(lines), books_config)
+    if defaults.get("version") is None:
+        defaults["version"] = _parse_header_metadata(lines).get("version")
 
     items: list[QAItem] = []
     current: dict[str, Any] | None = None
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
+    for raw_line in lines:
         line = raw_line.strip()
         if not line or line.startswith("# ") or line.startswith("#\t"):
             continue
         if line.startswith("## "):
             if current:
+                meta = _inherit_metadata(defaults, current, books_config)
                 items.append(
                     QAItem(
                         qa_id=current.get("qa_id", "QA-UNKNOWN"),
                         question=current.get("question", ""),
                         qa_type=current.get("type", ""),
+                        book_id=meta.get("book_id"),
+                        book_name=meta.get("book_name"),
+                        subject=meta.get("subject"),
+                        domain=meta.get("domain"),
+                        category=meta.get("category"),
+                        version=meta.get("version"),
+                        expected_route=current.get("expected_route") or None,
+                        expected_books=_split_csv_like(current.get("expected_books", "")),
+                        allow_cross_book=_parse_bool(current.get("allow_cross_book"), False),
+                        difficulty=current.get("difficulty") or None,
                         expected_keywords=_split_csv_like(current.get("expected_keywords", "")),
                         must_include=_split_csv_like(current.get("must_include", "")),
                         must_not_include=_split_csv_like(current.get("must_not_include", "")),
@@ -65,11 +170,22 @@ def _parse_qa_file(path: Path) -> list[QAItem]:
         key, value = line.split(":", 1)
         current[key.strip()] = value.strip()
     if current:
+        meta = _inherit_metadata(defaults, current, books_config)
         items.append(
             QAItem(
                 qa_id=current.get("qa_id", "QA-UNKNOWN"),
                 question=current.get("question", ""),
                 qa_type=current.get("type", ""),
+                book_id=meta.get("book_id"),
+                book_name=meta.get("book_name"),
+                subject=meta.get("subject"),
+                domain=meta.get("domain"),
+                category=meta.get("category"),
+                version=meta.get("version"),
+                expected_route=current.get("expected_route") or None,
+                expected_books=_split_csv_like(current.get("expected_books", "")),
+                allow_cross_book=_parse_bool(current.get("allow_cross_book"), False),
+                difficulty=current.get("difficulty") or None,
                 expected_keywords=_split_csv_like(current.get("expected_keywords", "")),
                 must_include=_split_csv_like(current.get("must_include", "")),
                 must_not_include=_split_csv_like(current.get("must_not_include", "")),
@@ -80,6 +196,8 @@ def _parse_qa_file(path: Path) -> list[QAItem]:
 
 
 def _latest_file_after(directory: Path, pattern: str, started_at: float) -> Path | None:
+    if not directory.exists():
+        return None
     candidates = [p for p in directory.glob(pattern) if p.stat().st_mtime >= started_at - 1]
     if not candidates:
         return None
@@ -120,7 +238,55 @@ def _detect_outside_knowledge(answer: str) -> bool:
     return any(marker in answer for marker in markers)
 
 
-def _run_single_question(question: str) -> dict[str, Any]:
+def _extract_answer(stdout: str) -> str:
+    if "响应预览:" in stdout:
+        return stdout.split("响应预览:", 1)[1].split("============================================================", 1)[0].strip()
+    return stdout[-800:].strip()
+
+
+def _guess_book_ids_from_text(text: str, books_config: dict[str, dict[str, Any]]) -> list[str]:
+    found: list[str] = []
+    if not text:
+        return found
+    for book_id, meta in books_config.items():
+        name = str(meta.get("book_name") or "").strip()
+        aliases = [str(x).strip() for x in (meta.get("aliases") or []) if str(x).strip()]
+        for token in [name, *aliases]:
+            if token and token in text and book_id not in found:
+                found.append(book_id)
+                break
+    return found
+
+
+def _extract_book_id_from_file_path(file_path: str, books_config: dict[str, dict[str, Any]]) -> str | None:
+    if not file_path:
+        return None
+    match = re.search(r"(^|/)(\d{2})[^\d]", file_path)
+    if match and match.group(2) in books_config:
+        return match.group(2)
+    guessed = _guess_book_ids_from_text(file_path, books_config)
+    return guessed[0] if guessed else None
+
+
+def _summarize_chunk_books(citations: list[dict[str, Any]], books_config: dict[str, dict[str, Any]]) -> tuple[list[str], list[str], bool]:
+    book_ids: list[str] = []
+    subjects: list[str] = []
+    unknown = False
+    for citation in citations:
+        file_path = citation.get("file_path") or citation.get("source") or ""
+        book_id = _extract_book_id_from_file_path(file_path, books_config)
+        if not book_id:
+            unknown = True
+            continue
+        if book_id not in book_ids:
+            book_ids.append(book_id)
+        subject = str((books_config.get(book_id) or {}).get("subject") or "").strip()
+        if subject and subject not in subjects:
+            subjects.append(subject)
+    return book_ids, subjects, unknown
+
+
+def _run_single_question(question: str, books_config: dict[str, dict[str, Any]]) -> dict[str, Any]:
     started_at = time.time()
     cmd = [sys.executable, "-m", "tests.test_chat_stream_v1", "-q", question]
     proc = subprocess.run(
@@ -145,9 +311,20 @@ def _run_single_question(question: str) -> dict[str, Any]:
     citations = chunk_source.get("citations") or []
     before = raw_debug.get("before_aquery_llm") or {}
     after = raw_debug.get("after_aquery_llm") or {}
-    info_match = re.search(r"📊 RAG召回: backend=([^,]+), entities=(\d+), relationships=(\d+), chunks=(\d+), references=(\d+), candidate_chunks=(\d+|None), final_chunks=(\d+|None)", stdout)
-    mode_match = re.search(r"Using RAG stream \| backend=([^|]+)\| include_history=(true|false) \| query=.*? \| mode=([^\n]+)", stdout)
+    info_match = re.search(
+        r"📊 RAG召回: backend=([^,]+), entities=(\d+), relationships=(\d+), chunks=(\d+), "
+        r"references=(\d+), candidate_chunks=(\d+|None), final_chunks=(\d+|None)",
+        stdout,
+    )
+    mode_match = re.search(
+        r"Using RAG stream \| backend=([^|]+)\| include_history=(true|false) \| query=.*? \| mode=([^\n]+)",
+        stdout,
+    )
     label_match = re.search(r"LLM classification: label=([^,]+)", stdout)
+    matched_entities = before.get("matched_entities") or []
+    retrieved_chunk_books, retrieved_chunk_subjects, retrieved_book_unknown = _summarize_chunk_books(citations, books_config)
+    matched_entity_books = sorted({item.get("book_id") for item in matched_entities if item.get("book_id")})
+    matched_entity_subjects = sorted({item.get("subject") for item in matched_entities if item.get("subject")})
 
     return {
         "question": question,
@@ -173,17 +350,17 @@ def _run_single_question(question: str) -> dict[str, Any]:
         "final_chunks_count": info_match.group(7) if info_match else None,
         "chunk_file_paths": [c.get("file_path") for c in citations if c.get("file_path")],
         "chunk_citations": citations,
+        "matched_entities": matched_entities,
+        "matched_entity_books": matched_entity_books,
+        "matched_entity_subjects": matched_entity_subjects,
+        "retrieved_chunk_books": retrieved_chunk_books,
+        "retrieved_chunk_subjects": retrieved_chunk_subjects,
+        "retrieved_book_unknown": retrieved_book_unknown,
         "answer": _extract_answer(stdout),
         "finish_path": str(finish_path) if finish_path else "",
         "debug_context_path": str(debug_context_path) if debug_context_path else "",
         "raw_debug_path": str(raw_debug_path) if raw_debug_path else "",
     }
-
-
-def _extract_answer(stdout: str) -> str:
-    if "响应预览:" in stdout:
-        return stdout.split("响应预览:", 1)[1].split("============================================================", 1)[0].strip()
-    return stdout[-800:].strip()
 
 
 def _build_report_rows(qa_items: list[QAItem], results: list[dict[str, Any]]) -> str:
@@ -192,18 +369,35 @@ def _build_report_rows(qa_items: list[QAItem], results: list[dict[str, Any]]) ->
     lines.append(f"- TRAINING_RAG_BACKEND: {os.getenv('TRAINING_RAG_BACKEND', '')}")
     lines.append(f"- TRAINING_RAG_KEYWORD_INJECTION_MODE: {os.getenv('TRAINING_RAG_KEYWORD_INJECTION_MODE', '')}")
     lines.append(f"- TRAINING_RAG_ENTITY_TERMS_FILE: {os.getenv('TRAINING_RAG_ENTITY_TERMS_FILE', '')}")
+    lines.append(f"- TRAINING_RAG_BOOK_ENTITY_DIR: {os.getenv('TRAINING_RAG_BOOK_ENTITY_DIR', '')}")
+    lines.append(f"- TRAINING_RAG_BOOKS_CONFIG: {os.getenv('TRAINING_RAG_BOOKS_CONFIG', '')}")
     lines.append(f"- TRAINING_RAG_QA_FILE: {os.getenv('TRAINING_RAG_QA_FILE', '')}")
     lines.append("")
     for qa, result in zip(qa_items, results):
         answer = result["answer"]
         must_include_hit = _contains_any(answer, qa.must_include)
         must_not_include_hit = _contains_any(answer, qa.must_not_include)
+        expected_books = qa.expected_books
+        retrieved_chunk_books = result.get("retrieved_chunk_books") or []
+        cross_book_hit_count = len([book for book in retrieved_chunk_books if book not in expected_books]) if expected_books else 0
+        cross_book_suspicious = bool(expected_books and not qa.allow_cross_book and cross_book_hit_count > 0)
+        route_failed = (
+            (qa.expected_route == "general_knowledge" and result.get("entered_lightrag_file"))
+            or (qa.expected_route == "lightrag_file" and not result.get("entered_lightrag_file"))
+        )
         lines.extend(
             [
                 f"## {qa.qa_id} {qa.question}",
                 "",
                 f"- type: {qa.qa_type}",
+                f"- qa_book_id: {qa.book_id}",
+                f"- qa_book_name: {qa.book_name}",
+                f"- qa_subject: {qa.subject}",
+                f"- expected_route: {qa.expected_route}",
                 f"- route / intent: {result.get('route_intent')}",
+                f"- route_failed: {route_failed}",
+                f"- expected_books: {expected_books}",
+                f"- allow_cross_book: {qa.allow_cross_book}",
                 f"- entered_lightrag_file: {result.get('entered_lightrag_file')}",
                 f"- mode: {result.get('mode')}",
                 f"- original_query: {result.get('original_query')}",
@@ -214,6 +408,9 @@ def _build_report_rows(qa_items: list[QAItem], results: list[dict[str, Any]]) ->
                 f"- injected_hl_keywords: {result.get('injected_hl_keywords')}",
                 f"- low_level_keywords: {result.get('low_level_keywords')}",
                 f"- high_level_keywords: {result.get('high_level_keywords')}",
+                f"- matched_entities: {result.get('matched_entities')}",
+                f"- matched_entity_books: {result.get('matched_entity_books')}",
+                f"- matched_entity_subjects: {result.get('matched_entity_subjects')}",
                 f"- entities_count: {result.get('entities_count')}",
                 f"- relationships_count: {result.get('relationships_count')}",
                 f"- chunks_count: {result.get('chunks_count')}",
@@ -221,6 +418,11 @@ def _build_report_rows(qa_items: list[QAItem], results: list[dict[str, Any]]) ->
                 f"- candidate_chunks_count: {result.get('candidate_chunks_count')}",
                 f"- final_chunks_count: {result.get('final_chunks_count')}",
                 f"- final chunk file paths: {result.get('chunk_file_paths')}",
+                f"- retrieved_chunk_books: {retrieved_chunk_books}",
+                f"- retrieved_chunk_subjects: {result.get('retrieved_chunk_subjects')}",
+                f"- retrieved_book_unknown: {result.get('retrieved_book_unknown')}",
+                f"- cross_book_hit_count: {cross_book_hit_count}",
+                f"- cross_book_suspicious: {cross_book_suspicious}",
                 f"- expected_keywords: {qa.expected_keywords}",
                 f"- must_include hit: {must_include_hit}",
                 f"- must_not_include hit: {must_not_include_hit}",
@@ -244,11 +446,12 @@ async def main() -> None:
     if not qa_path.is_absolute():
         qa_path = (ROOT / qa_path).resolve()
 
+    books_config = _load_books_config()
     qa_items = _parse_qa_file(qa_path)
     results = []
     for qa in qa_items:
         logger.info(f"Running regression QA | {qa.qa_id} | {qa.question}")
-        results.append(_run_single_question(qa.question))
+        results.append(_run_single_question(qa.question, books_config))
 
     report_name = f"{qa_path.stem.replace('_QA.example', '')}_generalization_regression.md"
     report_path = ROOT / "logs" / "rag_stream_debug" / report_name
