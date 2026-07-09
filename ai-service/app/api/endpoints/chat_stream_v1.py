@@ -989,9 +989,7 @@ async def generate_openai_stream_v1(
         state_update = event.get(node_name, {}) if node_name else {}
 
         # 调试：打印事件结构
-        logger.info(
-            f"Event node={node_name} | state_update_keys={list(state_update.keys())}"
-        )
+        logger.info(f"Event node={node_name}")
 
         if state_update:
             current_state.update(state_update)
@@ -1106,8 +1104,7 @@ async def generate_openai_stream_v1(
             logger.info(
                 f"generate_answer state | streaming_type={streaming_type} | "
                 f"has_streaming_llm={current_state.get('streaming_llm') is not None} | "
-                f"intent={current_state.get('intent')} | "
-                f"all_keys={list(current_state.keys())}"
+                f"intent={current_state.get('intent')}"
             )
 
             logger.info(
@@ -1283,9 +1280,8 @@ async def generate_openai_stream_v1(
                     or current_state.get("raganything_mode")
                     or os.getenv("TRAINING_RAG_QUERY_MODE", "hybrid")
                 )
-                backend = (
-                    current_state.get("rag_backend")
-                    or os.getenv("TRAINING_RAG_BACKEND", "lightrag_file")
+                backend = current_state.get("rag_backend") or os.getenv(
+                    "TRAINING_RAG_BACKEND", "lightrag_file"
                 )
                 include_history = not (
                     backend == "lightrag_file" and not _training_rag_include_history()

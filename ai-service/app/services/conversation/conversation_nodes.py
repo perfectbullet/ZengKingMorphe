@@ -15,7 +15,6 @@ LangGraph 对话工作流节点实现。
            compress_context, match_faq, rewrite_query
 """
 
-import asyncio
 import hashlib
 import json
 import os
@@ -67,10 +66,7 @@ from app.services.conversation.intent_routing import (
     AnswerMode,
     ROUTE_BRANCH_CONCEPT_HIT,
     ROUTE_BRANCH_CONCEPT_MISS,
-    ROUTE_BRANCH_GENERAL,
     ROUTE_BRANCH_GREETING,
-    ROUTE_BRANCH_MATH,
-    ROUTE_BRANCH_RAG,
     ROUTE_BRANCH_REALTIME,
     apply_noise_preset_gate,
     resolve_answer_mode,
@@ -2719,7 +2715,7 @@ class ConversationNodes:
                 node_timings = state.get("node_timings", {})
                 ttfb_ms = state.get("ttfb_ms")
 
-                logger.info(
+                logger.debug(
                     f"[TIMING_SUMMARY] Conversation completed - "
                     f"total: {total_time_ms}ms, ttfb: {ttfb_ms}ms, "
                     f"nodes: {node_timings}"

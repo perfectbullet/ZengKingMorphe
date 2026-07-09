@@ -20,6 +20,7 @@ import traceback
 import uuid
 from dataclasses import asdict, is_dataclass
 from datetime import datetime
+from functools import partial
 from pathlib import Path
 from typing import Any, AsyncIterator
 
@@ -99,6 +100,98 @@ def _resolve_embedding_config() -> dict[str, Any]:
         "base_url": base_url,
         "api_key": api_key,
     }
+
+
+def _resolve_rerank_binding() -> str:
+    return os.getenv("RERANK_BINDING", "cohere").strip().lower() or "cohere"
+
+
+def _resolve_rerank_base_url(binding: str) -> str:
+    if binding == "cohere":
+        default_url = "https://api.cohere.com/v2/rerank"
+    elif binding == "jina":
+        default_url = "https://api.jina.ai/v1/rerank"
+    elif binding in {"aliyun", "ali", "dashscope"}:
+        default_url = (
+            "https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank"
+        )
+    else:
+        default_url = ""
+    return _pick_env(["RERANK_BINDING_HOST", "RERANK_BASE_URL"], default_url) or default_url
+
+
+def _resolve_rerank_api_key() -> str:
+    return _pick_env(["RERANK_BINDING_API_KEY", "RERANK_API_KEY"], "local-key") or "local-key"
+
+
+def _resolve_cosine_threshold() -> float:
+    raw = os.getenv("COSINE_THRESHOLD", "0.2").strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning(f"Invalid COSINE_THRESHOLD={raw!r}, fallback to 0.2")
+        return 0.2
+    if value < 0.0 or value > 1.0:
+        logger.warning(f"COSINE_THRESHOLD out of range: {value}, clamp to [0.0, 1.0]")
+    return max(0.0, min(1.0, value))
+
+
+def _resolve_min_rerank_score() -> float:
+    raw = os.getenv("MIN_RERANK_SCORE", "0.6").strip()
+    try:
+        return float(raw)
+    except ValueError:
+        logger.warning(f"Invalid MIN_RERANK_SCORE={raw!r}, fallback to 0.6")
+        return 0.6
+
+
+def _build_rerank_model_func():
+    binding = _resolve_rerank_binding()
+    model = os.getenv("RERANK_MODEL", "bge-reranker-m3").strip() or "bge-reranker-m3"
+    base_url = _resolve_rerank_base_url(binding)
+    api_key = _resolve_rerank_api_key()
+
+    try:
+        if binding == "cohere":
+            from lightrag.rerank import cohere_rerank
+
+            return partial(
+                cohere_rerank,
+                model=model,
+                api_key=api_key,
+                base_url=base_url,
+                enable_chunking=_env_bool("RERANK_ENABLE_CHUNKING", True),
+                max_tokens_per_doc=int(os.getenv("RERANK_MAX_TOKENS_PER_DOC", "512")),
+            )
+
+        if binding == "jina":
+            from lightrag.rerank import jina_rerank
+
+            return partial(
+                jina_rerank,
+                model=model,
+                api_key=api_key,
+                base_url=base_url,
+            )
+
+        if binding in {"aliyun", "ali", "dashscope"}:
+            from lightrag.rerank import ali_rerank
+
+            return partial(
+                ali_rerank,
+                model=model,
+                api_key=api_key,
+                base_url=base_url,
+            )
+
+        logger.warning(f"Unsupported RERANK_BINDING={binding!r}; rerank_model_func disabled")
+        return None
+    except Exception as exc:
+        logger.warning(
+            "Failed to build rerank_model_func | "
+            f"binding={binding} | model={model} | base_url={base_url} | error={exc}"
+        )
+        return None
 
 
 def _rag_debug_enabled() -> bool:
@@ -280,9 +373,9 @@ def _build_query_param(mode: str, prefer_zh_output: bool) -> Any:
 
     user_prompt = (
         "请使用简体中文回答，只根据工训教材知识库作答；"
-        "尽量给出章节路径或来源线索；若资料不足，请明确说明“当前知识库资料不足”。"
-        "当用户询问“基本流程/制作流程”时，优先按教材中的核心步骤回答；"
-        "进阶效果、案例、延伸技法只作为补充，不要列为主流程步骤。"
+        # "尽量给出章节路径或来源线索；若资料不足，请明确说明“当前知识库资料不足”。"
+        # "当用户询问“基本流程/制作流程”时，优先按教材中的核心步骤回答；"
+        # "进阶效果、案例、延伸技法只作为补充，不要列为主流程步骤。"
         if prefer_zh_output
         else "Answer in English only based on the training knowledge base. "
         "If context is insufficient, say the knowledge base lacks enough material. "
@@ -383,17 +476,66 @@ async def get_training_lightrag_instance():
 
         from lightrag import LightRAG
 
-        rag = LightRAG(
-            working_dir=str(working_dir),
-            enable_llm_cache=False,
-            enable_llm_cache_for_entity_extract=False,
-            addon_params={"language": "Chinese"},
-            llm_model_func=_build_llm_model_func(),
-            embedding_func=_build_embedding_func(),
-        )
+        rerank_model_func = _build_rerank_model_func()
+        cosine_threshold = _resolve_cosine_threshold()
+
+        base_kwargs = {
+            "working_dir": str(working_dir),
+            "enable_llm_cache": False,
+            "enable_llm_cache_for_entity_extract": False,
+            "addon_params": {"language": "Chinese"},
+            "llm_model_func": _build_llm_model_func(),
+            "embedding_func": _build_embedding_func(),
+        }
+        candidate_kwargs = {
+            "rerank_model_func": rerank_model_func,
+            "rerank_model_max_async": int(os.getenv("MAX_ASYNC_RERANK", "4")),
+            "default_rerank_timeout": int(os.getenv("RERANK_TIMEOUT", "30")),
+            "min_rerank_score": _resolve_min_rerank_score(),
+            "cosine_threshold": cosine_threshold,
+            "cosine_better_than_threshold": cosine_threshold,
+            "vector_db_storage_cls_kwargs": {
+                "cosine_better_than_threshold": cosine_threshold
+            },
+            "entities_vdb_storage_cls_kwargs": {
+                "cosine_better_than_threshold": cosine_threshold
+            },
+            "relationships_vdb_storage_cls_kwargs": {
+                "cosine_better_than_threshold": cosine_threshold
+            },
+            "chunks_vdb_storage_cls_kwargs": {
+                "cosine_better_than_threshold": cosine_threshold
+            },
+        }
+        supported = inspect.signature(LightRAG).parameters
+        kwargs = {
+            key: value
+            for key, value in {**base_kwargs, **candidate_kwargs}.items()
+            if key in supported and value is not None
+        }
+        unsupported = [key for key in candidate_kwargs if key not in supported]
+        if unsupported:
+            logger.info(f"LightRAG init unsupported optional kwargs skipped: {unsupported}")
+        if _env_bool("TRAINING_RAG_ENABLE_RERANK", False) and rerank_model_func is None:
+            logger.warning(
+                "TRAINING_RAG_ENABLE_RERANK=true but rerank_model_func is unavailable; "
+                "LightRAG query may fail or run without rerank depending on LightRAG behavior."
+            )
+
+        rag = LightRAG(**kwargs)
         await rag.initialize_storages()
         _training_lightrag_instance = rag
-        logger.info(f"Training LightRAG initialized | working_dir={working_dir}")
+        logger.info(
+            "Training LightRAG initialized | "
+            f"working_dir={working_dir} | "
+            f"cosine_threshold={cosine_threshold} | "
+            f"rerank_enabled={_env_bool('TRAINING_RAG_ENABLE_RERANK', False)} | "
+            f"rerank_binding={_resolve_rerank_binding()} | "
+            f"rerank_model={os.getenv('RERANK_MODEL', 'bge-reranker-m3')} | "
+            f"rerank_base_url={_resolve_rerank_base_url(_resolve_rerank_binding())} | "
+            f"rerank_model_func_available={rerank_model_func is not None} | "
+            f"min_rerank_score={_resolve_min_rerank_score()}"
+        )
         return _training_lightrag_instance
 
 
@@ -441,6 +583,18 @@ async def get_training_lightrag_stream(
         working_dir = _resolve_working_dir()
         param, param_kwargs = _build_query_param(mode, prefer_zh_output)
         system_prompt = _build_system_prompt()
+        rerank_debug = {
+            "training_rag_enable_rerank": _env_bool("TRAINING_RAG_ENABLE_RERANK", False),
+            "rerank_binding": _resolve_rerank_binding(),
+            "rerank_model": os.getenv("RERANK_MODEL", "bge-reranker-m3"),
+            "rerank_base_url": _resolve_rerank_base_url(_resolve_rerank_binding()),
+            "rerank_api_key_set": bool(_resolve_rerank_api_key()),
+            "min_rerank_score": _resolve_min_rerank_score(),
+            "max_async_rerank": int(os.getenv("MAX_ASYNC_RERANK", "4")),
+            "rerank_timeout": int(os.getenv("RERANK_TIMEOUT", "30")),
+            "cosine_threshold": _resolve_cosine_threshold(),
+            "query_param_enable_rerank": param_kwargs.get("enable_rerank"),
+        }
 
         _write_raw_debug(
             raw_debug_path,
@@ -453,6 +607,7 @@ async def get_training_lightrag_stream(
                 "mode": mode,
                 "working_dir": str(working_dir),
                 "param_kwargs": param_kwargs,
+                "rerank_debug": rerank_debug,
                 "system_prompt": _safe_preview(system_prompt, _rag_debug_max_text()),
                 "debug_meta": _safe_preview(debug_meta or {}, _rag_debug_max_text()),
             },
@@ -491,6 +646,14 @@ async def get_training_lightrag_stream(
                 "relationships_count": len(relationships),
                 "chunks_count": len(chunks),
                 "references_count": len(references),
+                "rerank_metadata": _safe_preview(
+                    {
+                        key: metadata.get(key)
+                        for key in metadata.keys()
+                        if "rerank" in str(key).lower()
+                    },
+                    _rag_debug_max_text(),
+                ),
                 "preview": _safe_preview(result_dict, _rag_debug_max_text()),
             },
         )
@@ -538,6 +701,14 @@ async def get_training_lightrag_stream(
                 "chunks_count": len(chunks),
                 "references_count": len(references),
                 "processing_info": _safe_preview(processing_info, _rag_debug_max_text()),
+                "rerank_metadata": _safe_preview(
+                    {
+                        key: metadata.get(key)
+                        for key in metadata.keys()
+                        if "rerank" in str(key).lower()
+                    },
+                    _rag_debug_max_text(),
+                ),
                 "first_chunk_preview": _safe_preview(chunks[0], _rag_debug_max_text())
                 if chunks
                 else None,

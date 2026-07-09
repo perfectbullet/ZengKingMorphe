@@ -51,6 +51,7 @@ def setup_logging() -> None:
     
     logger.info(f"Loguru logging configured (level={log_level}, debug={settings.debug})")
 
+setup_logging()
 
 def get_logger(name: str):
     """
@@ -66,4 +67,5 @@ def get_logger(name: str):
         logger = get_logger(__name__)
         logger.info(f"User login: user_id={user_id}, ip={ip}")
     """
+    
     return logger.bind(module=name)
