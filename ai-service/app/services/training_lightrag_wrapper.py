@@ -122,10 +122,13 @@ def _resolve_embedding_config() -> dict[str, Any]:
         ],
         "",
     )
-    api_key = _pick_env(
-        ["EMBEDDING_BINDING_API_KEY", "VLLM_EMBEDDING_API_KEY", "VLLM_API_KEY"],
-        "no-api-key",
-    ) or "no-api-key"
+    api_key = (
+        _pick_env(
+            ["EMBEDDING_BINDING_API_KEY", "VLLM_EMBEDDING_API_KEY", "VLLM_API_KEY"],
+            "no-api-key",
+        )
+        or "no-api-key"
+    )
     return {
         "model": model,
         "dim": dim,
@@ -144,16 +147,20 @@ def _resolve_rerank_base_url(binding: str) -> str:
     elif binding == "jina":
         default_url = "https://api.jina.ai/v1/rerank"
     elif binding in {"aliyun", "ali", "dashscope"}:
-        default_url = (
-            "https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank"
-        )
+        default_url = "https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank"
     else:
         default_url = ""
-    return _pick_env(["RERANK_BINDING_HOST", "RERANK_BASE_URL"], default_url) or default_url
+    return (
+        _pick_env(["RERANK_BINDING_HOST", "RERANK_BASE_URL"], default_url)
+        or default_url
+    )
 
 
 def _resolve_rerank_api_key() -> str:
-    return _pick_env(["RERANK_BINDING_API_KEY", "RERANK_API_KEY"], "local-key") or "local-key"
+    return (
+        _pick_env(["RERANK_BINDING_API_KEY", "RERANK_API_KEY"], "local-key")
+        or "local-key"
+    )
 
 
 def _resolve_cosine_threshold() -> float:
@@ -216,7 +223,9 @@ def _build_rerank_model_func():
                 base_url=base_url,
             )
 
-        logger.warning(f"Unsupported RERANK_BINDING={binding!r}; rerank_model_func disabled")
+        logger.warning(
+            f"Unsupported RERANK_BINDING={binding!r}; rerank_model_func disabled"
+        )
         return None
     except Exception as exc:
         logger.warning(
@@ -288,7 +297,9 @@ def _safe_preview(value: Any, max_text: int, max_depth: int = 2) -> Any:
         sample: dict[str, Any] = {}
         for key in keys[:8]:
             try:
-                sample[str(key)] = _safe_preview(value.get(key), max_text, max_depth - 1)
+                sample[str(key)] = _safe_preview(
+                    value.get(key), max_text, max_depth - 1
+                )
             except Exception as exc:
                 sample[str(key)] = {"preview_error": str(exc)}
         return {
@@ -586,7 +597,9 @@ def _load_books_config() -> dict[str, dict[str, Any]]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:
-        logger.warning(f"Failed to load TRAINING_RAG_BOOKS_CONFIG: {path} | error={exc}")
+        logger.warning(
+            f"Failed to load TRAINING_RAG_BOOKS_CONFIG: {path} | error={exc}"
+        )
         return {}
     books: dict[str, dict[str, Any]] = {}
     for item in data.get("books") or []:
@@ -613,25 +626,43 @@ def _parse_header_metadata(lines: list[str]) -> dict[str, Any]:
     return meta
 
 
-def _normalize_book_metadata(meta: dict[str, Any], books_config: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def _normalize_book_metadata(
+    meta: dict[str, Any], books_config: dict[str, dict[str, Any]]
+) -> dict[str, Any]:
     result = dict(meta or {})
     book_id = str(result.get("book_id") or "").strip()
     config_meta = books_config.get(book_id, {}) if book_id else {}
     merged = {
         "book_id": book_id or str(config_meta.get("book_id") or "").strip() or None,
-        "book_name": str(result.get("book_name") or config_meta.get("book_name") or "").strip() or None,
-        "subject": str(result.get("subject") or config_meta.get("subject") or "").strip() or None,
-        "domain": str(result.get("domain") or config_meta.get("domain") or "").strip() or None,
-        "category": str(result.get("category") or config_meta.get("category") or "").strip() or None,
+        "book_name": str(
+            result.get("book_name") or config_meta.get("book_name") or ""
+        ).strip()
+        or None,
+        "subject": str(
+            result.get("subject") or config_meta.get("subject") or ""
+        ).strip()
+        or None,
+        "domain": str(result.get("domain") or config_meta.get("domain") or "").strip()
+        or None,
+        "category": str(
+            result.get("category") or config_meta.get("category") or ""
+        ).strip()
+        or None,
         "version": str(result.get("version") or "").strip() or None,
     }
     aliases = config_meta.get("aliases") or []
     if aliases:
-        merged["book_aliases"] = [str(alias).strip() for alias in aliases if str(alias).strip()]
+        merged["book_aliases"] = [
+            str(alias).strip() for alias in aliases if str(alias).strip()
+        ]
     return merged
 
 
-def _inherit_metadata(defaults: dict[str, Any], overrides: dict[str, Any], books_config: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def _inherit_metadata(
+    defaults: dict[str, Any],
+    overrides: dict[str, Any],
+    books_config: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
     merged = dict(defaults or {})
     for key, value in (overrides or {}).items():
         if value is None:
@@ -642,7 +673,9 @@ def _inherit_metadata(defaults: dict[str, Any], overrides: dict[str, Any], books
     return _normalize_book_metadata(merged, books_config)
 
 
-def _load_entity_terms_from_file(path: str, books_config: dict[str, dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+def _load_entity_terms_from_file(
+    path: str, books_config: dict[str, dict[str, Any]] | None = None
+) -> list[dict[str, Any]]:
     file_path = Path(path).expanduser()
     if not file_path.is_absolute():
         file_path = (_service_root() / file_path).resolve()
@@ -679,7 +712,14 @@ def _load_entity_terms_from_file(path: str, books_config: dict[str, dict[str, An
                 entry["type"] = value or None
             elif key == "chapter":
                 entry["chapter"] = _split_csv_like(value)
-            elif key in {"book_id", "book_name", "subject", "domain", "category", "version"}:
+            elif key in {
+                "book_id",
+                "book_name",
+                "subject",
+                "domain",
+                "category",
+                "version",
+            }:
                 overrides[key] = value or None
 
         terms: list[str] = []
@@ -694,7 +734,9 @@ def _load_entity_terms_from_file(path: str, books_config: dict[str, dict[str, An
             continue
         entry["canonical"] = terms[0]
         entry["aliases"] = [term for term in terms[1:] if term != terms[0]]
-        entry["match_terms"] = sorted(set([entry["canonical"], *entry["aliases"]]), key=lambda x: (-len(x), x))
+        entry["match_terms"] = sorted(
+            set([entry["canonical"], *entry["aliases"]]), key=lambda x: (-len(x), x)
+        )
         entry.update(_inherit_metadata(defaults, overrides, books_config))
         entry["term"] = entry["canonical"]
         entry["file_path"] = str(file_path)
@@ -713,7 +755,9 @@ def _resolve_entity_terms() -> tuple[list[dict[str, Any]], str, list[str]]:
         return entities, "file", [entity_file]
 
     entity_dir = (os.getenv("TRAINING_RAG_BOOK_ENTITY_DIR", "") or "").strip()
-    global_entity_file = (os.getenv("TRAINING_RAG_GLOBAL_ENTITY_FILE", "") or "").strip()
+    global_entity_file = (
+        os.getenv("TRAINING_RAG_GLOBAL_ENTITY_FILE", "") or ""
+    ).strip()
     if entity_dir:
         dir_path = Path(entity_dir).expanduser()
         if not dir_path.is_absolute():
@@ -734,7 +778,9 @@ def _resolve_entity_terms() -> tuple[list[dict[str, Any]], str, list[str]]:
             files.append(str(file_path))
         if global_entity_file:
             try:
-                entities.extend(_load_entity_terms_from_file(global_entity_file, books_config))
+                entities.extend(
+                    _load_entity_terms_from_file(global_entity_file, books_config)
+                )
                 files.append(global_entity_file)
             except FileNotFoundError:
                 logger.warning(
@@ -788,7 +834,9 @@ def _match_entity_terms(
         for term in entry.get("match_terms") or []:
             if term:
                 sortable.append((term, entry, term))
-    for term, entry, matched_value in sorted(sortable, key=lambda item: (-len(item[0]), item[0])):
+    for term, entry, matched_value in sorted(
+        sortable, key=lambda item: (-len(item[0]), item[0])
+    ):
         canonical = str(entry.get("canonical") or "").strip()
         start = query.find(term)
         while start != -1:
@@ -833,11 +881,14 @@ def _match_entity_terms(
     return ll_keywords, canonical_terms, aliases, matched_entities
 
 
-def _build_high_level_keywords_from_query(query: str, ll_keywords: list[str]) -> list[str]:
+def _build_high_level_keywords_from_query(
+    query: str, ll_keywords: list[str]
+) -> list[str]:
     max_count = max(1, int(os.getenv("TRAINING_RAG_MAX_HL_KEYWORDS", "10")))
     max_chars = max(8, int(os.getenv("TRAINING_RAG_MAX_KEYWORD_CHARS", "50")))
     query_no_punct = re.sub(r"[？?。！!；;：:，,、\s]+", "", query or "")
     intents: list[str] = []
+
     def add_term_suffix(term: str, suffixes: list[str]) -> None:
         for suffix in suffixes:
             if not term or term.endswith(suffix) or suffix in term:
@@ -890,11 +941,7 @@ def _build_entity_guarded_query(
     include_domain_intent: bool,
 ) -> str:
     if prefer_zh_output:
-        header = (
-            "【检索约束】\n"
-            if include_domain_intent
-            else ""
-        )
+        header = "【检索约束】\n" if include_domain_intent else ""
         domain = (
             "当前问题属于工业实训教材《珐琅工艺》的领域问答。\n"
             if include_domain_intent
@@ -919,7 +966,7 @@ def _build_entity_guarded_query(
                 else ""
             )
             + "The following terms are atomic domain entities and should be treated as "
-              "low-level entity keywords without being split into generic fragments:\n"
+            "low-level entity keywords without being split into generic fragments:\n"
             + "\n".join(f"- {term}" for term in protected_terms)
             + "\n\nPrefer the following high-level retrieval intents:\n"
             + "\n".join(f"- {item}" for item in high_level_intents)
@@ -944,7 +991,11 @@ def _build_compact_query(
 
 
 def _resolve_keyword_injection_mode() -> str:
-    raw = (os.getenv("TRAINING_RAG_KEYWORD_INJECTION_MODE", "query_param") or "").strip().lower()
+    raw = (
+        (os.getenv("TRAINING_RAG_KEYWORD_INJECTION_MODE", "query_param") or "")
+        .strip()
+        .lower()
+    )
     allowed = {"query_param", "compact_query", "verbose_query"}
     if raw in allowed:
         return raw
@@ -964,16 +1015,20 @@ def _build_query_param(
 
     user_prompt = (
         "请使用简体中文回答。请优先依据当前检索到的工训教材上下文作答，"
-        "不要使用教材外常识补全。可以对多个相关片段进行归纳整理，"
-        "但不要加入上下文没有支持的新步骤、新参数、新材料或新结论。"
+        "不要使用教材外常识补全。若上下文同时包含 Knowledge Graph Data 和 Document Chunks，"
+        "请优先依据 Document Chunks 中的教材原文；实体和关系只作为辅助线索。"
+        "可以对多个相关片段进行归纳整理，但不要加入上下文没有支持的新步骤、新参数、新材料或新结论。"
         "若检索上下文没有覆盖问题核心内容，再明确说明“当前知识库资料不足”。"
+        # "不要出现“书中”、“教材”、“如图”、“图xxx”、“章/节”、“文中”、“材料”、“资料”等与资料库强相关的引导性文案"
         if prefer_zh_output
         else "Answer in English. Prefer grounding your answer in the retrieved industrial-"
-        "training textbook context and do not fill gaps with outside knowledge. You may "
-        "synthesize multiple relevant passages, but do not add new steps, parameters, "
-        "materials, or conclusions that are not supported by the context. Only say "
-        "\"当前知识库资料不足\" when the retrieved context does not cover the core content "
-        "of the question."
+        "training textbook context and do not fill gaps with outside knowledge. If the "
+        "context includes both Knowledge Graph Data and Document Chunks, prioritize the "
+        "original textbook text in Document Chunks; use entities and relationships only "
+        "as auxiliary clues. You may synthesize multiple relevant passages, but do not "
+        "add new steps, parameters, materials, or conclusions that are not supported by "
+        'the context. Only say "当前知识库资料不足" when the retrieved context does not '
+        "cover the core content of the question."
     )
 
     candidate_kwargs = {
@@ -983,7 +1038,9 @@ def _build_query_param(
         "chunk_top_k": int(os.getenv("TRAINING_RAG_CHUNK_TOP_K", "4")),
         "response_type": os.getenv("TRAINING_RAG_RESPONSE_TYPE", "Single Paragraph"),
         "max_entity_tokens": int(os.getenv("TRAINING_RAG_MAX_ENTITY_TOKENS", "6000")),
-        "max_relation_tokens": int(os.getenv("TRAINING_RAG_MAX_RELATION_TOKENS", "8000")),
+        "max_relation_tokens": int(
+            os.getenv("TRAINING_RAG_MAX_RELATION_TOKENS", "8000")
+        ),
         "max_total_tokens": int(os.getenv("TRAINING_RAG_MAX_TOTAL_TOKENS", "30000")),
         "user_prompt": user_prompt,
         "conversation_history": [],
@@ -993,9 +1050,7 @@ def _build_query_param(
         "ll_keywords": ll_keywords or [],
     }
     supported = inspect.signature(QueryParam).parameters
-    kwargs = {
-        key: value for key, value in candidate_kwargs.items() if key in supported
-    }
+    kwargs = {key: value for key, value in candidate_kwargs.items() if key in supported}
     debug_info = {
         "query_param_supported_keys": list(supported.keys()),
         "candidate_kwargs_keys": list(candidate_kwargs.keys()),
@@ -1127,7 +1182,9 @@ async def get_training_lightrag_instance():
         }
         unsupported = [key for key in candidate_kwargs if key not in supported]
         if unsupported:
-            logger.info(f"LightRAG init unsupported optional kwargs skipped: {unsupported}")
+            logger.info(
+                f"LightRAG init unsupported optional kwargs skipped: {unsupported}"
+            )
         if _env_bool("TRAINING_RAG_ENABLE_RERANK", False) and rerank_model_func is None:
             logger.warning(
                 "TRAINING_RAG_ENABLE_RERANK=true but rerank_model_func is unavailable; "
@@ -1232,9 +1289,13 @@ async def _probe_chunk_storage(
         }
         try:
             if callable(query_method):
-                raw_results = await _maybe_await(query_method(probe_query, top_k=probe_top_k))
+                raw_results = await _maybe_await(
+                    query_method(probe_query, top_k=probe_top_k)
+                )
             elif callable(search_method):
-                raw_results = await _maybe_await(search_method(probe_query, top_k=probe_top_k))
+                raw_results = await _maybe_await(
+                    search_method(probe_query, top_k=probe_top_k)
+                )
             else:
                 record["reason"] = "no_query_or_search_method"
                 probe_records.append(record)
@@ -1249,7 +1310,9 @@ async def _probe_chunk_storage(
             first_scores: list[Any] = []
             for item in results[:probe_top_k]:
                 if not isinstance(item, dict):
-                    previews.append({"python_type": type(item).__name__, "repr": repr(item)[:300]})
+                    previews.append(
+                        {"python_type": type(item).__name__, "repr": repr(item)[:300]}
+                    )
                     continue
                 chunk_id = (
                     item.get("chunk_id")
@@ -1267,18 +1330,29 @@ async def _probe_chunk_storage(
                 if score is not None and len(first_scores) < 5:
                     first_scores.append(score)
                 content = item.get("content") or item.get("text")
-                if not content and chunk_id and text_chunks is not None and hasattr(text_chunks, "get_by_id"):
+                if (
+                    not content
+                    and chunk_id
+                    and text_chunks is not None
+                    and hasattr(text_chunks, "get_by_id")
+                ):
                     fetched = await _maybe_await(text_chunks.get_by_id(chunk_id))
                     if isinstance(fetched, dict):
                         content = fetched.get("content") or fetched.get("text")
-                        file_path = file_path or fetched.get("file_path") or fetched.get("source")
+                        file_path = (
+                            file_path
+                            or fetched.get("file_path")
+                            or fetched.get("source")
+                        )
                 previews.append(
                     {
                         "id": item.get("id") or item.get("__id__") or item.get("_id"),
                         "chunk_id": chunk_id,
                         "file_path": file_path,
                         "score": score,
-                        "content_preview": _safe_preview(content, 300) if content else None,
+                        "content_preview": _safe_preview(content, 300)
+                        if content
+                        else None,
                     }
                 )
             record["results_count"] = len(results)
@@ -1327,7 +1401,12 @@ async def get_training_lightrag_stream(
         matched_aliases: list[str] = []
         matched_entities: list[dict[str, Any]] = []
         if entity_guard_enabled:
-            matched_guard_terms, matched_canonical_terms, matched_aliases, matched_entities = _match_entity_terms(
+            (
+                matched_guard_terms,
+                matched_canonical_terms,
+                matched_aliases,
+                matched_entities,
+            ) = _match_entity_terms(
                 original_query,
                 entity_terms,
             )
@@ -1335,7 +1414,9 @@ async def get_training_lightrag_stream(
         keyword_injection_mode = _resolve_keyword_injection_mode()
         max_ll_keywords = max(1, int(os.getenv("TRAINING_RAG_MAX_LL_KEYWORDS", "12")))
         max_hl_keywords = max(1, int(os.getenv("TRAINING_RAG_MAX_HL_KEYWORDS", "10")))
-        max_keyword_chars = max(8, int(os.getenv("TRAINING_RAG_MAX_KEYWORD_CHARS", "50")))
+        max_keyword_chars = max(
+            8, int(os.getenv("TRAINING_RAG_MAX_KEYWORD_CHARS", "50"))
+        )
         protected_terms = (
             _dedupe_keywords(
                 matched_guard_terms,
@@ -1351,12 +1432,18 @@ async def get_training_lightrag_stream(
             else []
         )
         if len(entity_guard_high_level_intents) > max_hl_keywords:
-            entity_guard_high_level_intents = entity_guard_high_level_intents[:max_hl_keywords]
-        compact_query = _build_compact_query(
-            original_query,
-            protected_terms,
-            entity_guard_high_level_intents,
-        ) if protected_terms else original_query
+            entity_guard_high_level_intents = entity_guard_high_level_intents[
+                :max_hl_keywords
+            ]
+        compact_query = (
+            _build_compact_query(
+                original_query,
+                protected_terms,
+                entity_guard_high_level_intents,
+            )
+            if protected_terms
+            else original_query
+        )
         verbose_guarded_query = original_query
         if entity_guard_applied:
             logger.info(
@@ -1417,8 +1504,10 @@ async def get_training_lightrag_stream(
             hl_supported = bool(query_param_debug.get("hl_keywords_in_supported"))
             ll_supported = bool(query_param_debug.get("ll_keywords_in_supported"))
             keyword_injection_mode = "compact_query"
-        elif entity_guard_applied and keyword_injection_mode == "query_param" and (
-            not hl_supported or not ll_supported
+        elif (
+            entity_guard_applied
+            and keyword_injection_mode == "query_param"
+            and (not hl_supported or not ll_supported)
         ):
             logger.warning(
                 "Training RAG QueryParam keyword injection partially unsupported | "
@@ -1441,7 +1530,9 @@ async def get_training_lightrag_stream(
             )
 
         rerank_debug = {
-            "training_rag_enable_rerank": _env_bool("TRAINING_RAG_ENABLE_RERANK", False),
+            "training_rag_enable_rerank": _env_bool(
+                "TRAINING_RAG_ENABLE_RERANK", False
+            ),
             "rerank_binding": _resolve_rerank_binding(),
             "rerank_model": os.getenv("RERANK_MODEL", "bge-reranker-m3"),
             "rerank_base_url": _resolve_rerank_base_url(_resolve_rerank_binding()),
@@ -1475,19 +1566,35 @@ async def get_training_lightrag_stream(
                 "mode": mode,
                 "working_dir": str(working_dir),
                 "param_kwargs": param_kwargs,
-                "query_param_supported_keys": query_param_debug.get("query_param_supported_keys"),
+                "query_param_supported_keys": query_param_debug.get(
+                    "query_param_supported_keys"
+                ),
                 "candidate_kwargs_keys": query_param_debug.get("candidate_kwargs_keys"),
                 "actual_param_kwargs": query_param_debug.get("actual_param_kwargs"),
-                "chunk_top_k_in_supported": query_param_debug.get("chunk_top_k_in_supported"),
-                "chunk_top_k_in_actual_kwargs": query_param_debug.get("chunk_top_k_in_actual_kwargs"),
-                "hl_keywords_in_supported": query_param_debug.get("hl_keywords_in_supported"),
-                "ll_keywords_in_supported": query_param_debug.get("ll_keywords_in_supported"),
-                "hl_keywords_in_actual_kwargs": query_param_debug.get("hl_keywords_in_actual_kwargs"),
-                "ll_keywords_in_actual_kwargs": query_param_debug.get("ll_keywords_in_actual_kwargs"),
+                "chunk_top_k_in_supported": query_param_debug.get(
+                    "chunk_top_k_in_supported"
+                ),
+                "chunk_top_k_in_actual_kwargs": query_param_debug.get(
+                    "chunk_top_k_in_actual_kwargs"
+                ),
+                "hl_keywords_in_supported": query_param_debug.get(
+                    "hl_keywords_in_supported"
+                ),
+                "ll_keywords_in_supported": query_param_debug.get(
+                    "ll_keywords_in_supported"
+                ),
+                "hl_keywords_in_actual_kwargs": query_param_debug.get(
+                    "hl_keywords_in_actual_kwargs"
+                ),
+                "ll_keywords_in_actual_kwargs": query_param_debug.get(
+                    "ll_keywords_in_actual_kwargs"
+                ),
                 "injected_hl_keywords": query_param_debug.get("injected_hl_keywords"),
                 "injected_ll_keywords": query_param_debug.get("injected_ll_keywords"),
                 "entity_terms_source": entity_terms_source,
-                "entity_terms_file": entity_terms_files[0] if entity_terms_files else None,
+                "entity_terms_file": entity_terms_files[0]
+                if entity_terms_files
+                else None,
                 "entity_terms_files": entity_terms_files,
                 "entity_guard_enabled": entity_guard_enabled,
                 "entity_guard_applied": entity_guard_applied,
@@ -1524,7 +1631,7 @@ async def get_training_lightrag_stream(
             compact_query=compact_query,
         )
 
-        result = await rag.aquery_llm(effective_query, param=param, system_prompt=system_prompt)
+        result = await rag.aquery_llm(effective_query, param=param, system_prompt=None)
         result_dict = _to_plain_dict(result) or {}
         data = result_dict.get("data") or {}
         metadata = result_dict.get("metadata") or {}
@@ -1555,8 +1662,12 @@ async def get_training_lightrag_stream(
                 "python_type": type(result).__name__,
                 "result_keys": list(result_dict.keys()),
                 "data_keys": list(data.keys()) if isinstance(data, dict) else [],
-                "metadata_keys": list(metadata.keys()) if isinstance(metadata, dict) else [],
-                "llm_response_keys": list(llm_response.keys()) if isinstance(llm_response, dict) else [],
+                "metadata_keys": list(metadata.keys())
+                if isinstance(metadata, dict)
+                else [],
+                "llm_response_keys": list(llm_response.keys())
+                if isinstance(llm_response, dict)
+                else [],
                 "is_streaming": is_streaming,
                 "has_response_iterator": response_iterator is not None,
                 "entities_count": len(entities),
@@ -1612,8 +1723,7 @@ async def get_training_lightrag_stream(
                 or processing_info.get("candidate_chunks_count")
             ),
             "final_chunks_count": (
-                processing_info.get("final_chunks_count")
-                or len(chunks)
+                processing_info.get("final_chunks_count") or len(chunks)
             ),
         }
         sources_payload = {
@@ -1637,7 +1747,9 @@ async def get_training_lightrag_stream(
                 "relationships_count": len(relationships),
                 "chunks_count": len(chunks),
                 "references_count": len(references),
-                "processing_info": _safe_preview(processing_info, _rag_debug_max_text()),
+                "processing_info": _safe_preview(
+                    processing_info, _rag_debug_max_text()
+                ),
                 "processing_info_keys": list(processing_info.keys())
                 if isinstance(processing_info, dict)
                 else [],
@@ -1654,7 +1766,9 @@ async def get_training_lightrag_stream(
                 "first_chunk_preview": _safe_preview(chunks[0], _rag_debug_max_text())
                 if chunks
                 else None,
-                "first_reference_preview": _safe_preview(references[0], _rag_debug_max_text())
+                "first_reference_preview": _safe_preview(
+                    references[0], _rag_debug_max_text()
+                )
                 if references
                 else None,
             },

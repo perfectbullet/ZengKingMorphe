@@ -843,12 +843,8 @@ def get_query_classifier() -> QueryClassifier:
 
     if _query_classifier is None:
         # 统一 LLM 配置解析
-        base_url = os.getenv("LLM_BASE_URL") or settings.ollama_base_url
-        model = os.getenv("LLM_MODEL") or settings.ollama_model
-
-        # Add /v1 suffix if not present (Ollama compatibility)
-        if not base_url.endswith("/v1"):
-            base_url = f"{base_url.rstrip('/')}/v1"
+        base_url = os.getenv("LLM_BASE_URL")
+        model = os.getenv("LLM_MODEL")
 
         logger.info(f"[QueryClassifier] ChatOpenAI | BASE_URL={base_url} | MODEL={model}")
 
