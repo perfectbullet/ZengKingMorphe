@@ -29,6 +29,7 @@ DEFAULT_UPLOAD_TIMEOUT = 30
 DEFAULT_RESULT_TIMEOUT = 600
 DEFAULT_POLL_INTERVAL = 5
 MAX_MINERU_PAGES = 200
+MAX_MINERU_FILE_BYTES = 200 * 1024 * 1024
 DEFAULT_CHUNK_PAGES = 200
 
 
@@ -83,7 +84,7 @@ class MinerUClient:
         """申请上传链接并上传 PDF，返回 batch_id。"""
         url = f"{self.base_url}/api/v4/file-urls/batch"
         data = {
-            "files": [{"name": pdf_path.name, "data_id": pdf_path.stem}],
+            "files": [{"name": pdf_path.name}],
             "model_version": model_version,
             "enable_formula": True,
             "enable_table": True,
@@ -213,15 +214,22 @@ def rename_extracted_results(extract_dir: Path, document_name: str) -> tuple[Pat
         raise FileExistsError(f"目标文件已存在: {renamed_markdown_path}")
     markdown_path.rename(renamed_markdown_path)
 
+    target_list_path = extract_dir / f"{document_name}_content_list_v2.json"
     content_list_files = sorted(extract_dir.glob("*_content_list_v2.json"))
-    if len(content_list_files) != 1:
+    non_target_files = [
+        path for path in content_list_files if path.resolve() != target_list_path.resolve()
+    ]
+    if target_list_path.exists() and not non_target_files:
+        return renamed_markdown_path, target_list_path
+    if len(non_target_files) != 1:
         names = ", ".join(path.name for path in content_list_files) or "无"
         raise RuntimeError(f"预期一个 *_content_list_v2.json，实际为: {names}")
-    renamed_list_path = extract_dir / f"{document_name}_content_list_v2.json"
-    if renamed_list_path.exists():
-        raise FileExistsError(f"目标文件已存在: {renamed_list_path}")
-    content_list_files[0].rename(renamed_list_path)
-    return renamed_markdown_path, renamed_list_path
+    source_list_path = non_target_files[0]
+    if source_list_path.resolve() != target_list_path.resolve():
+        if target_list_path.exists():
+            raise FileExistsError(f"目标文件已存在: {target_list_path}")
+        source_list_path.rename(target_list_path)
+    return renamed_markdown_path, target_list_path
 
 
 def get_pdf_page_count(pdf_path: Path) -> int:
@@ -242,24 +250,69 @@ def get_pdf_page_count(pdf_path: Path) -> int:
     return page_count
 
 
-def split_pdf(pdf_path: Path, temporary_dir: Path, chunk_pages: int) -> list[PdfChunk]:
-    """物理拆分 PDF，分片文件名使用原始 1 起始页码范围。"""
+def get_pdf_file_size(pdf_path: Path) -> int:
+    """返回 PDF 文件大小，单独封装以便测试分片大小决策。"""
+    return pdf_path.stat().st_size
+
+
+def is_within_mineru_limits(
+    page_count: int,
+    file_size_bytes: int,
+    max_pages: int = MAX_MINERU_PAGES,
+    max_file_bytes: int = MAX_MINERU_FILE_BYTES,
+) -> bool:
+    """判断一个待上传 PDF 是否同时满足 MinerU 页数和文件大小限制。"""
+    return page_count <= max_pages and file_size_bytes <= max_file_bytes
+
+
+def split_pdf(
+    pdf_path: Path,
+    temporary_dir: Path,
+    chunk_pages: int,
+    max_file_bytes: int = MAX_MINERU_FILE_BYTES,
+) -> list[PdfChunk]:
+    """物理拆分 PDF，并对超大分片递归二分直到符合 MinerU 限制。"""
     total_pages = get_pdf_page_count(pdf_path)
     temporary_dir.mkdir(parents=True, exist_ok=True)
     try:
         reader = PdfReader(str(pdf_path))
         if reader.is_encrypted and reader.decrypt("") == 0:
             raise ValueError("PDF 已加密且无法使用空密码读取")
-        chunks: list[PdfChunk] = []
-        for index, start_index in enumerate(range(0, total_pages, chunk_pages), start=1):
-            end_index = min(start_index + chunk_pages, total_pages)
-            filename = f"{pdf_path.stem}_part_{index:04d}_p{start_index + 1:04d}-p{end_index:04d}.pdf"
-            chunk_path = temporary_dir / filename
+
+        def write_range(start_index: int, end_index: int) -> Path:
+            range_path = temporary_dir / f".range_p{start_index + 1:04d}-p{end_index:04d}.pdf"
             writer = PdfWriter()
             for page_index in range(start_index, end_index):
                 writer.add_page(reader.pages[page_index])
-            with chunk_path.open("wb") as file_handle:
+            with range_path.open("wb") as file_handle:
                 writer.write(file_handle)
+            return range_path
+
+        def split_range(start_index: int, end_index: int) -> list[tuple[int, int, Path]]:
+            range_path = write_range(start_index, end_index)
+            page_count = end_index - start_index
+            file_size_bytes = get_pdf_file_size(range_path)
+            if is_within_mineru_limits(page_count, file_size_bytes, chunk_pages, max_file_bytes):
+                return [(start_index, end_index, range_path)]
+            if page_count == 1:
+                range_path.unlink(missing_ok=True)
+                raise ValueError(
+                    f"原始第 {start_index + 1} 页单页 PDF 仍超过 MinerU 文件大小限制："
+                    f"{file_size_bytes} bytes（限制 {max_file_bytes} bytes）"
+                )
+            range_path.unlink(missing_ok=True)
+            middle_index = start_index + page_count // 2
+            return split_range(start_index, middle_index) + split_range(middle_index, end_index)
+
+        raw_chunks: list[tuple[int, int, Path]] = []
+        for start_index in range(0, total_pages, chunk_pages):
+            raw_chunks.extend(split_range(start_index, min(start_index + chunk_pages, total_pages)))
+
+        chunks: list[PdfChunk] = []
+        for index, (start_index, end_index, range_path) in enumerate(sorted(raw_chunks), start=1):
+            filename = f"{pdf_path.stem}_part_{index:04d}_p{start_index + 1:04d}-p{end_index:04d}.pdf"
+            chunk_path = temporary_dir / filename
+            range_path.replace(chunk_path)
             chunks.append(PdfChunk(index, start_index + 1, end_index, chunk_path))
         return chunks
     except Exception as exc:
@@ -324,7 +377,13 @@ def _image_references(value: Any) -> list[str]:
 
 def _validate_image_references(result_dir: Path, markdown: str, content_list: list[Any]) -> None:
     references = _image_references(markdown) + _image_references(content_list)
-    missing = [reference for reference in references if not (result_dir / PurePosixPath(reference)).is_file()]
+    # MinerU 的 image_source.path 可为 "images/" 这种目录元数据；它不是图片文件引用。
+    file_references = [reference for reference in references if not reference.endswith("/")]
+    missing = [
+        reference
+        for reference in file_references
+        if not (result_dir / PurePosixPath(reference)).is_file()
+    ]
     if missing:
         raise FileNotFoundError(f"合并结果引用了不存在的图片: {', '.join(sorted(set(missing))[:5])}")
 
@@ -429,16 +488,20 @@ def process_pdf(
     poll_interval: int,
     chunk_pages: int = DEFAULT_CHUNK_PAGES,
 ) -> ProcessResult | Path:
-    """按页数选择直接解析或安全分片串行解析。"""
+    """按 MinerU 页数和文件大小限制选择直接或分片串行解析。"""
     total_pages = get_pdf_page_count(pdf_path)
-    if total_pages <= MAX_MINERU_PAGES:
+    file_size_bytes = get_pdf_file_size(pdf_path)
+    if is_within_mineru_limits(total_pages, file_size_bytes):
         return process_single_pdf(client, pdf_path, output_dir, model_version, result_timeout, poll_interval)
-    chunk_count = (total_pages + chunk_pages - 1) // chunk_pages
-    logger.info("检测到PDF共%d页，超过MinerU单文件%d页限制，将拆分为%d个分片", total_pages, MAX_MINERU_PAGES, chunk_count)
+    logger.info(
+        "检测到PDF共%d页、大小%d bytes，超过MinerU单文件限制（%d页、%d bytes），将拆分处理",
+        total_pages, file_size_bytes, MAX_MINERU_PAGES, MAX_MINERU_FILE_BYTES,
+    )
     parts_dir = output_dir / f"{pdf_path.stem}_parts"
     parts_dir.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=f"{pdf_path.stem}-mineru-") as temporary_name:
         chunks = split_pdf(pdf_path, Path(temporary_name), chunk_pages)
+        logger.info("分片生成完成，共%d个分片", len(chunks))
         results: list[ProcessResult] = []
         for chunk in chunks:
             logger.info("开始处理分片 %d/%d：原始页码%d-%d", chunk.index, len(chunks), chunk.start_page, chunk.end_page)
@@ -477,6 +540,10 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     if not 1 <= args.chunk_pages <= MAX_MINERU_PAGES:
         parser.error(f"--chunk_pages 必须在 1 到 {MAX_MINERU_PAGES} 之间")
+    if args.poll_interval <= 0:
+        parser.error("--poll_interval 必须大于 0")
+    if args.result_timeout <= 0:
+        parser.error("--result_timeout 必须大于 0")
     return args
 
 
