@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 import networkx as nx
 
 from common import PROJECT_DIR
+from book_meta import load_book_meta, resolve_book_paths
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +88,7 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--book-stem", default="")
+    parser.add_argument("--meta", type=Path, help="优先读取教材 YAML profile 的允许类型")
     parser.add_argument(
         "--domain", default=os.getenv("MARKDOWN_GRAPH_DOMAIN", "industrial_training")
     )
@@ -1082,6 +1084,19 @@ def render_markdown(audit: dict[str, Any]) -> str:
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
+    if args.meta:
+        meta = load_book_meta(args.meta)
+        profile_path = resolve_book_paths(meta)["prompt_file"]
+        if profile_path and profile_path.is_file():
+            # Convert the profile's per-book type contract into the audit's
+            # existing schema shape without changing its read-only behavior.
+            import yaml
+            profile = yaml.safe_load(profile_path.read_text(encoding="utf-8")) or {}
+            overlay_path = (PROJECT_DIR / "outputs/08_audit" / f"{meta['artifact_stem']}.profile_schema.json")
+            from common import write_json
+            write_json(overlay_path, {"schema_version": profile.get("profile_version", "entity_profile"), "allowed_entity_types": profile.get("allowed_entity_types", []), "allowed_relation_types": profile.get("allowed_relation_keywords", []), "forbidden_entity_types": ["Other", "UNKNOWN"], "forbidden_entity_name_patterns": []})
+            args.schema_json = overlay_path
+            args.schema_version = str(profile.get("profile_version", "entity_profile"))
     working_dir = args.working_dir.expanduser().resolve()
     if (
         args.domain == "industrial_training"
