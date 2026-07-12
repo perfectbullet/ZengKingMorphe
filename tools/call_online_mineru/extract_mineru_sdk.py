@@ -236,7 +236,7 @@ def rename_extracted_results(extract_dir: Path, document_name: str) -> None:
         matched_files = ", ".join(path.name for path in content_list_files)
         raise RuntimeError(f"找到多个 *_content_list_v2.json，无法确定重命名对象: {matched_files}")
 
-    renamed_list_path = extract_dir / f"{document_name}_list_v2.json"
+    renamed_list_path = extract_dir / f"{document_name}_content_list_v2.json"
     if renamed_list_path.exists():
         raise FileExistsError(f"目标文件已存在: {renamed_list_path}")
     content_list_files[0].rename(renamed_list_path)
