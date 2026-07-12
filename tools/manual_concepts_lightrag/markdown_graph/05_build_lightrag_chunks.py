@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from book_meta import get_business_config, load_book_meta, resolve_book_paths, resolve_config_value
 from common import PROJECT_DIR, read_jsonl, write_jsonl
 
 logger = logging.getLogger(__name__)
@@ -85,11 +86,10 @@ def parse_args() -> argparse.Namespace:
         description="将 blocks.jsonl 转换为 LightRAG custom chunks"
     )
     parser.add_argument("--blocks", required=True, type=Path)
+    parser.add_argument("--meta", type=Path, help="单本教材 meta")
     parser.add_argument("--output", type=Path)
-    parser.add_argument(
-        "--domain", default=os.getenv("MARKDOWN_GRAPH_DOMAIN", "industrial_training")
-    )
-    parser.add_argument("--subject", default=os.getenv("MARKDOWN_GRAPH_SUBJECT", ""))
+    parser.add_argument("--domain")
+    parser.add_argument("--subject")
     parser.add_argument(
         "--content-list-v2",
         type=Path,
@@ -575,6 +575,22 @@ def _build_evidence(record: dict) -> dict:
 
 
 def run(args: argparse.Namespace) -> Path:
+    meta = load_book_meta(args.meta) if args.meta else None
+    if meta is not None:
+        business = get_business_config(meta)
+        paths = resolve_book_paths(meta)
+        args.domain = resolve_config_value(args.domain, business["domain"], "MARKDOWN_GRAPH_DOMAIN", "industrial_training")
+        args.subject = resolve_config_value(args.subject, business["subject"], "MARKDOWN_GRAPH_SUBJECT", "")
+        if args.content_list_v2 is None:
+            meta_v2 = paths["content_list_v2"]
+            if meta_v2 is None or not meta_v2.is_file():
+                raise ValueError("Step 5 需要 meta.inputs.content_list_v2 指向存在的文件，或显式传 --content-list-v2")
+            args.content_list_v2 = meta_v2
+        if args.mineru_dir is None:
+            args.mineru_dir = paths["markdown"].parent
+    else:
+        args.domain = args.domain or os.getenv("MARKDOWN_GRAPH_DOMAIN", "industrial_training")
+        args.subject = args.subject or os.getenv("MARKDOWN_GRAPH_SUBJECT", "")
     blocks_path = args.blocks.expanduser().resolve()
     blocks = read_jsonl(blocks_path)
     if not blocks:
@@ -704,12 +720,14 @@ def run(args: argparse.Namespace) -> Path:
                         }
                     )
                     part_record["chunk_order_index"] = len(records)
+                    kg_body = body_lines_to_text(part_lines)
+                    part_record["kg_content"] = kg_body
                     part_record["content"] = build_content(
                         block,
                         domain,
                         subject,
                         part_file_path,
-                        body_lines_to_text(part_lines),
+                        kg_body,
                         split_label=f"{split_index}/{split_count}",
                     )
                     part_record["evidence"] = _build_evidence(part_record)
@@ -720,6 +738,7 @@ def run(args: argparse.Namespace) -> Path:
             raise ValueError(f"chunk_id 重复: {chunk_id}")
         seen_ids.add(chunk_id)
         base_record["chunk_order_index"] = len(records)
+        base_record["kg_content"] = cleaned_body
         base_record["content"] = base_content
         base_record["evidence"] = _build_evidence(base_record)
         records.append(base_record)

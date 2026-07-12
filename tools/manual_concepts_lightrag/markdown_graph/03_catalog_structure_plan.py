@@ -138,6 +138,34 @@ def normalized_title(text: str) -> str:
     return re.sub(r"[^a-z0-9\u3400-\u9fff]+", "", value)
 
 
+CHINESE_CHAPTER_ONLY_RE = re.compile(
+    r"^第\s*([一二三四五六七八九十百零〇两0-9]+)\s*章$"
+)
+ENGLISH_CHAPTER_ONLY_RE = re.compile(r"^CHAPTER\s*0*(\d+)$", re.IGNORECASE)
+
+
+def chinese_chapter_to_int(value: str) -> int | None:
+    value = value.replace("〇", "零").replace("两", "二")
+    if value.isdigit():
+        return int(value)
+    digits = {"零": 0, "一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+    if value in digits:
+        return digits[value]
+    if value == "十":
+        return 10
+    if "十" in value:
+        left, right = value.split("十", 1)
+        tens = digits.get(left, 1) if left else 1
+        ones = digits.get(right, 0) if right else 0
+        return tens * 10 + ones
+    return None
+
+
+def is_chapter_number_only(text: str) -> bool:
+    value = strip_title_markup(text)
+    return bool(CHINESE_CHAPTER_ONLY_RE.fullmatch(value) or ENGLISH_CHAPTER_ONLY_RE.fullmatch(value))
+
+
 def extract_number_key(text: str) -> str:
     value = strip_title_markup(text)
     if re.match(r"^(?:STEP|步骤)\s*0*\d+\b", value, flags=re.IGNORECASE):
@@ -147,6 +175,10 @@ def extract_number_key(text: str) -> str:
     chapter = re.match(r"^第\s*0*(\d+)\s*[章节篇]", value)
     if chapter:
         return str(int(chapter.group(1)))
+    chinese_chapter = CHINESE_CHAPTER_ONLY_RE.fullmatch(value)
+    if chinese_chapter:
+        number = chinese_chapter_to_int(chinese_chapter.group(1))
+        return str(number) if number is not None else ""
     english = re.match(r"^CHAPTER\s*0*(\d+)\b", value, flags=re.IGNORECASE)
     if english:
         return str(int(english.group(1)))
@@ -163,7 +195,7 @@ def is_markdown_heading(text: str) -> bool:
 
 
 def is_chapter_marker(text: str) -> bool:
-    return bool(re.search(r"\bCHAPTER\s*0*\d+\b", text, flags=re.IGNORECASE))
+    return bool(is_chapter_number_only(text) or re.search(r"\bCHAPTER\s*0*\d+\b", text, flags=re.IGNORECASE))
 
 
 def is_short_title_like(text: str) -> bool:
@@ -177,6 +209,19 @@ def is_short_title_like(text: str) -> bool:
     if value.endswith(("。", "！", "？", ".", "!", "?", "；", ";")):
         return False
     return len(value) <= 36 or bool(extract_number_key(value))
+
+
+def is_split_chapter_title_candidate(text: str) -> bool:
+    value = strip_title_markup(text)
+    if not value or is_chapter_number_only(value) or len(value) > 42:
+        return False
+    if value.startswith(("◆", "◇", "●", "○", "■", "□", "（", "(")):
+        return False
+    if re.search(r"\s+\d{1,4}\s*$", value) or re.match(r"^图\s*\d+", value):
+        return False
+    if re.search(r"https?://|images/|\.(?:png|jpe?g|webp)\b", value, re.I):
+        return False
+    return is_short_title_like(value)
 
 
 def nearby_nonempty(lines: list[dict], index: int, direction: int) -> list[dict]:
@@ -264,7 +309,7 @@ def build_global_candidates(
     for index in range(body_index, len(lines)):
         text = str(lines[index].get("text") or "")
         marker_key = extract_number_key(text) if is_chapter_marker(text) else ""
-        chapter_key = extract_number_key(text) if re.search(r"第\s*\d+\s*章", text) else ""
+        chapter_key = extract_number_key(text) if is_chapter_number_only(text) else ""
         key = marker_key or chapter_key
         if not key:
             continue
@@ -275,12 +320,15 @@ def build_global_candidates(
                 if is_markdown_heading(previous_text):
                     group_indexes.append(previous)
         if chapter_key:
-            for following in range(index + 1, min(len(lines), index + 7)):
+            # A chapter number followed by a title on the next non-empty line
+            # is one heading. Keep the candidate anchored at the number line.
+            for following in range(index + 1, min(len(lines), index + 4)):
                 following_text = str(lines[following].get("text") or "")
-                if is_markdown_heading(following_text) or is_chapter_marker(
-                    following_text
-                ):
+                if not following_text.strip():
+                    continue
+                if is_split_chapter_title_candidate(following_text):
                     group_indexes.append(following)
+                break
         group_indexes = sorted(set(group_indexes))
         start_index = group_indexes[0]
         end_index = group_indexes[-1]
@@ -316,9 +364,11 @@ def score_candidates(
     line_count: int,
 ) -> list[dict[str, Any]]:
     catalog_title = str(catalog_item["title"])
-    catalog_normalized = normalized_title(
-        str(catalog_item.get("normalized_title") or catalog_title)
-    )
+    catalog_normalized_values = [normalized_title(str(catalog_item.get("normalized_title") or catalog_title))]
+    for alias in catalog_item.get("aliases") or []:
+        alias_normalized = normalized_title(str(alias))
+        if alias_normalized and alias_normalized not in catalog_normalized_values:
+            catalog_normalized_values.append(alias_normalized)
     catalog_key = extract_number_key(catalog_title)
     expected_ratio = (catalog_index - 1) / max(1, catalog_count - 1)
     scored: list[dict[str, Any]] = []
@@ -344,15 +394,13 @@ def score_candidates(
 
         candidate_normalized = str(candidate.get("normalized_text") or "")
         similarity = 0.0
-        if catalog_normalized and candidate_normalized:
-            similarity = difflib.SequenceMatcher(
-                None, catalog_normalized, candidate_normalized
-            ).ratio()
+        if catalog_normalized_values and candidate_normalized:
+            similarity = max(
+                difflib.SequenceMatcher(None, catalog_value, candidate_normalized).ratio()
+                for catalog_value in catalog_normalized_values if catalog_value
+            )
             score += similarity * 55.0
-            if (
-                catalog_normalized in candidate_normalized
-                or candidate_normalized in catalog_normalized
-            ):
+            if any(catalog_value in candidate_normalized or candidate_normalized in catalog_value for catalog_value in catalog_normalized_values if catalog_value):
                 score += 18.0
                 reasons.append("清洗后标题存在包含关系")
             reasons.append(f"标题相似度 {similarity:.3f}")

@@ -10,9 +10,12 @@ from datetime import datetime, timezone
 import hashlib
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 from dotenv import load_dotenv
 
@@ -26,12 +29,14 @@ from common import (
     write_json,
     write_jsonl,
 )
+from book_meta import get_business_config, get_entity_extraction_config, load_book_meta, resolve_book_paths, resolve_config_value
 
 PROJECT_DIR = Path(__file__).resolve().parent
 PROMPTS_DIR = PROJECT_DIR / "prompts"
 # Legacy long prompts under prompts/ are kept for history, but Step 6 now only
 # injects a short LightRAG entity_types_guidance string by default.
 ENTITY_TYPES_GUIDANCE_DIR = PROMPTS_DIR / "entity_types_guidance"
+ENTITY_TYPE_DIR = PROMPTS_DIR / "entity_type"
 SCHEMAS_DIR = PROMPTS_DIR / "schemas"
 DEFAULT_SCHEMA_VERSION = "industrial_training_kg_schema.v1"
 DEFAULT_SCHEMA_JSON = SCHEMAS_DIR / "industrial_training_kg_schema.v1.json"
@@ -64,6 +69,7 @@ CUSTOM_CHUNK_METADATA_FIELDS = [
     "source_md_path",
     "domain",
     "subject",
+    "kg_content",
 ]
 
 
@@ -93,15 +99,15 @@ def env_int(name: str, default: int) -> int:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="使用自建 custom chunks 导入 LightRAG")
     parser.add_argument("--chunks", required=True, type=Path)
+    parser.add_argument("--meta", type=Path)
+    parser.add_argument("--entity-type-prompt-file", help="LightRAG YAML profile file name")
     parser.add_argument(
         "--working-dir",
         type=Path,
-        default=Path(os.getenv("MARKDOWN_GRAPH_WORKING_DIR", str(DEFAULT_WORKING_DIR))),
+        default=None,
     )
-    parser.add_argument(
-        "--domain", default=os.getenv("MARKDOWN_GRAPH_DOMAIN", "industrial_training")
-    )
-    parser.add_argument("--subject", default=os.getenv("MARKDOWN_GRAPH_SUBJECT", ""))
+    parser.add_argument("--domain")
+    parser.add_argument("--subject")
     parser.add_argument(
         "--import-method",
         default=os.getenv("MARKDOWN_GRAPH_IMPORT_METHOD", "custom_chunks"),
@@ -223,20 +229,85 @@ def build_entity_types_guidance(
     return guidance, guidance_meta
 
 
-def build_rag(working_dir: Path, entity_types_guidance: str) -> LightRAG:
+def load_entity_type_profile(path: Path) -> dict[str, Any]:
+    try:
+        profile = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError as exc:
+        raise ValueError(f"实体类型 YAML 格式错误: {path}: {exc}") from exc
+    if not isinstance(profile, dict):
+        raise ValueError(f"实体类型 YAML 必须是对象: {path}")
+    for key in ("entity_types_guidance", "entity_extraction_examples", "entity_extraction_json_examples", "allowed_entity_types", "allowed_relation_keywords"):
+        if key not in profile:
+            raise ValueError(f"实体类型 YAML 缺少必要字段: {key}")
+    if not isinstance(profile["entity_types_guidance"], str) or not profile["entity_types_guidance"].strip():
+        raise ValueError("实体类型 YAML 的 entity_types_guidance 必须为非空字符串")
+    for key in ("entity_extraction_examples", "entity_extraction_json_examples"):
+        if not isinstance(profile[key], list) or not profile[key] or not all(isinstance(item, str) and item.strip() for item in profile[key]):
+            raise ValueError(f"实体类型 YAML 的 {key} 必须为非空字符串列表")
+    for key in ("allowed_entity_types", "allowed_relation_keywords"):
+        if not isinstance(profile[key], list) or not all(isinstance(item, str) and item.strip() for item in profile[key]):
+            raise ValueError(f"实体类型 YAML 的 {key} 必须为字符串列表")
+    return profile
+
+
+def resolve_entity_type_profile(args: argparse.Namespace) -> tuple[Path | None, dict[str, Any] | None, dict[str, Any]]:
+    if args.entity_type_prompt_file and args.entity_types_guidance_file:
+        raise ValueError("--entity-type-prompt-file 与已废弃的 --entity-types-guidance-file 不能同时使用")
+    meta_profile = ""
+    if args.meta:
+        meta = load_book_meta(args.meta)
+        paths = resolve_book_paths(meta)
+        meta_profile = str(paths["prompt_file"] or "")
+    file_name = resolve_config_value(args.entity_type_prompt_file, meta_profile, "ENTITY_TYPE_PROMPT_FILE", "")
+    if not file_name:
+        return None, None, {}
+    candidate = Path(str(file_name)).expanduser()
+    if candidate.is_absolute():
+        path = candidate.resolve()
+        file_name = path.name
+    else:
+        # meta stores a file name, never a shell-relative path.
+        path = (ENTITY_TYPE_DIR / candidate.name).resolve()
+        file_name = candidate.name
+    if path.parent != ENTITY_TYPE_DIR.resolve() or not path.is_file():
+        raise FileNotFoundError(f"教材专属实体类型 YAML 不存在于 prompts/entity_type: {path}")
+    profile = load_entity_type_profile(path)
+    meta = {
+        "guidance_mode": "entity_type_prompt_file",
+        "profile_path": str(path),
+        "profile_file": file_name,
+        "profile_sha256": prompt_sha256(path.read_text(encoding="utf-8")),
+        "allowed_entity_types": profile["allowed_entity_types"],
+        "allowed_relation_keywords": profile["allowed_relation_keywords"],
+        "entity_extraction_use_json": env_bool("ENTITY_EXTRACTION_USE_JSON", True),
+        "max_gleaning": env_int("MAX_GLEANING", 1),
+        "max_extraction_records": env_int("MAX_EXTRACTION_RECORDS", 100),
+        "max_extraction_entities": env_int("MAX_EXTRACTION_ENTITIES", 40),
+    }
+    return path, profile, meta
+
+
+def build_rag(working_dir: Path, *, profile_file_name: str | None = None, entity_types_guidance: str | None = None) -> LightRAG:
     from lightrag import LightRAG
 
     working_dir.mkdir(parents=True, exist_ok=True)
+    os.environ["PROMPT_DIR"] = str(PROMPTS_DIR)
+    addon_params: dict[str, Any] = {"language": "Chinese"}
+    if profile_file_name:
+        addon_params["entity_type_prompt_file"] = profile_file_name
+    elif entity_types_guidance:
+        addon_params["entity_types_guidance"] = entity_types_guidance
     return LightRAG(
         working_dir=str(working_dir),
         enable_llm_cache=False,
         enable_llm_cache_for_entity_extract=False,
-        addon_params={
-            "language": "Chinese",
-            "entity_types_guidance": entity_types_guidance,
-        },
+        addon_params=addon_params,
         llm_model_func=build_llm_model_func(),
         embedding_func=build_embedding_func(),
+        entity_extraction_use_json=env_bool("ENTITY_EXTRACTION_USE_JSON", True),
+        entity_extract_max_gleaning=env_int("MAX_GLEANING", 1),
+        entity_extract_max_records=env_int("MAX_EXTRACTION_RECORDS", 100),
+        entity_extract_max_entities=env_int("MAX_EXTRACTION_ENTITIES", 40),
     )
 
 
@@ -430,6 +501,79 @@ def count_extraction_mentions(
     return result_count, entity_mentions, relation_mentions
 
 
+_FIGURE_RE = re.compile(r"^图\s*\d+\s*[-－]\s*\d+$")
+_CHAPTER_RE = re.compile(r"^(?:第\s*\d+\s*[章节]|\d+(?:\.\d+){0,4})$")
+_NUMBER_RE = re.compile(r"^[+-]?\d+(?:\.\d+)?(?:%|℃|°C|:\d+)?$", re.I)
+_PATH_RE = re.compile(r"(?:https?://|(?:^|/)images/|\.(?:png|jpe?g|webp)$)", re.I)
+
+
+def _reject_entity(name: str, data: dict[str, Any], allowed: set[str]) -> str | None:
+    entity_type = str(data.get("entity_type") or "").strip()
+    description = str(data.get("description") or "").strip()
+    if not name.strip(): return "empty_entity_name"
+    if not description: return "empty_entity_description"
+    if entity_type.casefold() in {"other", "unknown"}: return "forbidden_entity_type"
+    if entity_type.casefold() not in {item.casefold() for item in allowed}: return "invalid_entity_type"
+    if _FIGURE_RE.fullmatch(name) or _CHAPTER_RE.fullmatch(name): return "numbering_entity"
+    if _NUMBER_RE.fullmatch(name): return "numeric_entity"
+    if _PATH_RE.search(name): return "image_or_url_entity"
+    return None
+
+
+def filter_extraction_results(extraction_results: Any, profile: dict[str, Any] | None) -> tuple[list, dict[str, int], list[dict[str, Any]]]:
+    """Apply project validation before LightRAG's merge surface."""
+    if not profile:
+        return list(extraction_results or []), {"raw_entity_mentions": 0, "accepted_entity_mentions": 0, "rejected_entity_mentions": 0, "raw_relation_mentions": 0, "accepted_relation_mentions": 0, "rejected_relation_mentions": 0}, []
+    allowed_types = {str(item).strip() for item in profile["allowed_entity_types"]}
+    allowed_relations = {str(item).strip().casefold() for item in profile["allowed_relation_keywords"]}
+    counters = Counter()
+    rejected: list[dict[str, Any]] = []
+    filtered: list = []
+    for nodes, edges in extraction_results or []:
+        accepted_nodes: dict[str, list] = {}
+        accepted_names: set[str] = set()
+        seen_entities: set[tuple[str, str]] = set()
+        for name, candidates in (nodes or {}).items():
+            for data in candidates or []:
+                counters["raw_entity_mentions"] += 1
+                reason = _reject_entity(str(name), data, allowed_types)
+                identity = (str(name), str(data.get("entity_type") or ""))
+                if reason is None and identity in seen_entities: reason = "duplicate_entity"
+                if reason:
+                    counters["rejected_entity_mentions"] += 1
+                    rejected.append({"kind": "entity", "reason": reason, "entity_name": name, "entity": data})
+                    continue
+                seen_entities.add(identity); accepted_names.add(str(name))
+                accepted_nodes.setdefault(str(name), []).append(data)
+                counters["accepted_entity_mentions"] += 1
+        accepted_edges: dict[tuple[str, str], list] = {}
+        seen_edges: set[tuple[str, str, str]] = set()
+        for edge_key, candidates in (edges or {}).items():
+            for data in candidates or []:
+                counters["raw_relation_mentions"] += 1
+                fallback_source = edge_key[0] if isinstance(edge_key, tuple) and len(edge_key) > 0 else ""
+                fallback_target = edge_key[1] if isinstance(edge_key, tuple) and len(edge_key) > 1 else ""
+                source = str(data.get("src_id") or fallback_source)
+                target = str(data.get("tgt_id") or fallback_target)
+                keywords = [item.strip() for item in re.split(r"[,，]", str(data.get("keywords") or "")) if item.strip()]
+                reason = None
+                if source not in accepted_names or target not in accepted_names: reason = "invalid_relation_endpoint"
+                elif not keywords or any(item.casefold() not in allowed_relations for item in keywords): reason = "invalid_relation_keyword"
+                elif not str(data.get("description") or "").strip(): reason = "empty_relation_description"
+                identity = (source, target, ",".join(keywords))
+                if reason is None and identity in seen_edges: reason = "duplicate_relation"
+                if reason:
+                    counters["rejected_relation_mentions"] += 1
+                    rejected.append({"kind": "relation", "reason": reason, "source_entity": source, "target_entity": target, "relation": data})
+                    continue
+                seen_edges.add(identity); accepted_edges.setdefault((source, target), []).append(data)
+                counters["accepted_relation_mentions"] += 1
+        filtered.append((accepted_nodes, accepted_edges))
+    for key in ("raw_entity_mentions", "accepted_entity_mentions", "rejected_entity_mentions", "raw_relation_mentions", "accepted_relation_mentions", "rejected_relation_mentions"):
+        counters.setdefault(key, 0)
+    return filtered, dict(counters), rejected
+
+
 def failed_chunk_record(
     chunk_id: str,
     chunk: dict[str, Any],
@@ -459,7 +603,8 @@ async def extract_and_merge_chunks(
     file_path: str,
     current_file_number: int,
     total_files: int,
-) -> tuple[int, int, int]:
+    profile: dict[str, Any] | None = None,
+) -> tuple[int, int, int, dict[str, int], list[dict[str, Any]]]:
     from lightrag.operate import merge_nodes_and_edges
 
     pipeline_status = {
@@ -468,11 +613,16 @@ async def extract_and_merge_chunks(
         "cancellation_requested": False,
     }
     pipeline_status_lock = asyncio.Lock()
+    extraction_chunks = {
+        chunk_id: {**record, "content": str(record.get("kg_content") or record.get("content") or "")}
+        for chunk_id, record in chunk_records.items()
+    }
     extraction_results = await rag._process_extract_entities(
-        chunk_records,
+        extraction_chunks,
         pipeline_status,
         pipeline_status_lock,
     )
+    extraction_results, validation_stats, rejected = filter_extraction_results(extraction_results, profile)
     result_count, entity_mentions, relation_mentions = count_extraction_mentions(
         extraction_results
     )
@@ -494,7 +644,7 @@ async def extract_and_merge_chunks(
         total_files=total_files,
         file_path=file_path,
     )
-    return result_count, entity_mentions, relation_mentions
+    return result_count, entity_mentions, relation_mentions, validation_stats, rejected
 
 
 async def extract_single_chunk_with_retry(
@@ -507,18 +657,20 @@ async def extract_single_chunk_with_retry(
     current_file_number: int,
     total_files: int,
     single_chunk_retry: int,
-) -> tuple[bool, dict[str, Any] | None, int, int, int]:
+    profile: dict[str, Any] | None = None,
+) -> tuple[bool, dict[str, Any] | None, int, int, int, dict[str, int], list[dict[str, Any]]]:
     attempts = max(single_chunk_retry, 0) + 1
     last_error: BaseException | None = None
     for attempt in range(1, attempts + 1):
         try:
-            result_count, entity_mentions, relation_mentions = await extract_and_merge_chunks(
+            result_count, entity_mentions, relation_mentions, validation_stats, rejected = await extract_and_merge_chunks(
                 rag,
                 {chunk_id: chunk},
                 doc_id=doc_id,
                 file_path=file_path,
                 current_file_number=current_file_number,
                 total_files=total_files,
+                profile=profile,
             )
             logger.info(
                 "extract single done | chunk_id=%s ent=%d rel=%d",
@@ -526,7 +678,7 @@ async def extract_single_chunk_with_retry(
                 entity_mentions,
                 relation_mentions,
             )
-            return True, None, result_count, entity_mentions, relation_mentions
+            return True, None, result_count, entity_mentions, relation_mentions, validation_stats, rejected
         except Exception as exc:
             last_error = exc
             if attempt < attempts:
@@ -547,9 +699,7 @@ async def extract_single_chunk_with_retry(
             last_error,
             retry_count=max(single_chunk_retry, 0),
         ),
-        0,
-        0,
-        0,
+        0, 0, 0, {}, [],
     )
 
 
@@ -561,6 +711,7 @@ async def import_custom_chunks(
     extract_batch_size: int = 8,
     single_chunk_retry: int = 1,
     continue_on_chunk_error: bool = True,
+    profile: dict[str, Any] | None = None,
 ) -> dict:
     """Write caller-owned chunks, then extract KG with chunk-level failure isolation."""
     validate_chunks(chunks)
@@ -596,6 +747,7 @@ async def import_custom_chunks(
         for chunk in doc_chunks:
             chunk_id = str(chunk["chunk_id"])
             content = str(chunk["content"])
+            kg_content = str(chunk.get("kg_content") or content)
             chunk_record = {
                 "content": content,
                 "full_doc_id": doc_id,
@@ -606,6 +758,7 @@ async def import_custom_chunks(
             for field in CUSTOM_CHUNK_METADATA_FIELDS:
                 if field in chunk:
                     chunk_record[field] = chunk.get(field)
+            chunk_record["kg_content"] = kg_content
             inserting_chunks[chunk_id] = chunk_record
             doc_inserting_chunks[chunk_id] = chunk_record
         inserting_chunks_by_doc[doc_id] = doc_inserting_chunks
@@ -643,6 +796,8 @@ async def import_custom_chunks(
         extracted_relation_mentions = 0
         succeeded_kg_chunk_count = 0
         failed_chunks: list[dict[str, Any]] = []
+        validation_totals: Counter = Counter()
+        rejected_extractions: list[dict[str, Any]] = []
         total_batches = sum(
             len(
                 chunk_batches(
@@ -679,7 +834,7 @@ async def import_custom_chunks(
                     (
                         result_count,
                         entity_mentions,
-                        relation_mentions,
+                        relation_mentions, validation_stats, rejected,
                     ) = await extract_and_merge_chunks(
                         rag,
                         batch_chunks,
@@ -687,10 +842,12 @@ async def import_custom_chunks(
                         file_path=new_docs[doc_id]["file_path"],
                         current_file_number=current_batch,
                         total_files=total_batches,
+                        profile=profile,
                     )
                     extraction_result_count += result_count
                     extracted_entity_mentions += entity_mentions
                     extracted_relation_mentions += relation_mentions
+                    validation_totals.update(validation_stats); rejected_extractions.extend(rejected)
                     succeeded_kg_chunk_count += len(batch_chunks)
                     logger.info(
                         "extract batch done | doc_id=%s batch=%d/%d chunks=%d "
@@ -720,7 +877,7 @@ async def import_custom_chunks(
                             failed_chunk,
                             result_count,
                             entity_mentions,
-                            relation_mentions,
+                            relation_mentions, validation_stats, rejected,
                         ) = await extract_single_chunk_with_retry(
                             rag,
                             chunk_id,
@@ -730,12 +887,14 @@ async def import_custom_chunks(
                             current_file_number=current_batch,
                             total_files=total_batches,
                             single_chunk_retry=single_chunk_retry,
+                            profile=profile,
                         )
                         if success:
                             succeeded_kg_chunk_count += 1
                             extraction_result_count += result_count
                             extracted_entity_mentions += entity_mentions
                             extracted_relation_mentions += relation_mentions
+                            validation_totals.update(validation_stats); rejected_extractions.extend(rejected)
                         elif failed_chunk is not None:
                             failed_chunks.append(failed_chunk)
                             if not continue_on_chunk_error:
@@ -761,7 +920,7 @@ async def import_custom_chunks(
                         failed_chunk,
                         result_count,
                         entity_mentions,
-                        relation_mentions,
+                        relation_mentions, validation_stats, rejected,
                     ) = await extract_single_chunk_with_retry(
                         rag,
                         chunk_id,
@@ -771,12 +930,14 @@ async def import_custom_chunks(
                         current_file_number=current_batch,
                         total_files=total_batches,
                         single_chunk_retry=single_chunk_retry,
+                        profile=profile,
                     )
                     if success:
                         succeeded_kg_chunk_count += 1
                         extraction_result_count += result_count
                         extracted_entity_mentions += entity_mentions
                         extracted_relation_mentions += relation_mentions
+                        validation_totals.update(validation_stats); rejected_extractions.extend(rejected)
                     elif failed_chunk is not None:
                         failed_chunks.append(failed_chunk)
                         if not continue_on_chunk_error:
@@ -807,6 +968,8 @@ async def import_custom_chunks(
             "extraction_result_count": extraction_result_count,
             "extracted_entity_mentions": extracted_entity_mentions,
             "extracted_relation_mentions": extracted_relation_mentions,
+            "validation_stats": dict(validation_totals),
+            "rejected_extractions": rejected_extractions,
         }
     except BaseException as exc:
         active_error = exc
@@ -825,6 +988,16 @@ async def import_custom_chunks(
 
 
 async def run(args: argparse.Namespace) -> int:
+    meta = load_book_meta(args.meta) if args.meta else None
+    if meta is not None:
+        business = get_business_config(meta)
+        args.domain = resolve_config_value(args.domain, business["domain"], "MARKDOWN_GRAPH_DOMAIN", "industrial_training")
+        args.subject = resolve_config_value(args.subject, business["subject"], "MARKDOWN_GRAPH_SUBJECT", "")
+    else:
+        args.domain = args.domain or os.getenv("MARKDOWN_GRAPH_DOMAIN", "industrial_training")
+        args.subject = args.subject or os.getenv("MARKDOWN_GRAPH_SUBJECT", "")
+    if args.working_dir is None:
+        args.working_dir = Path(os.getenv("MARKDOWN_GRAPH_WORKING_DIR", str(DEFAULT_WORKING_DIR)))
     chunks_path = args.chunks.expanduser().resolve()
     chunks = read_jsonl(chunks_path)
     selected_chunks, debug_selection = select_kg_chunks(chunks, args)
@@ -863,6 +1036,7 @@ async def run(args: argparse.Namespace) -> int:
         .expanduser()
         .resolve()
     )
+    rejected_path = (PROJECT_DIR / "outputs/06_import" / f"{book_stem}.rejected_extractions.jsonl").resolve()
     started = datetime.now(timezone.utc)
     failures: list[dict] = []
     error_message = ""
@@ -900,15 +1074,18 @@ async def run(args: argparse.Namespace) -> int:
     if args.single_chunk_retry < 0:
         raise ValueError("--single-chunk-retry 不能小于 0")
 
-    entity_types_guidance, prompt_meta = build_entity_types_guidance(args)
-    logger.info(
-        "entity_types_guidance | path=%s sha256=%s chars=%d",
-        prompt_meta["guidance_path"],
-        prompt_meta["guidance_sha256"],
-        prompt_meta["guidance_chars"],
-    )
-    if args.print_prompt_preview:
-        logger.info("entity_types_guidance preview:\n%s", entity_types_guidance[:1200])
+    profile_path, profile, prompt_meta = resolve_entity_type_profile(args)
+    entity_types_guidance = None
+    if profile_path is not None:
+        logger.info("entity type profile | file=%s sha256=%s allowed_types=%s", prompt_meta["profile_file"], prompt_meta["profile_sha256"], prompt_meta["allowed_entity_types"])
+    else:
+        # Explicit compatibility only: legacy debug callers may still supply a
+        # guidance file. New meta-driven runs require a per-book YAML profile.
+        if args.entity_types_guidance_file is None:
+            raise ValueError("Step 6 缺少教材专属实体类型 YAML；请在 meta.entity_extraction.prompt_file 配置，或显式传 --entity-type-prompt-file")
+        entity_types_guidance, prompt_meta = build_entity_types_guidance(args)
+        prompt_meta["deprecated"] = True
+        logger.warning("使用已废弃的 --entity-types-guidance-file；新流水线应使用 YAML profile")
 
     llm = resolve_llm_config()
     embedding = resolve_embedding_config()
@@ -920,7 +1097,7 @@ async def run(args: argparse.Namespace) -> int:
         embedding["dim"],
         working_dir,
     )
-    rag = build_rag(working_dir, entity_types_guidance)
+    rag = build_rag(working_dir, profile_file_name=profile_path.name if profile_path else None, entity_types_guidance=entity_types_guidance)
     await rag.initialize_storages()
     logger.info("LightRAG storages initialized")
     try:
@@ -932,6 +1109,7 @@ async def run(args: argparse.Namespace) -> int:
                 extract_batch_size=args.extract_batch_size,
                 single_chunk_retry=args.single_chunk_retry,
                 continue_on_chunk_error=args.continue_on_chunk_error,
+                profile=profile,
             )
         except EntityExtractionError as exc:
             error_message = str(exc)
@@ -948,6 +1126,7 @@ async def run(args: argparse.Namespace) -> int:
     failed_kg_chunk_count = int(result.get("failed_kg_chunk_count") or len(failures))
     succeeded_kg_chunk_count = int(result.get("succeeded_kg_chunk_count") or 0)
     write_jsonl(failed_path, failures)
+    write_jsonl(rejected_path, result.get("rejected_extractions") or [])
     report = {
         "working_dir": str(working_dir),
         "doc_count": result["doc_count"],
@@ -964,6 +1143,15 @@ async def run(args: argparse.Namespace) -> int:
         "relation_count_after": len(relations),
         "extracted_entity_mentions": result["extracted_entity_mentions"],
         "extracted_relation_mentions": result["extracted_relation_mentions"],
+        "raw_entity_mentions": result.get("validation_stats", {}).get("raw_entity_mentions", 0),
+        "accepted_entity_mentions": result.get("validation_stats", {}).get("accepted_entity_mentions", 0),
+        "rejected_entity_mentions": result.get("validation_stats", {}).get("rejected_entity_mentions", 0),
+        "raw_relation_mentions": result.get("validation_stats", {}).get("raw_relation_mentions", 0),
+        "accepted_relation_mentions": result.get("validation_stats", {}).get("accepted_relation_mentions", 0),
+        "rejected_relation_mentions": result.get("validation_stats", {}).get("rejected_relation_mentions", 0),
+        "rejected_by_reason": dict(Counter(item.get("reason") for item in result.get("rejected_extractions", []) if item.get("reason"))),
+        "rejected_extractions_path": str(rejected_path),
+        "prompt_profile": prompt_meta,
         "replace": bool(args.replace),
         "failures": failed_kg_chunk_count,
         "failed_chunk_ids": [chunk.get("chunk_id") for chunk in failures],

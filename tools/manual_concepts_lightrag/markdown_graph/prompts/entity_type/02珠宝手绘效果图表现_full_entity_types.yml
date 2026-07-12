@@ -1,0 +1,31 @@
+profile_version: markdown_graph_entity_profile.v1
+book_id: "02珠宝手绘效果图表现"
+book_title: "珠宝手绘效果图表现"
+domain: industrial_training
+subject: jewelry_hand_rendering
+language: Chinese
+allowed_entity_types: [Technique, Tool, Material, Object, VisualEffect, Process, Parameter, Concept]
+allowed_relation_keywords: [使用, 用于, 包括, 组成, 影响, 产生, 需要, 适用于, 表现, 形成]
+entity_types_guidance: |
+  仅抽取当前正文明确出现、对珠宝手绘效果图表现有稳定价值的实体。
+  实体名保持正文原始形式，不得以常识静默纠正 OCR 或 ASR 疑似错误词；不得使用 Other。
+  不抽取图号、页码、章节号、目录编号、作者姓名、案例作品名、品牌名、URL、图片路径、hash 文件名或 STEP 01 等编号。
+  不把画出、加入、使用、选择、注意等普通动作词抽成实体；具体数值、比例、尺寸和色值只可写入 description。
+  关系必须有当前正文直接证据，且两端均为有效实体。图注与图片证据只用于溯源，不能单独作为实体来源。
+  只有正文明确表达同义关系时才允许规范化或合并同义词。
+entity_extraction_examples:
+  - |
+    entity<|#|>拓稿<|#|>Technique<|#|>拓稿是正文明确出现的珠宝手绘工艺步骤。
+    entity<|#|>硫酸纸<|#|>Material<|#|>硫酸纸用于承载拓稿线条。
+    entity<|#|>透台<|#|>Tool<|#|>透台用于辅助观察和描绘线条。
+    relation<|#|>拓稿<|#|>硫酸纸<|#|>使用<|#|>正文说明拓稿使用硫酸纸。
+    <|COMPLETE|>
+  - |
+    entity<|#|>两点透视<|#|>Technique<|#|>两点透视用于表现珠宝首饰效果图的空间关系。
+    entity<|#|>珠宝首饰效果图<|#|>Object<|#|>珠宝首饰效果图是正文讨论的表现对象。
+    entity<|#|>立体感<|#|>VisualEffect<|#|>立体感是两点透视产生的视觉效果。
+    relation<|#|>两点透视<|#|>立体感<|#|>产生<|#|>正文直接说明两点透视能够表现立体感。
+    <|COMPLETE|>
+entity_extraction_json_examples:
+  - |
+    {"entities":[{"name":"拉丝肌理","type":"VisualEffect","description":"拉丝肌理是正文明确出现的金属表面视觉效果。"},{"name":"排线","type":"Technique","description":"排线是形成拉丝肌理的表现技法。"},{"name":"金属","type":"Material","description":"金属是承载拉丝肌理的材料。"}],"relationships":[{"source":"排线","target":"拉丝肌理","keywords":"表现","description":"正文直接说明排线表现拉丝肌理。"},{"source":"拉丝肌理","target":"金属","keywords":"形成","description":"正文说明拉丝肌理形成于金属表面。"}]}

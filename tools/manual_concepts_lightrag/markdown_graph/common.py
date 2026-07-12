@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import tempfile
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -35,9 +36,9 @@ def load_json(path: Path) -> dict | list:
 
 def write_json(path: Path, data: Any) -> None:
     ensure_dir(path.parent)
-    path.write_text(
+    _atomic_write_text(
+        path,
         json.dumps(data, ensure_ascii=False, indent=2, default=str) + "\n",
-        encoding="utf-8",
     )
 
 
@@ -60,9 +61,29 @@ def read_jsonl(path: Path) -> list[dict]:
 
 def write_jsonl(path: Path, records: Iterable[dict]) -> None:
     ensure_dir(path.parent)
-    with path.open("w", encoding="utf-8") as file:
-        for record in records:
-            file.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+    lines = [json.dumps(record, ensure_ascii=False, default=str) + "\n" for record in records]
+    _atomic_write_text(path, "".join(lines))
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    """Atomically replace a UTF-8 text file in the destination directory."""
+    ensure_dir(path.parent)
+    fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    temp_path = Path(temp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as file:
+            file.write(content)
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(temp_path, path)
+    except BaseException:
+        temp_path.unlink(missing_ok=True)
+        raise
+
+
+def write_text_atomic(path: Path, content: str) -> None:
+    """Public atomic UTF-8 text writer for YAML/Markdown sidecar files."""
+    _atomic_write_text(path, content)
 
 
 def ensure_dir(path: Path) -> Path:

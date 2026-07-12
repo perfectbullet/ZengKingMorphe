@@ -11,7 +11,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from common import PROJECT_DIR, load_json, read_jsonl, slugify_for_id, write_jsonl
+from common import PROJECT_DIR, load_json, read_jsonl, slugify_for_id, write_json, write_jsonl
 
 logger = logging.getLogger(__name__)
 ALLOWED_BLOCK_TYPES = {
@@ -49,6 +49,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-blocks", type=Path)
     parser.add_argument("--output-plan", type=Path)
     parser.add_argument("--report", type=Path)
+    parser.add_argument("--confirmation", type=Path, help="Step 4 人工确认状态文件")
     parser.add_argument(
         "--domain", default=os.getenv("MARKDOWN_GRAPH_DOMAIN", "industrial_training")
     )
@@ -374,6 +375,15 @@ def run(args: argparse.Namespace) -> tuple[Path, Path, Path]:
     write_jsonl(output_blocks, blocks)
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text("\n".join(report) + "\n", encoding="utf-8")
+    confirmation_path = (
+        args.confirmation
+        or output_dir / f"{book_stem}.validation_confirmation.json"
+    ).expanduser().resolve()
+    # Every newly generated validation report requires a fresh human confirmation.
+    write_json(
+        confirmation_path,
+        {"confirmed": False, "confirmed_at": None, "report": str(report_path)},
+    )
     content_scope_counts = Counter(block["content_scope"] for block in blocks)
     should_extract_kg_counts = Counter(
         bool(block["should_extract_kg"]) for block in blocks
@@ -387,6 +397,7 @@ def run(args: argparse.Namespace) -> tuple[Path, Path, Path]:
         dict(sorted(content_scope_counts.items())),
         dict(sorted(should_extract_kg_counts.items())),
     )
+    logger.info("Step 4 确认文件已重置 | %s", confirmation_path)
     return output_blocks, output_plan, report_path
 
 
