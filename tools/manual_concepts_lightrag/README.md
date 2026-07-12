@@ -10,6 +10,8 @@
 
 不依赖 `ai-service` 业务模块，也不修改 LightRAG 源码。
 
+工业教材的 Markdown → LightRAG Step 0～12 流水线见 [markdown_graph/README.md](markdown_graph/README.md)。它与本目录的人工概念导入保持独立，使用教材 meta、JSON/JSONL 审核数据和每本教材专属实体 YAML。
+
 ---
 
 ## 数据与实体
