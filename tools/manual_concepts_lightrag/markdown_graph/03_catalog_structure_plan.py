@@ -69,6 +69,10 @@ ANCHOR_PROMPT = """你是教材目录项与正文标题的锚点匹配器。
 
 任务：只从 candidate_title_lines 中选择当前目录项在正文中的真实标题锚点。
 
+顶部目录是唯一结构来源；candidate_title_lines 只用于定位该既有目录项的正文起始行。
+不得依据正文创建目录项、改变目录层级或用普通短标题覆盖顶部目录结构。
+编号和标题均匹配的 Markdown heading 必须优先于同名普通短文本；普通短文本只有上下文证明其为正文标题时才能选择。
+
 候选信息说明：
 - candidate_type 表示候选类型，常见值包括 chapter_group、markdown_heading、numbered_line、short_title。
 - context_before 和 context_after 是候选附近的非空文本，可用于判断候选是否位于章内小目录、正文标题或普通内容中。
@@ -183,10 +187,22 @@ def normalized_title(text: str) -> str:
     return re.sub(r"[^a-z0-9\u3400-\u9fff]+", "", value)
 
 
+def normalized_full_text(text: str) -> str:
+    """Normalize title typography without discarding its structural marker."""
+    value = strip_title_markup(text).lower()
+    value = value.replace("－", "-").replace("—", "-").replace("．", ".")
+    return re.sub(r"[\s\u3000\-_.:：、，,;；()（）\[\]【】]+", "", value)
+
+
 CHINESE_CHAPTER_ONLY_RE = re.compile(
     r"^第\s*([一二三四五六七八九十百零〇两0-9]+)\s*章$"
 )
 ENGLISH_CHAPTER_ONLY_RE = re.compile(r"^CHAPTER\s*0*(\d+)$", re.IGNORECASE)
+CHINESE_STRUCTURE_RE = re.compile(
+    r"^第\s*([一二三四五六七八九十百零〇两0-9]+)\s*([章节篇])"
+)
+ENGLISH_STRUCTURE_RE = re.compile(r"^CHAPTER\s*0*(\d+)\b", re.IGNORECASE)
+NUMERIC_STRUCTURE_RE = re.compile(r"^(\d+(?:\.\d+)*)\s*\.?\s*(?:\S|$)")
 
 
 def chinese_chapter_to_int(value: str) -> int | None:
@@ -211,27 +227,33 @@ def is_chapter_number_only(text: str) -> bool:
     return bool(CHINESE_CHAPTER_ONLY_RE.fullmatch(value) or ENGLISH_CHAPTER_ONLY_RE.fullmatch(value))
 
 
+def extract_structure_marker(text: str) -> dict[str, Any] | None:
+    """Parse Chinese/English chapter markers and numeric heading prefixes."""
+    value = strip_title_markup(text)
+    chinese = CHINESE_STRUCTURE_RE.match(value)
+    if chinese:
+        ordinal = chinese_chapter_to_int(chinese.group(1))
+        kind = {"章": "chapter", "节": "section", "篇": "part"}[chinese.group(2)]
+        return {"kind": kind, "ordinal": ordinal, "number_key": str(ordinal) if ordinal is not None else "", "raw_marker": chinese.group(0)}
+    english = ENGLISH_STRUCTURE_RE.match(value)
+    if english:
+        ordinal = int(english.group(1))
+        return {"kind": "english_chapter", "ordinal": ordinal, "number_key": str(ordinal), "raw_marker": english.group(0)}
+    numeric = NUMERIC_STRUCTURE_RE.match(value)
+    if numeric:
+        key = ".".join(str(int(part)) for part in numeric.group(1).split("."))
+        return {"kind": "numeric", "ordinal": None, "number_key": key, "raw_marker": numeric.group(1)}
+    return None
+
+
 def extract_number_key(text: str) -> str:
     value = strip_title_markup(text)
     if re.match(r"^(?:STEP|步骤)\s*0*\d+\b", value, flags=re.IGNORECASE):
         return ""
     if re.match(r"^图\s*\d", value):
         return ""
-    chapter = re.match(r"^第\s*0*(\d+)\s*[章节篇]", value)
-    if chapter:
-        return str(int(chapter.group(1)))
-    chinese_chapter = CHINESE_CHAPTER_ONLY_RE.fullmatch(value)
-    if chinese_chapter:
-        number = chinese_chapter_to_int(chinese_chapter.group(1))
-        return str(number) if number is not None else ""
-    english = re.match(r"^CHAPTER\s*0*(\d+)\b", value, flags=re.IGNORECASE)
-    if english:
-        return str(int(english.group(1)))
-    numbered = re.match(r"^(\d+(?:\.\d+)*)(?![\d.])", value)
-    if not numbered:
-        return ""
-    parts = numbered.group(1).split(".")
-    return ".".join(str(int(part)) for part in parts)
+    marker = extract_structure_marker(value)
+    return str(marker.get("number_key") or "") if marker else ""
 
 
 def is_markdown_heading(text: str) -> bool:
@@ -254,6 +276,14 @@ def is_short_title_like(text: str) -> bool:
     if value.endswith(("。", "！", "？", ".", "!", "?", "；", ";")):
         return False
     return len(value) <= 36 or bool(extract_number_key(value))
+
+
+def is_disallowed_anchor_text(text: str) -> bool:
+    value = strip_title_markup(text)
+    return bool(
+        re.match(r"^(?:图\s*\d|STEP\s*\d+|视频\s*\d|video\s*\d)", value, re.IGNORECASE)
+        or re.search(r"https?://|images/|\.(?:png|jpe?g|webp)\b", value, re.IGNORECASE)
+    )
 
 
 def is_split_chapter_title_candidate(text: str) -> bool:
@@ -311,12 +341,18 @@ def build_global_candidates(
             return
         span = line_span or (line_no, line_no)
         text = combined_text or str(item["text"])
+        marker = extract_structure_marker(text)
+        heading_match = re.match(r"^\s*(#{1,6})\s+\S", text)
         candidate = {
             "candidate_id": f"L{line_no}",
             "line_no": line_no,
             "line_span": [span[0], span[1]],
             "text": text,
             "normalized_text": normalized_title(text),
+            "normalized_full_text": normalized_full_text(text),
+            "markdown_heading_level": len(heading_match.group(1)) if heading_match else None,
+            "structure_marker": marker,
+            "title_source_type": candidate_type,
             "number_key": number_key
             if number_key is not None
             else extract_number_key(text),
@@ -486,6 +522,121 @@ def top_candidates_for_item(
         item for item in scored if item["candidate_id"] not in exact_ids
     )
     return selected[: max(top_k, len(exact))]
+
+
+def structure_markers_compatible(left: dict[str, Any] | None, right: dict[str, Any] | None) -> bool:
+    if not left or not right:
+        return True
+    return (
+        left.get("kind") == right.get("kind")
+        and str(left.get("number_key") or "") == str(right.get("number_key") or "")
+    )
+
+
+def deterministic_match_strength(catalog_item: dict[str, Any], candidate: dict[str, Any]) -> int:
+    """Return an exact-match tier, or zero when a candidate needs LLM review."""
+    if candidate.get("candidate_type") not in {"markdown_heading", "chapter_group"}:
+        return 0
+    catalog_title = str(catalog_item["title"])
+    catalog_marker = extract_structure_marker(catalog_title)
+    candidate_marker = candidate.get("structure_marker") or extract_structure_marker(str(candidate["text"]))
+    if not structure_markers_compatible(catalog_marker, candidate_marker):
+        return 0
+    candidate_full = str(candidate.get("normalized_full_text") or normalized_full_text(str(candidate["text"])))
+    if normalized_full_text(catalog_title) == candidate_full:
+        return 3
+    catalog_semantic = normalized_title(catalog_title)
+    if catalog_marker and candidate_marker and catalog_semantic and catalog_semantic == str(candidate.get("normalized_text") or ""):
+        return 2
+    for alias in catalog_item.get("aliases") or []:
+        if normalized_full_text(str(alias)) == candidate_full:
+            return 1
+    return 0
+
+
+def deterministic_anchor(
+    catalog_index: int, catalog_item: dict[str, Any], candidate: dict[str, Any], candidates: list[dict[str, Any]]
+) -> dict[str, Any]:
+    return {
+        "catalog_index": catalog_index,
+        "catalog_level": int(catalog_item["level"]),
+        "catalog_title": str(catalog_item["title"]),
+        "catalog_number_key": extract_number_key(str(catalog_item["title"])),
+        "matched": True,
+        "matched_candidate_id": candidate["candidate_id"],
+        "matched_start_line": int(candidate["line_no"]),
+        "matched_title_text": str(candidate["text"]),
+        "matched_line_span": list(candidate["line_span"]),
+        "confidence": 1.0,
+        "reason": "目录标题与正文 Markdown 标题精确一致",
+        "manual_override": False,
+        "review_status": "deterministic_matched",
+        "anchor_status": "matched",
+        "source_missing": False,
+        "invalid": False,
+        "match_method": "deterministic_exact",
+        "llm_called": False,
+        "deterministic_candidate_count": sum(
+            deterministic_match_strength(catalog_item, item) > 0 for item in candidates
+        ),
+        "top_candidates": candidates,
+    }
+
+
+def resolve_deterministic_anchors(
+    catalog: list[dict], global_candidates: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any] | None], set[str]]:
+    """Lock only unique, exact, high-trust body headings in catalog order."""
+    anchors: list[dict[str, Any] | None] = [None] * len(catalog)
+    used_candidate_ids: set[str] = set()
+    previous_line = -1
+    for index, item in enumerate(catalog, start=1):
+        ranked: dict[int, list[dict[str, Any]]] = {3: [], 2: [], 1: []}
+        for candidate in global_candidates:
+            strength = deterministic_match_strength(item, candidate)
+            if strength:
+                ranked[strength].append(candidate)
+        selected: dict[str, Any] | None = None
+        for strength in (3, 2, 1):
+            options = ranked[strength]
+            if not options:
+                continue
+            # Identical-tier duplicates are intentionally left for LLM review.
+            if len(options) == 1:
+                selected = options[0]
+            break
+        if selected is None:
+            continue
+        line_no = int(selected["line_no"])
+        if selected["candidate_id"] in used_candidate_ids or line_no <= previous_line:
+            anchors[index - 1] = invalid_anchor(
+                index,
+                item,
+                [selected],
+                "确定性标题锚点与先前确定性锚点发生候选复用或行号逆序冲突",
+            )
+            anchors[index - 1]["match_method"] = "deterministic_conflict"
+            anchors[index - 1]["llm_called"] = False
+            continue
+        anchors[index - 1] = deterministic_anchor(index, item, selected, [selected])
+        used_candidate_ids.add(selected["candidate_id"])
+        previous_line = line_no
+    return anchors, used_candidate_ids
+
+
+def candidates_in_deterministic_window(
+    catalog_index: int, global_candidates: list[dict[str, Any]], deterministic_anchors: list[dict[str, Any] | None]
+) -> tuple[list[dict[str, Any]], dict[str, int | None]]:
+    previous_lines = [int(anchor["matched_start_line"]) for anchor in deterministic_anchors[: catalog_index - 1] if anchor and anchor.get("matched")]
+    following_lines = [int(anchor["matched_start_line"]) for anchor in deterministic_anchors[catalog_index:] if anchor and anchor.get("matched")]
+    lower = previous_lines[-1] if previous_lines else None
+    upper = following_lines[0] if following_lines else None
+    filtered = [
+        candidate for candidate in global_candidates
+        if (lower is None or int(candidate["line_no"]) > lower)
+        and (upper is None or int(candidate["line_no"]) < upper)
+    ]
+    return filtered, {"lower_bound": lower, "upper_bound": upper}
 
 
 def unmatched_anchor(
@@ -784,6 +935,9 @@ def validate_anchor(
         if int(candidate["line_no"]) != start_line:
             base["reason"] = "matched_candidate_id 对应行号与 matched_start_line 不一致"
             return base
+        if is_disallowed_anchor_text(str(candidate["text"])):
+            base["reason"] = "候选属于图号、STEP、视频、URL 或图片路径，不能作为目录标题锚点"
+            return base
         catalog_number_key = extract_number_key(str(catalog_item["title"]))
         candidate_number_key = str(candidate.get("number_key") or "")
         if (
@@ -824,6 +978,54 @@ def validate_anchor(
 
 def validate_anchor_order(anchors: list[dict[str, Any]]) -> None:
     """Keep the largest globally increasing anchor set without cascade drops."""
+    deterministic_positions = [
+        position
+        for position, anchor in enumerate(anchors)
+        if anchor.get("matched") and anchor.get("match_method") == "deterministic_exact"
+    ]
+    previous_line = -1
+    used_ids: set[str] = set()
+    for position in deterministic_positions:
+        anchor = anchors[position]
+        line = int(anchor["matched_start_line"])
+        candidate_id = str(anchor.get("matched_candidate_id") or "")
+        if line <= previous_line or candidate_id in used_ids:
+            anchor["matched"] = False
+            anchor["review_status"] = "invalid"
+            anchor["anchor_status"] = "invalid"
+            anchor["invalid"] = True
+            anchor["reason"] = "确定性锚点发生行号逆序或候选复用冲突，需人工复核"
+            anchor["matched_candidate_id"] = None
+            anchor["matched_start_line"] = None
+            anchor["matched_title_text"] = ""
+            continue
+        previous_line = line
+        used_ids.add(candidate_id)
+
+    # An LLM result may never displace a deterministic anchor.
+    locked = [
+        (position, int(anchor["matched_start_line"]))
+        for position, anchor in enumerate(anchors)
+        if anchor.get("matched") and anchor.get("match_method") == "deterministic_exact"
+    ]
+    for position, anchor in enumerate(anchors):
+        if not anchor.get("matched") or anchor.get("match_method") == "deterministic_exact":
+            continue
+        line = int(anchor["matched_start_line"])
+        previous_locked = next((item for item in reversed(locked) if item[0] < position), None)
+        next_locked = next((item for item in locked if item[0] > position), None)
+        if (previous_locked and line <= previous_locked[1]) or (next_locked and line >= next_locked[1]):
+            anchor["matched"] = False
+            anchor["review_status"] = "unmatched"
+            anchor["anchor_status"] = "blocking_unmatched"
+            anchor["reason"] = (
+                "LLM 锚点与确定性锚点顺序冲突: "
+                f"candidate={anchor.get('matched_candidate_id')} line={line}"
+            )
+            anchor["matched_candidate_id"] = None
+            anchor["matched_start_line"] = None
+            anchor["matched_title_text"] = ""
+
     matched_positions = [
         position for position, anchor in enumerate(anchors) if anchor["matched"]
     ]
@@ -938,6 +1140,7 @@ def build_anchor_prompt(
 async def generate_anchors(
     catalog: list[dict],
     candidate_sets: list[list[dict[str, Any]]],
+    deterministic_anchors: list[dict[str, Any] | None],
     *,
     raw_dir: Path,
     book_stem: str,
@@ -949,6 +1152,10 @@ async def generate_anchors(
     for catalog_index, (catalog_item, candidates) in enumerate(
         zip(catalog, candidate_sets), start=1
     ):
+        locked = deterministic_anchors[catalog_index - 1]
+        if locked is not None:
+            anchors.append(locked)
+            continue
         raw_path = raw_dir / f"{book_stem}.catalog_{catalog_index:04d}.raw.txt"
         repaired = False
         try:
@@ -1001,6 +1208,8 @@ async def generate_anchors(
                 f"LLM 调用或 JSON 解析失败: {type(exc).__name__}: {exc}",
             )
         anchors.append(anchor)
+        anchor["match_method"] = "llm" if anchor["matched"] else "llm_unmatched"
+        anchor["llm_called"] = True
         logger.info(
             "目录锚点完成 | index=%d/%d matched=%s line=%s confidence=%.3f "
             "format_repair=%s",
@@ -1259,11 +1468,19 @@ def write_unmatched_report(
         if not anchor["matched"]
         and anchor.get("anchor_status") not in {"source_missing", "invalid"}
     ]
+    deterministic_matched = [
+        anchor for anchor in matched if anchor.get("match_method") == "deterministic_exact"
+    ]
+    llm_matched = [anchor for anchor in matched if anchor.get("match_method") == "llm"]
+    llm_called = [anchor for anchor in anchors if anchor.get("llm_called")]
     content = [
         "# 目录锚点未匹配报告",
         "",
         f"- 目录项总数: {len(anchors)}",
         f"- matched_count: {len(matched)}",
+        f"- deterministic_matched_count: {len(deterministic_matched)}",
+        f"- llm_matched_count: {len(llm_matched)}",
+        f"- llm_called_count: {len(llm_called)}",
         f"- source_missing_count: {len(source_missing)}",
         f"- blocking_unmatched_count: {len(blocking_unmatched)}",
         f"- invalid_count: {len(invalid)}",
@@ -1421,10 +1638,43 @@ async def run(args: argparse.Namespace) -> Path:
         )
         logger.info("人工复核模式 | anchor_plan=%s，已跳过全部 LLM 调用", existing_path)
     else:
+        deterministic_anchors, _ = resolve_deterministic_anchors(
+            catalog, global_candidates
+        )
+        llm_candidate_sets: list[list[dict[str, Any]]] = []
+        for catalog_index, item in enumerate(catalog, start=1):
+            locked = deterministic_anchors[catalog_index - 1]
+            if locked is not None:
+                llm_candidate_sets.append(list(locked.get("top_candidates") or []))
+                continue
+            window_candidates, window = candidates_in_deterministic_window(
+                catalog_index, global_candidates, deterministic_anchors
+            )
+            selected = top_candidates_for_item(
+                item,
+                catalog_index,
+                len(catalog),
+                window_candidates,
+                args.top_k_candidates,
+                body_start_line,
+                line_count,
+            )
+            for candidate in selected:
+                candidate["candidate_window"] = window
+            llm_candidate_sets.append(selected)
+        deterministic_matched_count = sum(
+            bool(anchor and anchor.get("matched")) for anchor in deterministic_anchors
+        )
+        logger.info(
+            "锚点分阶段匹配 | deterministic_matched_count=%d llm_required_count=%d",
+            deterministic_matched_count,
+            len(catalog) - deterministic_matched_count,
+        )
         raw_dir = ensure_dir(output.parent / "raw_anchors")
         anchors = await generate_anchors(
             catalog,
-            candidate_sets,
+            llm_candidate_sets,
+            deterministic_anchors,
             raw_dir=raw_dir,
             book_stem=book_stem,
             body_start_line=body_start_line,
