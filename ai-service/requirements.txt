@@ -87,7 +87,6 @@ langgraph-prebuilt==1.0.8
 langgraph-sdk==0.2.15
 langsmith==0.7.22
 lazy-loader==0.5
-lightrag-hku==1.4.12
 loguru==0.7.2
 lxml==5.1.0
 magika==1.0.2
@@ -137,7 +136,6 @@ pydantic-settings==2.12.0
 pydantic_core==2.41.5
 pydub==0.25.1
 Pygments==2.20.0
-# lightrag-hku server (WebUI auth) 依赖 PyJWT；环境若误装同名老 jwt 包会导致 jwt.encode 缺失、/auth-status 500
 PyJWT>=2.8.0,<3.0.0
 pylatexenc==2.10
 pymilvus==2.6.11
@@ -156,8 +154,6 @@ python-multipart==0.0.22
 pytz==2026.1.post1
 PyYAML==6.0.1
 qwen-vl-utils==0.0.14
-# Editable install with no version control (raganything==1.2.9)
--e /data/metahuman_work/RAG-Anything
 regex==2026.3.32
 reportlab==4.4.10
 requests==2.33.0

@@ -22,7 +22,6 @@ from app.services.revise_llm import (
     _has_any_formula_marker,
     _extract_latex_formulas,
     LATEX_FORMULA_PATTERN,
-    convert_math_sentence_to_voice,
 )
 
 def _mock_llm_stream(text: str):
@@ -567,15 +566,6 @@ class TestConvertFormulaToVoiceIntegration:
 
         print(f"输出: {result}\n")
         assert r"$\sqrt{x^2 + y^2}$" not in result
-
-class TestConvertMathSentenceToVoice:
-    """Test the convert_math_sentence_to_voice function."""
-
-    @pytest.mark.skip("LLM integration test - requires running Ollama")
-    @pytest.mark.asyncio
-    async def test_convert_math_sentence_with_symbols(self):
-        """Should convert math symbols using LLM (requires running Ollama)."""
-        pass
 
 class TestFormulaConversionWithOperators:
     """Test formula conversion with operator translation (from actual logs)."""

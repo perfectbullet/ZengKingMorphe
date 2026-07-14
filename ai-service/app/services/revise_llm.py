@@ -1,7 +1,5 @@
 """
-LaTeX formula / math sentence → voice-friendly text conversion service.
-
-把数学公式、含数学符号的句子转换为适合 TTS 朗读的中文口语文本。
+LaTeX formula → voice-friendly text conversion service.
 
 设计要点：
 - LLM 客户端由 ``get_voice_conversion_llm()`` 内部按需创建并缓存，调用方不再传递 llm。
@@ -92,23 +90,6 @@ FORMULA_ONLY_PROMPT = r'''
 请严格遵守以上风格，直接输出转换结果，不要任何解释，也不要包含反斜杠、$ 符号或任何 LaTeX 命令。
 '''
 
-MATH_SENTENCE_PROMPT = """你负责把包含数学符号的中文句子改写为适合 TTS 播报的口语文本。
-
-要求：
-1. 保持原数学含义，不新增推理，不解释过程。
-2. 把数学符号读成中文：+读作加，-读作减，×读作乘以，/读作除以，=读作等于，≤读作小于等于，≥读作大于等于，≠读作不等于，≈读作约等于。
-3. 常见集合和运算符也要口语化：∈读作属于，∪读作并集，∩读作交集，√读作根号，∞读作无穷，π读作派。
-4. 不输出 LaTeX 命令、反斜杠、美元符号或 Markdown。
-5. 只输出转换后的口语文本，不要解释。
-
-示例：
-输入：x²-2=0
-输出：x 的平方减 2 等于 0
-
-输入：x∈R
-输出：x 属于 R
-"""
-
 # =============================================================================
 # LLM client (cached)
 # =============================================================================
@@ -145,9 +126,6 @@ def get_voice_conversion_llm() -> ChatOpenAI:
 
 FORMULA_CONVERSION_TIMEOUT_SECONDS = float(
     os.getenv("FORMULA_CONVERSION_TIMEOUT_SECONDS", "8")
-)
-MATH_SENTENCE_CONVERSION_TIMEOUT_SECONDS = float(
-    os.getenv("MATH_SENTENCE_CONVERSION_TIMEOUT_SECONDS", "8")
 )
 
 # =============================================================================
@@ -370,47 +348,7 @@ async def convert_formula_to_voice(text: str) -> str:
         return _remove_boxed_wrappers(text) if text else text
 
 
-async def convert_math_sentence_to_voice(text: str) -> str:
-    """把含数学符号的中文句子改写为口语文本（``ainvoke``，带超时）。
-
-    best-effort：失败 ``logger.exception`` 后返回原文。
-    """
-    if not text or not text.strip():
-        return text
-
-    messages = [
-        {"role": "system", "content": MATH_SENTENCE_PROMPT},
-        {"role": "user", "content": text},
-    ]
-
-    try:
-        llm = get_voice_conversion_llm()
-        response = await asyncio.wait_for(
-            llm.ainvoke(messages),
-            timeout=MATH_SENTENCE_CONVERSION_TIMEOUT_SECONDS,
-        )
-        result = (response.content or "").strip()
-
-        if not result:
-            logger.warning(
-                f"[convert_math_sentence_to_voice] Empty conversion result, fallback to original text | input={text[:300]!r}"
-            )
-            return text
-
-        logger.info(
-            f"[convert_math_sentence_to_voice] Math sentence converted | input={text[:100]!r} | output={result[:100]!r}"
-        )
-        return result
-
-    except Exception:
-        logger.exception(
-            f"[convert_math_sentence_to_voice] Failed, fallback to original text | input={text[:500]!r}"
-        )
-        return text
-
-
 __all__ = [
     "get_voice_conversion_llm",
     "convert_formula_to_voice",
-    "convert_math_sentence_to_voice",
 ]
