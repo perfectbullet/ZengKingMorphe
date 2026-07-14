@@ -45,23 +45,15 @@ from app.services.query_classifier import (
     get_query_classifier,
 )
 from app.services.realtime_intent_heuristic import heuristic_realtime_category
-from app.services.math_intent_heuristic import (
-    HEURISTIC_PROMOTABLE_LABELS,
-    heuristic_concept_explain,
-    is_math_problem,
-)
-from app.services.math_agent_service import MathAgentService
 from app.services.conversation.conversation_helpers import (
     time_node,
     heuristic_complexity,
     build_generation_messages,
-    build_math_generation_messages,
     resolve_prefer_zh_output,
     resolve_target_year_from_query,
     clean_user_query,
     prefer_zh_output,
 )
-from app.services.word_to_latex import word_to_latex
 from app.services.conversation.intent_routing import (
     AnswerMode,
     ROUTE_BRANCH_CONCEPT_HIT,
@@ -124,9 +116,7 @@ def _append_asr_latex_review_record(
         os.close(file_descriptor)
 
 # 启发式联网补位：不覆盖问候、噪声、数学题；也不重复覆盖已是实时的分支
-_REALTIME_HEURISTIC_SKIP_LABELS = frozenset(
-    {"greeting", "noise", "math_problem", "realtime_query"}
-)
+_REALTIME_HEURISTIC_SKIP_LABELS = frozenset({"greeting", "noise", "realtime_query"})
 
 # =============================================================================
 # Employee Config Resolvers
@@ -977,17 +967,9 @@ class ConversationNodes:
             query = (state.get("user_query") or "").strip()
 
             classification_label = state.get("classification_label")
-            is_math = bool(state.get("is_math_problem", False))
-            answer_mode = state.get("answer_mode")
-
-            # 任一数学信号命中即转换：LLM 标签、启发式置位的 is_math_problem、
-            # 或路由表解析出的 answer_mode==math_llm。三者并存是为了兼容
-            # classify_query_type 内部不同路径写入的分类结论。
-            should_convert = (
-                classification_label == "math_problem"
-                or is_math
-                or answer_mode == AnswerMode.MATH_LLM.value
-            )
+            # 数学专项标签已移除；该兼容节点保留在图中，但不再触发 ASR→LaTeX
+            # 或数学模型专用处理。
+            should_convert = False
 
             state["asr_latex_should_run"] = should_convert
             state["asr_latex_converted"] = False
@@ -995,8 +977,7 @@ class ConversationNodes:
 
             logger.info(
                 f"ASR→LaTeX decision after classification | should_run={should_convert} | "
-                f"classification_label={classification_label} | is_math_problem={is_math} | "
-                f"answer_mode={answer_mode} | query={query[:200]!r}"
+                f"classification_label={classification_label} | query={query[:200]!r}"
             )
 
             if not should_convert:
@@ -1194,12 +1175,11 @@ class ConversationNodes:
                 getattr(settings, "dynamic_context_memory_enabled", True)
             )
 
-            is_math_label = raw_label == "math_problem"
-            math_heuristic_hit = is_math_problem(query)
-            is_math = is_math_label or math_heuristic_hit
-
-            math_followup = _is_math_followup_query(query)
-            complete_math = _is_complete_math_query(query, is_math)
+            # 数学题不再有独立标签或专用上下文路径，和其它知识问题一样使用
+            # 普通 standalone-query resolver。
+            is_math = False
+            math_followup = False
+            complete_math = False
 
             # 默认值：未消歧时 effective_query == 原始 query
             state["rewritten_query"] = query
@@ -1220,8 +1200,7 @@ class ConversationNodes:
 
                 logger.info(
                     f"Context resolution skipped for complete math problem: "
-                    f"query={query[:80]!r}, raw_label={raw_label}, "
-                    f"math_heuristic_hit={math_heuristic_hit}"
+                    f"query={query[:80]!r}, raw_label={raw_label}"
                 )
                 return state
 
@@ -1428,48 +1407,13 @@ class ConversationNodes:
                     reason="general",
                 )
 
-            # 数学题 / 教材概念题 启发式补位
-            #
-            # 背景：qwen3:14b 这类小分类器对没有"求/解/计算"动词的几何应用题，
-            # 以及长篇教材式提问存在系统性漏判，会落到 general_knowledge / chit_chat /
-            # other 这类兜底标签上。这里只对 LLM 弱标签（HEURISTIC_PROMOTABLE_LABELS）
-            # 补位，保护 LLM 已识别准确的强分类。
-            if result.label in HEURISTIC_PROMOTABLE_LABELS:
-                if is_math_problem(resolved):
-                    logger.info(
-                        "Math heuristic promoted to math_problem: "
-                        f"prev_label={result.label}, prev_confidence={result.confidence}, "
-                        f"query={resolved[:80]}"
-                    )
-                    result = ClassificationResult(
-                        label="math_problem",
-                        confidence=result.confidence,
-                        reason="heuristic_math",
-                    )
-                elif heuristic_concept_explain(resolved):
-                    logger.info(
-                        "Concept heuristic promoted to concept_explain: "
-                        f"prev_label={result.label}, prev_confidence={result.confidence}, "
-                        f"query={resolved[:80]}"
-                    )
-                    result = ClassificationResult(
-                        label="concept_explain",
-                        confidence=result.confidence,
-                        reason="heuristic_concept",
-                    )
-
             if (
                 _training_rag_backend() == "lightrag_file"
                 and _training_rag_enabled()
                 and _training_rag_domain_gate_enabled()
             ):
                 matched_keyword = _match_training_trigger_keyword(resolved or query)
-                if matched_keyword and result.label not in {
-                    "math_problem",
-                    "realtime_query",
-                    "greeting",
-                    "noise",
-                }:
+                if matched_keyword and result.label not in {"realtime_query", "greeting", "noise"}:
                     logger.info(
                         "Industrial training domain gate promoted to industrial_training_query: "
                         f"keyword={matched_keyword}, prev_label={result.label}, "
@@ -1480,17 +1424,6 @@ class ConversationNodes:
                         confidence=result.confidence,
                         reason=f"industrial_training_keyword:{matched_keyword}",
                     )
-                elif result.label == "concept_explain":
-                    logger.info(
-                        "Generic concept_explain downgraded to general_knowledge by training domain gate: "
-                        f"query={resolved[:80]}"
-                    )
-                    result = ClassificationResult(
-                        label="general_knowledge",
-                        confidence=result.confidence,
-                        reason="generic_concept_not_industrial_training",
-                    )
-
             logger.info(
                 f"LLM classification: label={result.label}, confidence={result.confidence}, "
                 f"reason={result.reason}, query={resolved[:50]}"
@@ -1564,10 +1497,6 @@ class ConversationNodes:
                     )
                     state["realtime_detect_reason"] = f"llm:{result.confidence}"
                     state["intent"] = "general_query"
-                # 数学题
-                case "math_problem":
-                    state["is_math_problem"] = True
-                    state["intent"] = "general_query"
                 # 无效噪声
                 case "noise":
                     state["intent"] = "noise"
@@ -1579,7 +1508,7 @@ class ConversationNodes:
                             "citations": [],
                         }
                     )
-                # 默认通用查询（含 concept_explain / english_query / general_knowledge / chit_chat / other）
+                # 默认通用查询（含 industrial_training_query / english_query / general_knowledge / chit_chat / other）
                 case _:
                     state["is_realtime_query"] = False
                     state["intent"] = "general_query"
@@ -2525,40 +2454,7 @@ class ConversationNodes:
             else:
                 effective_mode = answer_mode
 
-            if (
-                state.get("is_math_problem", False)
-                or effective_mode == AnswerMode.MATH_LLM.value
-            ):
-                # 数学题：数学模型推理，明确不走 RAG
-                streaming_llm, model_name = self.workflow.get_math_streaming_llm(state)
-
-                # 运行模式/语言来自 state（由 conversation_service.get_math_streaming_llm
-                # 写入），不再从 ChatOpenAI 对象上 getattr 一个并不存在的 mode 属性。
-                math_runtime_mode = state.get("math_runtime_mode") or "direct"
-                math_runtime_mode = MathAgentService.validate_runtime_mode(
-                    math_runtime_mode
-                )
-                math_runtime_lang = state.get("math_runtime_lang") or "zh"
-
-                messages = build_math_generation_messages(
-                    state,
-                    include_system_prompt=MathAgentService.is_direct_mode(
-                        math_runtime_mode
-                    ),
-                    math_runtime_mode=math_runtime_mode,
-                    math_runtime_lang=math_runtime_lang,
-                )
-                state["streaming_llm"] = streaming_llm
-                state["streaming_messages"] = messages
-                state["streaming_type"] = "math_llm"
-                state["math_runtime_mode"] = math_runtime_mode
-                logger.info(
-                    f"Streaming configured: type=math_llm, model={model_name}, "
-                    f"runtime_mode={math_runtime_mode}, answer_mode={answer_mode}, "
-                    f"query={state['user_query'][:50]}..., "
-                    f"message_count={len(messages)}"
-                )
-            elif effective_mode == AnswerMode.RAG_WITH_FALLBACK.value:
+            if effective_mode == AnswerMode.RAG_WITH_FALLBACK.value:
                 employee_config = state.get("employee_config", {})
                 training_rag_enabled = _training_rag_enabled()
                 rag_disabled = _resolve_employee_rag_disabled(employee_config)

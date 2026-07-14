@@ -4,9 +4,7 @@
 单例模式设计，通过 get_query_classifier() 获取实例。
 
 分类类别:
-- math_problem: 数学题目解答
 - industrial_training_query: 工训教材 / 工业实训知识库问题
-- concept_explain: 概念解释
 - greeting: 问候语
 - english_query: 英语问题
 - realtime_query: 联网检索
@@ -150,9 +148,7 @@ def augment_dialog_with_persisted_turns(
 # 分类结果模型
 # =============================================================================
 ClassificationLabel = Literal[
-    "math_problem",
     "industrial_training_query",
-    "concept_explain",
     "greeting",
     "english_query",
     "realtime_query",
@@ -184,9 +180,7 @@ class QueryClassifier:
 
     # 分类标签名称映射
     LABEL_NAMES = {
-        "math_problem": "数学题目解答",
         "industrial_training_query": "工业实训知识库问答",
-        "concept_explain": "概念解释",
         "greeting": "问候语",
         "english_query": "英语问题",
         "realtime_query": "联网检索",
@@ -201,36 +195,22 @@ class QueryClassifier:
 
 ## 分类类别及定义
 
-### 1. math_problem（数学题目解答）
-用户需要求解具体的数学题目，需要通过计算、推导、证明等步骤得出答案。
+### 1. industrial_training_query（工训教材 / 工业实训知识库问题）
+用户询问当前工训教材、工业实训知识库中的专业知识、工艺、材料、工具、设备、步骤、参数、缺陷或检测方法。
 **特征**：
-- 包含数学操作词：求、计算、解、证明、推导、化简、判断、比较
-- 包含具体数字、参数或变量
-- 需要计算过程或推理步骤
-- 可能包含引导语如"你帮我..."、"请..."
+- 问题主题明确属于已导入的工业实训教材或专业工艺领域。
+- 即使问题形式是“什么是”“有什么区别”“如何操作”，只要内容是教材专业知识，也归入本类。
+- 不要因为“解释”“定义”等提问形式就归入独立概念标签；这类非工训问题归入 general_knowledge。
 
 **示例**：
-- "求不等式 x²-5x+6<0 的解集"
-- "计算 lim(x→0) sin(x)/x 的值"
-- "证明：若 a>b>0，则 1/a < 1/b"
-- "你帮我求一下这个方程的解"
+- "平铺珐琅工艺的基本制作流程是什么？"
+- "透明釉料和不透明釉料有什么区别？"
+- "掐丝珐琅烧制时为什么会出现气泡？"
+- "金属底板处理要注意哪些问题？"
 
-### 2. concept_explain（概念解释）
-用户询问概念、定义、定理、公式的含义，不需要计算求解。
-**特征**：
-- 包含概念性词汇：什么是、是什么、介绍、解释、定义、概念、含义
-- 不涉及具体计算或求解
-- 旨在理解知识点
-- **包括**："你帮我讲解..."、"请介绍一下..."等引导语
+数学求解、数学概念、普通概念解释和非工训专业问题统一归入 general_knowledge。
 
-**示例**：
-- "什么是函数"
-- "介绍一下等差数列"
-- "导数的几何意义是什么"
-- "你帮我讲解一下二项式定理"
-- "请介绍一下集合的概念"
-
-### 3. greeting（问候语）
+### 2. greeting（问候语）
 用户进行打招呼、问候、礼貌用语。
 **特征**：
 - 简短的问候词汇
@@ -243,7 +223,7 @@ class QueryClassifier:
 - "嗨"
 - "hello"
 
-### 4. english_query（英语问题）
+### 3. english_query（英语问题）
 问题主体是英文的知识问答或英语学习问题。
 **特征**：
 - 问题主体是英文
@@ -256,7 +236,7 @@ class QueryClassifier:
 - "Who wrote the play Hamlet?"
 - "What is the Pythagorean theorem?"
 
-### 5. realtime_query（需要联网检索）
+### 4. realtime_query（需要联网检索）
 用户询问**需要新数据/事件信息**的问题，如天气、突发新闻、实时行情、路况拥堵、当下日期/时刻等。
 **特征**：
 - 时间敏感：今天、明天、最近、刚才、现在、当前、最新（专指数据/事件本身的更新）
@@ -284,10 +264,10 @@ class QueryClassifier:
 - "今天是几月几号"
 - "最近哪些人被提名为副总理"（事件性人事变动）
 
-### 6. general_knowledge（常识性问题）
+### 5. general_knowledge（常识性问题）
 用户询问一般知识、百科、常识类问题，不需要联网获取最新信息。
 **特征**：
-- 百科类知识、地理、政治制度、历史事实、科学常识
+- 百科类知识、地理、政治制度、历史事实、科学常识、数学题和通用概念解释
 - 中长期稳定、不会快速变化的事实
 - **包含**：「某国家 / 国际组织当前在任的高级职务由谁担任」（中长期稳定，由 LLM
   自身知识作答；只有当用户显式询问「最近的人事变动 / 新任命事件」时才走 realtime）
@@ -301,7 +281,7 @@ class QueryClassifier:
 - "目前国务院总理是哪位领导"
 - "现任联合国秘书长是谁"
 
-### 7. chit_chat（闲聊/对话）
+### 6. chit_chat（闲聊/对话）
 用户进行日常对话、表达情绪、与AI闲聊，不属于有效提问。
 **特征**：
 - 社交性对话
@@ -316,7 +296,7 @@ class QueryClassifier:
 - "谢谢你"
 - "你是谁"
 
-### 8. noise（噪声/无效输入）
+### 7. noise（噪声/无效输入）
 完全无效的内容，包括多种子类型：
 - ASR识别错误产生的无意义文本
 - **旁人对话**（非对AI说话）："对"、"是的"、"好的"、"嗯"、"不是"、"不对"
@@ -331,7 +311,7 @@ class QueryClassifier:
 - "你看那个接口返回的是什么"
 - "好的好的好的"（重复多次）
 
-### 9. other（其他）
+### 8. other（其他）
 无法归入以上任何类别的问题。
 
 ---
@@ -347,7 +327,7 @@ class QueryClassifier:
 }
 ```
 
-**label 取值**：`math_problem`, `concept_explain`, `greeting`, `realtime_query`, `general_knowledge`, `chit_chat`, `noise`, `other`
+**label 取值**：`industrial_training_query`, `greeting`, `english_query`, `realtime_query`, `general_knowledge`, `chit_chat`, `noise`, `other`
 
 **重要约束（为了可维护的下游路由）**：
 - 当 `label` 为 `realtime_query` 时，`reason` 必须返回下面枚举之一（全小写英文）：
@@ -440,8 +420,14 @@ class QueryClassifier:
 
         try:
             data = json.loads(text)
+            label = data.get("label", "other")
+            if label not in ClassificationLabel.__args__:
+                logger.warning(
+                    "Classifier returned an unsupported label; falling back to general_knowledge"
+                )
+                label = "general_knowledge"
             return ClassificationResult(
-                label=data.get("label", "other"),
+                label=label,
                 confidence=data.get("confidence", "low"),
                 reason=data.get("reason", ""),
             )

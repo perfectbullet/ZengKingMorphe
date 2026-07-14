@@ -15,9 +15,6 @@
 - ``GENERAL_LLM``：直接通用 LLM 回答，**不走 RAG，不走联网检索**。
   典型场景：闲聊、问候、英语问答、常识性问题、其它非领域查询。
 
-- ``MATH_LLM``：使用数学模型推理（支持 vLLM/Qwen 等多种后端），**不走 RAG**。
-  典型场景：具体数学题求解（含计算、证明、推导）。
-
 - ``WEB_SEARCH``：先联网检索 → LLM 基于检索结果回答。
   典型场景：天气、新闻、行情、路况、当下时事等时间敏感查询。
 
@@ -28,11 +25,9 @@
 
 业务路由表（INTENT_TO_ANSWER_MODE）
 ====================================
-按用户需求映射 QueryClassifier 的 9 种标签：
+按用户需求映射 QueryClassifier 的 8 种标签：
 
-    数学题目（math_problem）         → MATH_LLM
     工训教材 / 工业实训知识库问题（industrial_training_query）→ RAG_WITH_FALLBACK
-    通用概念解释（concept_explain）      → GENERAL_LLM
     问候（greeting）                  → GENERAL_LLM
     英语问答（english_query）         → GENERAL_LLM
     常识性问题（general_knowledge）   → GENERAL_LLM
@@ -73,7 +68,6 @@ class AnswerMode(str, Enum):
 
     RAG_WITH_FALLBACK = "rag_with_fallback"
     GENERAL_LLM = "general_llm"
-    MATH_LLM = "math_llm"
     WEB_SEARCH = "web_search"
     PRESET_RESPONSE = "preset_response"
 
@@ -84,12 +78,8 @@ class AnswerMode(str, Enum):
 # - 新增标签：只在这里追加键值对；
 # - 修改路由：只改本表的 value，不改 conversation_nodes / generate_answer。
 INTENT_TO_ANSWER_MODE: Mapping[str, AnswerMode] = {
-    # 数学题目 → 数学模型推理，不走 RAG
-    "math_problem": AnswerMode.MATH_LLM,
     # 工训教材 / 工业实训知识库问题 → RAG（无召回时降级 LLM）
     "industrial_training_query": AnswerMode.RAG_WITH_FALLBACK,
-    # 通用概念解释 → 通用 LLM，不进入工训 LightRAG
-    "concept_explain": AnswerMode.GENERAL_LLM,
     # 问候 / 英语 / 常识 / 闲聊 → 直接通用 LLM
     "greeting": AnswerMode.GENERAL_LLM,
     "english_query": AnswerMode.GENERAL_LLM,
@@ -117,7 +107,7 @@ def resolve_answer_mode(classification_label: str | None) -> AnswerMode:
 
     Args:
         classification_label: ``QueryClassifier`` 返回的分类标签
-            （如 ``"math_problem"`` / ``"concept_explain"`` 等）。
+            （如 ``"industrial_training_query"`` / ``"general_knowledge"`` 等）。
             ``None`` 或空串表示未分类。
 
     Returns:
@@ -138,7 +128,6 @@ def resolve_answer_mode(classification_label: str | None) -> AnswerMode:
 # 与 ``AnswerMode`` 解耦，避免图结构泄漏到 enum 层。
 ROUTE_BRANCH_GREETING = "greeting"  # 含 noise，走 generate_answer 直出
 ROUTE_BRANCH_REALTIME = "realtime"  # 走 web_search 后再 generate_answer
-ROUTE_BRANCH_MATH = "math"          # 走 generate_answer（数学模型）
 ROUTE_BRANCH_RAG = "rag"            # 走 concept_retrieval → evaluate_complexity / generate_answer（training RAG / legacy raganything）
 ROUTE_BRANCH_GENERAL = "general"    # 走 generate_answer（通用 LLM，不走 RAG）
 # 概念检索后的路由分支
@@ -152,7 +141,6 @@ ROUTE_BRANCH_CONCEPT_MISS = "concept_miss"   # 未命中人工概念库，走 ev
 ANSWER_MODE_TO_ROUTE: Mapping[AnswerMode, str] = {
     AnswerMode.RAG_WITH_FALLBACK: ROUTE_BRANCH_RAG,
     AnswerMode.GENERAL_LLM: ROUTE_BRANCH_GENERAL,
-    AnswerMode.MATH_LLM: ROUTE_BRANCH_MATH,
     AnswerMode.WEB_SEARCH: ROUTE_BRANCH_REALTIME,
     AnswerMode.PRESET_RESPONSE: ROUTE_BRANCH_GREETING,
 }
