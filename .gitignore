@@ -801,3 +801,8 @@ tools/call_online_mineru/tools/call_online_mineru/output/08宝石镶嵌工艺/im
 tools/call_online_mineru/tools/call_online_mineru/output/08宝石镶嵌工艺/images/ff20a521020c689f6e8e68fb4e91930049c1ecaa1f43e1342feb498527f1347d.jpg
 tools/call_online_mineru/tools/call_online_mineru/output/*
 ai-service/data/lightrag_industrial_training_enamel_debug_bak20260712/*
+ai-service/data/*
+tools/manual_concepts_lightrag/markdown_graph/prompts/entity_type/*
+tools/manual_concepts_lightrag/.env_math
+tools/manual_concepts_lightrag/.env.bak.20260711_171431
+ai-service/config/industrial_training_hot_words copy.txt

@@ -5,7 +5,7 @@
 # =============================================
 
 # 配置变量
-REMOTE_HOST="192.168.8.233"
+REMOTE_HOST="192.168.100.233"
 # REMOTE_HOST="10.1.0.100"
 REMOTE_USER="zenking"
 
@@ -68,7 +68,6 @@ rsync ${RSYNC_OPTS} -e "ssh -i ${SSH_KEY}" \
     --include="Dockerfile" \
     --include="requirements.txt" \
     --include=".dockerignore" \
-    --include=".env" \
     --include="DEFAULT_SENSITIVE_WORDS.txt" \
     --include="run_stream_test.sh" \
     --exclude="*" \

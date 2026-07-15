@@ -17,11 +17,11 @@ ai-service/data/math_concepts/05_selective3_math_concepts_definition_blocks_with
 从仓库根目录执行：
 
 ```bash
-cd ZengKingMorphe
+cd ZengKingMorphe/
 
 python tools/math_concepts_review/app.py \
   --jsonl-path ai-service/data/math_concepts/05_selective3_math_concepts_definition_blocks_with_concept_name_20260630.jsonl \
-  --host 127.0.0.1 \
+  --host 0.0.0.0 \
   --port 8766
 ```
 
