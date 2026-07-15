@@ -333,7 +333,8 @@ def _safe_preview(value: Any, max_text: int, max_depth: int = 2) -> Any:
 def _append_jsonl(path: Path, record: dict[str, Any]) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8") as handle:
+        # 上游响应中偶尔会携带不可编码的孤立代理字符；调试日志不能因此影响请求。
+        with path.open("a", encoding="utf-8", errors="backslashreplace") as handle:
             handle.write(json.dumps(record, ensure_ascii=False) + "\n")
     except Exception as exc:
         logger.warning(f"RAG debug append failed | path={path} | error={exc}")
@@ -1014,12 +1015,12 @@ def _build_query_param(
     from lightrag.base import QueryParam
 
     user_prompt = (
-        "请使用简体中文回答。请优先依据当前检索到的工训教材上下文作答，"
+        "请使用简体中文回答。请优先依据当前检索到的教材上下文作答，"
         "不要使用教材外常识补全。若上下文同时包含 Knowledge Graph Data 和 Document Chunks，"
         "请优先依据 Document Chunks 中的教材原文；实体和关系只作为辅助线索。"
         "可以对多个相关片段进行归纳整理，但不要加入上下文没有支持的新步骤、新参数、新材料或新结论。"
         "若检索上下文没有覆盖问题核心内容，再明确说明“当前知识库资料不足”。"
-        # "不要出现“书中”、“教材”、“如图”、“图xxx”、“章/节”、“文中”、“材料”、“资料”等与资料库强相关的引导性文案"
+        "不要出现“根据知识库资料”,“根据上下文材料”,“根据文档内容”,“根据上下文资料”等与资料库强相关的引导性文案"
         if prefer_zh_output
         else "Answer in English. Prefer grounding your answer in the retrieved industrial-"
         "training textbook context and do not fill gaps with outside knowledge. If the "

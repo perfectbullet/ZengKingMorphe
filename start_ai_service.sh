@@ -16,7 +16,8 @@ HOST="0.0.0.0"
 PORT=8100
 PID_FILE="$SERVICE_DIR/.ai_service.pid"
 LOG_FILE="$SERVICE_DIR/logs/ai_service.log"
-UVICORN_ARGS="--reload --log-level info"
+# 仅监视 Python 源码，避免配置目录存在非 UTF-8 文件名时 watchfiles 崩溃。
+UVICORN_ARGS="--reload --reload-dir app --log-level info"
 
 # 颜色输出
 RED='\033[0;31m'
@@ -141,10 +142,10 @@ start_service() {
     # ── 依赖服务健康检查 ──
     log_info "检查依赖服务..."
     local failed=0
-    check_port 192.168.8.233 27017 "MongoDB"       || failed=$((failed+1))
-    check_port 192.168.8.233 9200  "ElasticSearch" || failed=$((failed+1))
-    check_port 192.168.8.233 19530 "Milvus"        || failed=$((failed+1))
-    check_port 192.168.8.233 7687  "Neo4j"         || failed=$((failed+1))
+    check_port 192.168.100.233 27017 "MongoDB"       || failed=$((failed+1))
+    check_port 192.168.100.233 9200  "ElasticSearch" || failed=$((failed+1))
+    check_port 192.168.100.233 19530 "Milvus"        || failed=$((failed+1))
+    check_port 192.168.100.233 7687  "Neo4j"         || failed=$((failed+1))
     # check_port 192.168.8.231 11434 "Ollama"        || failed=$((failed+1))
 
     if [ $failed -gt 0 ]; then

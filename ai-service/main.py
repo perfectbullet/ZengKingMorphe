@@ -38,6 +38,10 @@ UVICORN_RELOAD_EXCLUDES = [
     ".git/*",
 ]
 
+# 仅监听 Python 源码目录，避免配置/教材目录中的历史非 UTF-8 文件名使
+# watchfiles 在路径解码阶段崩溃。修改 main.py 或配置后可手动重启服务。
+UVICORN_RELOAD_DIRS = ["app"]
+
 
 async def _prewarm_raganything() -> None:
     """
@@ -194,6 +198,7 @@ if __name__ == "__main__":
         port=settings.api_port,
         workers=settings.api_workers,
         reload=settings.debug,
+        reload_dirs=UVICORN_RELOAD_DIRS,
         reload_excludes=UVICORN_RELOAD_EXCLUDES,
         log_level="warning"
     )
