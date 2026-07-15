@@ -12,14 +12,13 @@
         → preprocess_query → classify_query_type → resolve_context_query → finalize_classification → post_classification_preprocess
         → [条件分支: greeting/noise?]   → generate_answer
         → [条件分支: realtime?]          → web_search → generate_answer
-        → [条件分支: math?]              → generate_answer（数学模型；ASR→LaTeX 已在上一个节点完成）
+        → [条件分支: math?]              → generate_answer（数学模型）
         → [条件分支: rag (concept)?]     → evaluate_complexity → generate_answer（RAGAnything）
         → [条件分支: general?]           → generate_answer（通用 LLM，不走 RAG）
         → save_conversation → END
 
-注：post_classification_preprocess 负责“分类后”的 ASR→LaTeX 转换——先由
-classify_query_type 的 LLM 分类器判定是否为数学题，再统一调用 word_to_latex，
-避免原先 preprocess_query 中 is_math_problem 启发式漏判排列组合题。
+注：preprocess_query 在分类前执行确定性的工训术语归一化；
+post_classification_preprocess 保留为工作流兼容钩子，不再执行 ASR→LaTeX 转换。
 
 意图 → 回答路径的映射统一维护在
 ``app/services/conversation/intent_routing.py``（INTENT_TO_ANSWER_MODE）。

@@ -620,7 +620,11 @@ _STATE_DEFAULTS: ConversationState = {
     "team_id": None,
     # ── 输出语言偏好 ──
     "prefer_zh_output": True,
-    # ── ASR→LaTeX 分类后转换状态 ──
+    # ── 工训术语归一化及后置兼容状态 ──
+    "industrial_term_normalized": False,
+    "industrial_term_before": None,
+    "industrial_term_after": None,
+    "industrial_term_matches": [],
     "asr_latex_should_run": False,
     "asr_latex_converted": False,
     "query_preprocessed": False,
@@ -866,7 +870,7 @@ async def generate_openai_stream_v1(
     think_tag_buffer = ThinkTagBuffer()  # 用于过滤 think 标签
 
     # 结束块模板：usage 字段会在最终发送 done 前由 _update_finish_chunk_metadata
-    # 用 final_user_query（ASR→LaTeX 转换后的文本）重新计算，此处仅用原文占位。
+    # 用 final_user_query（完成前置归一化后的文本）重新计算，此处仅用原文占位。
     finish_chunk_data = _build_finish_chunk_data(
         chat_id, created, SERVER_MODEL, original_user_query
     )
@@ -875,7 +879,7 @@ async def generate_openai_stream_v1(
     raw_token_index = 0
 
     # user_query chunk 延迟到 post_classification_preprocess 节点之后保存，确保
-    # 返回的是 ASR→LaTeX 转换后的文本；若 workflow 在此前退出（敏感词 break / 异常），
+    # 返回的是完成前置归一化后的文本；若 workflow 在此前退出（敏感词 break / 异常），
     # 由收尾兜底保存原文，保证前端一定能收到 user_query chunk。
     user_query_chunk_saved = False
 
@@ -940,9 +944,9 @@ async def generate_openai_stream_v1(
     ) -> None:
         """保存 user_query chunk（仅一次）。
 
-        display_user_query 为 post_classification_preprocess 之后的展示文本（含 LaTeX）；
-        original_user_message 始终保留原始 ASR 文本，便于排查；
-        query_preprocessed 标识是否发生过实际转换。
+        display_user_query 为 post_classification_preprocess 之后的展示文本；
+        original_user_message 始终保留请求中的原始用户文本；
+        query_preprocessed 标识是否发生过实际预处理。
         """
         nonlocal chunk_sequence, user_query_chunk_saved
 
@@ -996,10 +1000,9 @@ async def generate_openai_stream_v1(
             # 同步输出语言偏好（preprocess_query 节点会设置此值）
             prefer_zh_output = current_state.get("prefer_zh_output", prefer_zh_output)
 
-        # post_classification_preprocess 完成后保存 user_query chunk（含 ASR→LaTeX 转换结果）。
-        # 必须在 current_state.update(state_update) 之后，确保取到转换后的 user_query。
-        # 时机说明：ASR→LaTeX 现在发生在分类后（post_classification_preprocess），
-        # chunk 保存也后移到此处，保证前端拿到的是转换后的题干而非原始中文口语。
+        # post_classification_preprocess 完成后保存 user_query chunk（含前置术语归一化结果）。
+        # 必须在 current_state.update(state_update) 之后，确保取到最终 user_query。
+        # chunk 保存位于此处，保证前端拿到完成前置归一化后的 user_query。
         if node_name == "post_classification_preprocess" and not user_query_chunk_saved:
             display_user_query = current_state.get("user_query") or original_user_query
             query_preprocessed = bool(

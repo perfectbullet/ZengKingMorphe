@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "rules": [
+    {"id": "lost_wax_casting", "enabled": true, "canonical": "失蜡铸造", "variants": ["湿蜡铸造"], "match_mode": "direct", "priority": 100},
+    {"id": "vernier_caliper", "enabled": true, "canonical": "游标卡尺", "variants": ["油标卡尺"], "match_mode": "direct", "priority": 100},
+    {"id": "metal_file", "enabled": true, "canonical": "金工锉", "variants": ["精工锉"], "match_mode": "direct", "priority": 100},
+    {"id": "model_finishing", "enabled": true, "canonical": "执模", "variants": ["直磨"], "match_mode": "direct", "priority": 100},
+    {"id": "jewelry", "enabled": true, "canonical": "首饰", "variants": ["手饰"], "match_mode": "direct", "priority": 100},
+    {"id": "lost_wax", "enabled": true, "canonical": "失蜡", "variants": ["湿蜡", "施蜡"], "match_mode": "contextual", "priority": 80, "context": {"any": ["铸造", "蜡模", "石膏", "灌浆", "焙烧", "脱蜡", "首饰", "金属"], "all": [], "none": []}},
+    {"id": "enamel", "enabled": true, "canonical": "珐琅", "variants": ["法郎", "发廊"], "match_mode": "contextual", "priority": 80, "context": {"any": ["釉料", "烧制", "烧艳", "掐丝", "胎体", "金属胎", "首饰", "珠宝", "工艺"], "all": [], "none": ["货币", "法国货币", "汇率", "理发", "理发店", "剪发", "烫发"]}},
+    {"id": "casting", "enabled": true, "canonical": "浇铸", "variants": ["浇筑"], "match_mode": "contextual", "priority": 80, "context": {"any": ["铸造", "金属", "合金", "熔炼", "蜡模", "石膏", "首饰", "模具"], "all": [], "none": ["混凝土", "水泥", "建筑", "楼板", "施工", "桥梁"]}},
+    {"id": "enamel_firing", "enabled": true, "canonical": "烧艳", "variants": ["烧焰"], "match_mode": "contextual", "priority": 80, "context": {"any": ["珐琅", "釉料", "烧制", "掐丝", "胎体", "金属胎", "首饰"], "all": [], "none": []}},
+    {"id": "wax_spruing", "enabled": true, "canonical": "种蜡", "variants": ["重蜡"], "match_mode": "contextual", "priority": 80, "context": {"any": ["蜡模", "铸造", "首饰", "焊接", "蜡道", "浇道", "树干", "种蜡树"], "all": [], "none": []}},
+    {"id": "wax_tree", "enabled": true, "canonical": "蜡树", "variants": ["蜡术"], "match_mode": "contextual", "priority": 80, "context": {"any": ["蜡模", "铸造", "首饰", "焊接", "蜡道", "浇道", "树干", "种蜡树"], "all": [], "none": []}}
+  ]
+}

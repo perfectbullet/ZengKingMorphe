@@ -16,11 +16,9 @@ LangGraph 对话工作流节点实现。
 """
 
 import hashlib
-import json
 import os
 import time
 from datetime import datetime
-from pathlib import Path
 import re
 
 import httpx
@@ -54,6 +52,9 @@ from app.services.conversation.conversation_helpers import (
     clean_user_query,
     prefer_zh_output,
 )
+from app.services.conversation.industrial_term_normalizer import (
+    normalize_industrial_terms,
+)
 from app.services.conversation.intent_routing import (
     AnswerMode,
     ROUTE_BRANCH_CONCEPT_HIT,
@@ -79,41 +80,8 @@ from app.services.wall_clock_authority import (
     skip_web_use_authoritative_beijing_wall_clock,
 )
 from app.utils.common import has_language_drift
-from app.utils.latex import normalize_latex_formulas
 
 logger = get_logger(__name__)
-
-ASR_LATEX_REVIEW_JSONL_PATH = (
-    Path(__file__).resolve().parents[4]
-    / "tools"
-    / "asr_latex_review"
-    / "asr_to_latex_after_20260629.jsonl"
-)
-
-
-def _append_asr_latex_review_record(
-    before: str,
-    after: str,
-    duration: float,
-) -> None:
-    record = {
-        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "type": "ASR→LaTeX after classification",
-        "duration": f"{duration:.3f}s",
-        "before": before,
-        "after": after,
-    }
-    line = (json.dumps(record, ensure_ascii=False) + "\n").encode("utf-8")
-    ASR_LATEX_REVIEW_JSONL_PATH.parent.mkdir(parents=True, exist_ok=True)
-    file_descriptor = os.open(
-        ASR_LATEX_REVIEW_JSONL_PATH,
-        os.O_APPEND | os.O_CREAT | os.O_WRONLY,
-        0o644,
-    )
-    try:
-        os.write(file_descriptor, line)
-    finally:
-        os.close(file_descriptor)
 
 # 启发式联网补位：不覆盖问候、噪声、数学题；也不重复覆盖已是实时的分支
 _REALTIME_HEURISTIC_SKIP_LABELS = frozenset({"greeting", "noise", "realtime_query"})
@@ -893,16 +861,12 @@ class ConversationNodes:
     # -------------------------------------------------------------------------
     async def preprocess_query(self, state: ConversationState) -> ConversationState:
         """
-        查询预处理节点 — 仅在分类之前完成基础清洗与语言偏好检测。
-
-        注意：ASR→LaTeX 转换已从这里移除，改由 ``post_classification_preprocess``
-        节点在 ``classify_query_type`` 之后执行。原先依赖 ``is_math_problem``
-        启发式决定是否转换，会漏掉“次品 / 测试 / 方法数”这类排列组合题；现在先让
-        LLM 分类器判定为 math_problem，再统一转换，避免启发式漏判。
+        查询预处理节点 — 在分类前完成基础清洗、工训术语归一化与语言偏好检测。
 
         本节点只做：
         1. 查询清洗：移除前导标点符号
-        2. 语言偏好：根据用户查询判断中/英文输出
+        2. 工训术语归一化：只替换 JSON 中明确配置的错误词
+        3. 语言偏好：根据最终查询判断中/英文输出
 
         Args:
             state: Current conversation state
@@ -918,14 +882,51 @@ class ConversationNodes:
             query_changed = cleaned != query
             if query_changed:
                 logger.info(f"Query cleaned: before={query!r}, after={cleaned!r}")
-                state["user_query"] = cleaned
-                query = cleaned
+            query = cleaned
 
-            # 2. 输出语言偏好
+            # 2. 只按配置中的精确错误词做一次性归一化，供后续分类/检索统一使用。
+            normalization_result = normalize_industrial_terms(query)
+            state["industrial_term_normalized"] = normalization_result.applied
+            if normalization_result.applied:
+                query = normalization_result.normalized
+                state["industrial_term_before"] = normalization_result.original
+                state["industrial_term_after"] = normalization_result.normalized
+                state["industrial_term_matches"] = [
+                    {
+                        "rule_id": match.rule_id,
+                        "source": match.source,
+                        "target": match.target,
+                        "start": match.start,
+                        "end": match.end,
+                        "priority": match.priority,
+                    }
+                    for match in normalization_result.matches
+                ]
+                logger.info(
+                    "Industrial term normalization applied | "
+                    f"before={normalization_result.original[:200]!r} | "
+                    f"after={normalization_result.normalized[:200]!r} | "
+                    f"matches={[{'rule_id': match.rule_id, 'source': match.source, 'target': match.target, 'start': match.start, 'end': match.end} for match in normalization_result.matches]}"
+                )
+            else:
+                state["industrial_term_before"] = None
+                state["industrial_term_after"] = None
+                state["industrial_term_matches"] = []
+            state["user_query"] = query
+            state["query_preprocessed"] = bool(
+                state.get("query_preprocessed")
+                or query_changed
+                or normalization_result.applied
+            )
+
+            # 3. 输出语言偏好必须基于归一化后的最终 query。
             state["prefer_zh_output"] = prefer_zh_output(query)
 
-            logger.info(
-                f"preprocess_query basic done | query_changed={query_changed} | query={query[:200]!r}"
+            logger.debug(
+                "preprocess_query done | "
+                f"query_changed={query_changed} | "
+                f"industrial_term_normalized={normalization_result.applied} | "
+                f"query={query[:200]!r}"
             )
 
         return state
@@ -933,112 +934,14 @@ class ConversationNodes:
     async def post_classification_preprocess(
         self, state: ConversationState
     ) -> ConversationState:
-        """
-        分类后预处理节点 — 在 ``classify_query_type`` 之后执行 ASR→LaTeX 转换。
-
-        设计动机：
-            原先 ASR→LaTeX 放在 ``preprocess_query`` 里，靠 ``is_math_problem``
-            启发式决定是否转换。但“次品 / 测试 / 方法数”这类排列组合题不带
-            “求 / 解 / 计算”等动词，会被启发式漏判，导致 LLM 分类器已经正确
-            识别为 math_problem、数学模型却仍拿到原始中文口语题干。
-
-            本节点改为读取分类结果再决定是否转换，彻底替代前置启发式判断，
-            且不再扩大 ``is_math_problem`` 正则。
-
-        职责：
-            1. 读取 ``classify_query_type`` 写入的 classification_label /
-               is_math_problem / answer_mode；
-            2. 判定是否需要 ASR→LaTeX 转换；
-            3. 命中则调用 ``word_to_latex``，成功后更新 ``state["user_query"]``；
-            4. 写入 asr_latex_* / query_preprocessed 状态字段，供前端 chunk
-               保存与 debug 使用。
-
-        容错原则：
-            - 转换失败 / 返回空 / 与原文相同，一律保留原 query，不中断主流程；
-            - 使用 ``logger.exception`` 打印堆栈，便于排查。
-
-        Args:
-            state: Current conversation state（已包含分类结果）
-
-        Returns:
-            更新后的状态（数学题的 user_query 已转换为 LaTeX 友好文本）
-        """
+        """分类后的轻量兼容钩子，不再执行 ASR→LaTeX 转换。"""
         async with time_node("post_classification_preprocess", state):
-            query = (state.get("user_query") or "").strip()
-
-            classification_label = state.get("classification_label")
-            # 数学专项标签已移除；该兼容节点保留在图中，但不再触发 ASR→LaTeX
-            # 或数学模型专用处理。
-            should_convert = False
-
-            state["asr_latex_should_run"] = should_convert
+            state["asr_latex_should_run"] = False
             state["asr_latex_converted"] = False
-            state["query_preprocessed"] = False
-
-            logger.info(
-                f"ASR→LaTeX decision after classification | should_run={should_convert} | "
-                f"classification_label={classification_label} | query={query[:200]!r}"
+            state["query_preprocessed"] = bool(
+                state.get("query_preprocessed")
+                or state.get("industrial_term_normalized")
             )
-
-            if not should_convert:
-                logger.info(
-                    f"ASR→LaTeX skipped after classification | not math problem | query={query[:200]!r}"
-                )
-                return state
-
-            if not query:
-                logger.info("ASR→LaTeX skipped after classification | empty query")
-                return state
-
-            word_to_latex_started_at = time.perf_counter()
-            try:
-                converted = await word_to_latex(query)
-            except Exception:
-                duration = time.perf_counter() - word_to_latex_started_at
-                logger.exception(
-                    f"ASR→LaTeX failed after classification, keep original query | "
-                    f"duration={duration:.3f}s | query={query[:200]!r}"
-                )
-                return state
-
-            duration = time.perf_counter() - word_to_latex_started_at
-
-            if not converted or not converted.strip():
-                logger.info(
-                    f"ASR→LaTeX skipped after classification | empty converted result | query={query[:200]!r}"
-                )
-                return state
-
-            # word_to_latex 偶发输出 `$ C $` 这类定界符内侧带空格的行内公式，
-            # 这里统一用 normalize_latex_formulas 兜底清理（内部已调用
-            # clean_latex_formula_spaces，故此处不再单独调用，避免重复处理）。
-            converted = normalize_latex_formulas(converted.strip())
-
-            if not converted:
-                logger.info(
-                    f"ASR→LaTeX skipped after classification | empty normalized result | query={query[:200]!r}"
-                )
-                return state
-
-            if converted == query:
-                logger.info(
-                    f"ASR→LaTeX no-op after classification | query unchanged | query={query[:200]!r}"
-                )
-                return state
-
-            logger.info(
-                f"ASR→LaTeX after classification: \n\nbefore={query}, \n\nafter={converted}, \n\nduration={duration:.3f}s"
-            )
-            try:
-                _append_asr_latex_review_record(query, converted, duration)
-            except Exception:
-                logger.exception("Failed to append ASR→LaTeX review record")
-
-            state["user_query"] = converted
-            state["asr_latex_converted"] = True
-            state["query_preprocessed"] = True
-            state["asr_latex_before"] = query
-            state["asr_latex_after"] = converted
 
         return state
 
@@ -1296,8 +1199,8 @@ class ConversationNodes:
           - classification_* / answer_mode / intent / is_math_problem / sources 写入；
           - 日历直出答案兜底。
 
-        明确不做：aresolve_standalone_query（已在 resolve_context_query 完成）、
-        word_to_latex（统一在 post_classification_preprocess）。
+        明确不做：aresolve_standalone_query（已在 resolve_context_query 完成）
+        和 ASR→LaTeX 转换（工训工作流不再执行）。
 
         Args:
             state: Current conversation state（已含原始分类 + 消歧结果）
