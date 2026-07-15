@@ -4,31 +4,56 @@ Test web search functionality.
 import asyncio
 import sys
 import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+
+# Always load the service-local environment file, regardless of the directory
+# from which this diagnostic script is invoked.
+load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=True)
+
+TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
+WEB_SEARCH_ENABLED = os.getenv("WEB_SEARCH_ENABLED", "true").lower() in {
+    "1", "true", "yes", "on"
+}
+WEB_SEARCH_TIMEOUT = int(os.getenv("WEB_SEARCH_TIMEOUT", "5"))
+WEB_SEARCH_MAX_RESULTS = int(os.getenv("WEB_SEARCH_MAX_RESULTS", "5"))
+WEB_SEARCH_ONLY_FOR_REALTIME = os.getenv(
+    "WEB_SEARCH_ONLY_FOR_REALTIME", "false"
+).lower() in {"1", "true", "yes", "on"}
 
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 try:
-    from app.core.config import settings
+
     from langchain_community.tools.tavily_search import TavilySearchResults
     
     async def test_tavily_search():
         """Test Tavily search tool."""
         
         # Check if API key is configured
-        if not settings.tavily_api_key:
+        if not TAVILY_API_KEY:
             print("❌ TAVILY_API_KEY not configured in .env file")
             return
-        
-        print(f"✅ Tavily API Key found: {settings.tavily_api_key[8:]}...")
-        print(f"✅ Web search enabled: {settings.web_search_enabled}")
-        print(f"✅ Max results: {settings.web_search_max_results}")
-        
+
+        if not WEB_SEARCH_ENABLED:
+            print("ℹ️  WEB_SEARCH_ENABLED=false; web search test skipped")
+            return
+
+        print(f"✅ Tavily API Key found: {TAVILY_API_KEY[8:]}...")
+        print(f"✅ Web search enabled: {WEB_SEARCH_ENABLED}")
+        print(f"✅ Search timeout: {WEB_SEARCH_TIMEOUT}s")
+        print(f"✅ Max results: {WEB_SEARCH_MAX_RESULTS}")
+        print(f"✅ Only for realtime: {WEB_SEARCH_ONLY_FOR_REALTIME}")
+
         # Initialize search tool
         try:
             search_tool = TavilySearchResults(
-                k=settings.web_search_max_results,
+                max_results=WEB_SEARCH_MAX_RESULTS,
                 search_depth="basic",  # 添加此参数
+                tavily_api_key=TAVILY_API_KEY,
                 )
             print("✅ TavilySearchResults initialized successfully")
         except Exception as e:
@@ -49,7 +74,10 @@ try:
             
             try:
                 # Perform search
-                results = await search_tool.ainvoke({"query": query})
+                results = await asyncio.wait_for(
+                    search_tool.ainvoke({"query": query}),
+                    timeout=WEB_SEARCH_TIMEOUT,
+                )
 
                 if not results:
                     print("⚠️  No results returned")
@@ -82,7 +110,7 @@ try:
                         print("      - API key is expired or invalid")
                         print("      - API key has been revoked")
                         print("      - Incorrect API key format")
-                        print(f"\n   📋 Current key prefix: {settings.tavily_api_key[:12]}...")
+                        print(f"\n   📋 Current key prefix: {TAVILY_API_KEY[:12]}...")
                     continue
 
                 print(f"✅ Found {len(results)} results:")
@@ -99,7 +127,7 @@ try:
                             print("      - API key is expired or invalid")
                             print("      - API key has been revoked")
                             print("      - Incorrect API key format")
-                            print(f"\n   📋 Current key prefix: {settings.tavily_api_key[:12]}...")
+                            print(f"\n   📋 Current key prefix: {TAVILY_API_KEY[:12]}...")
                             has_auth_error = True
                             break
 
@@ -108,7 +136,7 @@ try:
 
                 # Display results
                 valid_count = 0
-                for i, result in enumerate(results[:settings.web_search_max_results], 1):
+                for i, result in enumerate(results[:WEB_SEARCH_MAX_RESULTS], 1):
                     # Skip non-dict results (e.g., exceptions or error strings)
                     if not isinstance(result, dict):
                         print(f"\n📄 Result {i}: ⚠️  Invalid result type: {type(result).__name__}")
