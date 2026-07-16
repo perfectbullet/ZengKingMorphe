@@ -263,7 +263,7 @@ class ChatStreamV1Tester:
 
         # 打印完整响应（截断显示）
         if full_content:
-            preview = full_content[:200] + "..." if len(full_content) > 200 else full_content
+            preview = full_content[:2000] + "..." if len(full_content) > 2000 else full_content
             logger.info(f"响应预览: {preview}")
 
         return self.results

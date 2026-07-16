@@ -17,7 +17,7 @@ PORT=8100
 PID_FILE="$SERVICE_DIR/.ai_service.pid"
 LOG_FILE="$SERVICE_DIR/logs/ai_service.log"
 # 仅监视 Python 源码，避免配置目录存在非 UTF-8 文件名时 watchfiles 崩溃。
-UVICORN_ARGS="--reload --reload-dir app --log-level info"
+UVICORN_ARGS="--log-level info"
 
 # 颜色输出
 RED='\033[0;31m'
