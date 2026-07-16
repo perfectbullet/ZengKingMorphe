@@ -41,7 +41,7 @@ echo "=========================================="
 
 # 同步 docker-compose.yml
 echo ""
-echo "[1/2] 同步 docker-compose.yml..."
+echo "[step1] 同步 docker-compose.yml..."
 rsync ${RSYNC_OPTS} -e "ssh -i ${SSH_KEY}" \
     --include="docker-compose.yml" \
     --include="start_ai_service.sh" \
@@ -52,7 +52,7 @@ rsync ${RSYNC_OPTS} -e "ssh -i ${SSH_KEY}" \
 
 # 同步 ai-service 目录（Python 代码 + Dockerfile + requirements.txt + .dockerignore）
 echo ""
-echo "[2/2] 同步 ai-service 目录..."
+echo "[step2] 同步 ai-service 目录..."
 rsync ${RSYNC_OPTS} -e "ssh -i ${SSH_KEY}" \
     --exclude="*.md" \
     --exclude="llama-rag-sdk" \
@@ -94,7 +94,7 @@ rsync ${RSYNC_OPTS} -e "ssh -i ${SSH_KEY}" \
     
 # 同步 requirements.txt
 echo ""
-echo "[3/3] 同步并更新依赖..."
+echo "[step3] 同步并更新依赖..."
 rsync ${RSYNC_OPTS} -e "ssh -i ${SSH_KEY}" \
     --include="requirements.txt" \
     --exclude="*" \
@@ -103,10 +103,18 @@ rsync ${RSYNC_OPTS} -e "ssh -i ${SSH_KEY}" \
 
 
 echo ""
-echo "[4/4] 同步 zj-aha-vllm-v100"
+echo "[step4] 同步 zj-aha-vllm-v100"
 rsync ${RSYNC_OPTS} -e "ssh -i ${SSH_KEY}" \
     "${LOCAL_DIR}/zj-aha-vllm-v100/" \
     "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_DIR}/zj-aha-vllm-v100/"
+
+echo ""
+echo "[step5] 同步 tools/industrial_asr_corrections_review"
+rsync ${RSYNC_OPTS} -e "ssh -i ${SSH_KEY}" \
+    --exclude="*.pyc" \
+    --exclude="*.pyo" \
+    "${LOCAL_DIR}/tools/industrial_asr_corrections_review/" \
+    "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_DIR}/tools/industrial_asr_corrections_review/"
 
 
 # 远程重启 AI 服务（仅 -r 时执行）

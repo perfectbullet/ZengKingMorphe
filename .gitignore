@@ -806,3 +806,4 @@ tools/manual_concepts_lightrag/markdown_graph/prompts/entity_type/*
 tools/manual_concepts_lightrag/.env_math
 tools/manual_concepts_lightrag/.env.bak.20260711_171431
 ai-service/config/industrial_training_hot_words copy.txt
+ai-service/app/services/conversation/bak_industrial_asr_corrections/*.json

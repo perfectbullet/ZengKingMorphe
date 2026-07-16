@@ -1,0 +1,24 @@
+# book_id: 01
+# book_name: 珐琅工艺
+# subject: enamel
+# domain: industrial_training
+# category: jewelry_craft
+# version: v1
+
+平铺珐琅工艺 | alias=平铺珐琅 | type=工艺 | chapter=3.1,4.2
+掐丝珐琅工艺 | alias=掐丝珐琅 | type=工艺
+画珐琅工艺 | alias=画珐琅 | type=工艺
+高温大明火珐琅 | alias=高温珐琅,大明火珐琅 | type=工艺
+冷珐琅 | alias=低温珐琅 | type=工艺
+珐琅釉料 | alias=珐琅釉,釉料 | type=材料
+透明釉料 | alias=透明釉 | type=材料
+不透明釉料 | alias=不透明釉 | type=材料
+法国釉料 | alias=法国珐琅釉料,法国产釉料 | type=材料产地
+日本釉料 | alias=日本珐琅釉料,日本产釉料 | type=材料产地
+国产釉料 | alias=国产珐琅釉料,中国釉料 | type=材料产地
+金底板 | alias=黄金底板,金胎 | type=金属底板
+银底板 | alias=银胎 | type=金属底板
+铜底板 | alias=铜胎 | type=金属底板
+熔化温度 | alias=烧成温度,烧制温度 | type=参数
+显色原理 | alias=颜色原理 | type=原理
+检测方法 | alias=质量检测,好坏判断标准 | type=方法
