@@ -115,7 +115,7 @@ def validate_config(config: dict) -> dict:
     for canonical, indexes in canonicals.items():
         if len(indexes) > 1:
             for index in indexes:
-                warnings.append(_issue(index, rules[index], "canonical", f"canonical 与其他规则重复：{canonical}"))
+                errors.append(_issue(index, rules[index], "canonical", f"canonical 重复，首次出现在第 {indexes[0] + 1} 条：{canonical}"))
     for variant, entries in variants.items():
         if len(entries) < 2:
             continue
@@ -200,9 +200,11 @@ def _rule_summary(index: int, rule: Any, validation: dict[str, Any]) -> dict[str
     }
 
 
-def _next_copy_id(config: dict[str, Any], source_id: Any) -> str:
-    existing = {rule.get("id") for rule in config.get("rules", []) if isinstance(rule, dict)}
-    base = f"{source_id or 'rule'}_copy"
+def _next_copy_value(config: dict[str, Any], field: str, source_value: Any) -> str:
+    existing = {
+        rule.get(field) for rule in config.get("rules", []) if isinstance(rule, dict)
+    }
+    base = f"{source_value or field}_copy"
     candidate, number = base, 2
     while candidate in existing:
         candidate = f"{base}{number}"
@@ -216,7 +218,7 @@ PAGE_HTML = """<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><me
 <div class="layout"><aside class="left-panel"><div class="left-toolbar"><div class="filters"><input id="search" placeholder="搜索 id、术语、variants、context"><select id="enabled-filter"><option value="all">全部启用状态</option><option value="enabled">仅启用</option><option value="disabled">仅禁用</option></select><select id="mode-filter"><option value="all">全部模式</option><option value="direct">direct</option><option value="contextual">contextual</option></select></div><div class="actions"><button id="new">新建规则</button><button id="copy">复制规则</button><button id="delete" class="danger">删除规则</button><button id="reload">从磁盘重新加载</button></div></div><div id="rules" class="rule-list"></div></aside>
 <main class="detail"><div id="empty">请选择或新建规则。</div><div id="editor" class="hidden"><div class="form"><label class="field">id<input id="id"></label><label class="field">enabled<input id="enabled-input" type="checkbox"></label><label class="field">canonical<input id="canonical"></label><label class="field">match_mode<select id="mode"><option value="direct">direct</option><option value="contextual">contextual</option></select></label><label class="field">priority<input id="priority" type="number" step="1"></label><label class="field full">variants（一行一个）<textarea id="variants"></textarea></label></div><section id="context" class="context"><h2>context</h2><div class="form"><label class="field">any（一行一个）<textarea id="context-any"></textarea></label><label class="field">all（一行一个）<textarea id="context-all"></textarea></label><label class="field full">none（一行一个）<textarea id="context-none"></textarea></label></div></section><div class="actions"><button id="save" class="primary">保存当前规则</button><button id="save-all" class="primary">保存全部</button><button id="validate">校验全部</button><button id="prev">上一条</button><button id="next">下一条</button><button id="download">下载 JSON</button></div><pre id="issues"></pre></div></main></div>
 <script>
-const state={config:null,validation:null,index:null,loaded:null,dirty:false};const $=id=>document.getElementById(id);const split=v=>[...new Set(v.split(/\\r?\\n/).map(x=>x.trim()).filter(Boolean))];
+const state={config:null,validation:null,index:null,loaded:null,dirty:false,isNew:false};const $=id=>document.getElementById(id);const split=v=>[...new Set(v.split(/\\r?\\n/).map(x=>x.trim()).filter(Boolean))];
 function msg(t,error=false){$('status').textContent=t;$('status').className=error?'bad':state.dirty?'dirty':''}function setDirty(v=true){state.dirty=v;msg(v?'有未保存修改':'已保存')}
 function stats(){const s=state.stats;$('version').textContent=s.version;$('total').textContent=s.rule_count;$('enabled').textContent=s.enabled_count;$('direct').textContent=s.direct_count;$('contextual').textContent=s.contextual_count;$('errors').textContent=s.error_count;$('warnings').textContent=s.warning_count}
 function matches(r){const q=$('search').value.trim().toLowerCase();const ef=$('enabled-filter').value,mf=$('mode-filter').value;if(ef==='enabled'&&!r.enabled||ef==='disabled'&&r.enabled||mf!=='all'&&r.match_mode!==mf)return false;return !q||[r.id,r.canonical,...(r.variants||[]),...Object.values((r.context)||{}).flat()].join(' ').toLowerCase().includes(q)}
@@ -226,12 +228,12 @@ function fill(rule){$('empty').classList.add('hidden');$('editor').classList.rem
 function toggleContext(){$('context').classList.toggle('hidden',$('mode').value==='direct')}
 async function load(){const r=await fetch('/api/config');if(!r.ok)throw Error(await r.text());const d=await r.json();state.config=d.config;state.validation=d.validation;state.stats=d.stats;state.rules=d.rules;$('path').textContent='当前文件：'+d.json_path;stats();renderList();showIssues()}
 function showIssues(){const all=[...(state.validation?.errors||[]),...(state.validation?.warnings||[])];$('issues').textContent=all.map(x=>(state.validation.errors.includes(x)?'错误':'警告')+' #'+(x.index===null?'-':x.index+1)+' ['+x.field+'] '+x.message).join('\\n')}
-async function open(i){if(state.dirty&&!confirm('当前规则有未保存修改，确定切换吗？'))return;state.index=i;fill(state.config.rules[i]);renderList()}
-async function saveCurrent(){if(state.index===null){msg('请先新建或选择规则',true);return}const r=await fetch('/api/rules/'+state.index,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(formRule())});if(!r.ok){msg('保存失败：'+await r.text(),true);return}await load();await open(state.index);msg('已保存')}
-async function saveAll(){if(state.index!==null)state.config.rules[state.index]=formRule();const r=await fetch('/api/config',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state.config)});if(!r.ok){msg('保存失败：'+await r.text(),true);return}await load();if(state.index!==null)fill(state.config.rules[state.index]);msg('已保存全部')}
-function newRule(){if(state.dirty&&!confirm('放弃当前未保存修改吗？'))return;state.config.rules.push({id:'',enabled:true,canonical:'',variants:[],match_mode:'direct',priority:100});state.index=state.config.rules.length-1;fill(state.config.rules[state.index]);setDirty(true);renderList()}
-function copyRule(){if(state.index===null)return;const r=structuredClone(formRule()),base=(r.id||'rule')+'_copy',ids=new Set(state.config.rules.map(x=>x.id));let id=base,n=2;while(ids.has(id)){id=base+n;n++}r.id=id;state.config.rules.splice(state.index+1,0,r);state.index++;fill(r);setDirty(true);renderList()}
-async function del(){if(state.index===null)return;const r=formRule();if(!confirm('确定删除规则「'+(r.canonical||'未命名')+'」吗？'))return;const res=await fetch('/api/rules/'+state.index,{method:'DELETE'});if(!res.ok){msg('删除失败：'+await res.text(),true);return}state.index=null;await load();msg('已删除')}
+async function open(i){if(state.dirty&&!confirm('当前规则有未保存修改，确定切换吗？'))return;state.isNew=false;state.index=i;fill(state.config.rules[i]);renderList()}
+async function saveCurrent(){if(state.index===null&&!state.isNew){msg('请先新建或选择规则',true);return}const isNew=state.isNew,oldIndex=state.index,rule=formRule(),url=isNew?'/api/rules':'/api/rules/'+oldIndex,method=isNew?'POST':'PUT';const r=await fetch(url,{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(rule)});if(!r.ok){msg('保存失败：'+await r.text(),true);return}const data=await r.json();const savedIndex=isNew?data.stats.rule_count-1:oldIndex;state.isNew=false;state.dirty=false;await load();await open(savedIndex);msg(isNew?'已新建并保存':'已保存')}
+async function saveAll(){if(state.isNew){await saveCurrent();return}if(state.index!==null)state.config.rules[state.index]=formRule();const r=await fetch('/api/config',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state.config)});if(!r.ok){msg('保存失败：'+await r.text(),true);return}await load();if(state.index!==null)fill(state.config.rules[state.index]);msg('已保存全部')}
+function newRule(){if(state.dirty&&!confirm('放弃当前未保存修改吗？'))return;state.isNew=true;state.index=null;fill({id:'',enabled:true,canonical:'',variants:[],match_mode:'direct',priority:100});setDirty(true);renderList()}
+function copyRule(){if(state.index===null||state.isNew)return;const r=structuredClone(formRule()),copyValue=(field,fallback)=>{const base=(r[field]||fallback)+'_copy',values=new Set(state.config.rules.map(x=>x[field]));let value=base,n=2;while(values.has(value)){value=base+n;n++}return value};r.id=copyValue('id','rule');r.canonical=copyValue('canonical','术语');state.isNew=true;state.index=null;fill(r);setDirty(true);renderList()}
+async function del(){if(state.isNew){if(confirm('确定放弃新建规则吗？')){state.isNew=false;state.index=null;$('editor').classList.add('hidden');$('empty').classList.remove('hidden');setDirty(false);renderList()}return}if(state.index===null)return;const r=formRule();if(!confirm('确定删除规则「'+(r.canonical||'未命名')+'」吗？'))return;const res=await fetch('/api/rules/'+state.index,{method:'DELETE'});if(!res.ok){msg('删除失败：'+await res.text(),true);return}state.index=null;await load();msg('已删除')}
 ['id','enabled-input','canonical','mode','priority','variants','context-any','context-all','context-none'].forEach(id=>$(id).addEventListener('input',()=>{toggleContext();setDirty()}));$('search').oninput=renderList;$('enabled-filter').onchange=renderList;$('mode-filter').onchange=renderList;$('save').onclick=saveCurrent;$('save-all').onclick=saveAll;$('validate').onclick=async()=>{const r=await fetch('/api/validate',{method:'POST'});state.validation=await r.json();state.stats.error_count=state.validation.errors.length;state.stats.warning_count=state.validation.warnings.length;stats();showIssues();renderList()};$('reload').onclick=async()=>{if(state.dirty&&!confirm('当前规则有未保存修改，确定重新加载吗？'))return;const r=await fetch('/api/reload',{method:'POST'});if(!r.ok){msg(await r.text(),true);return}state.index=null;await load();msg('已从磁盘重新加载')};$('new').onclick=newRule;$('copy').onclick=copyRule;$('delete').onclick=del;$('prev').onclick=()=>open(Math.max(0,(state.index??0)-1));$('next').onclick=()=>open(Math.min(state.config.rules.length-1,(state.index??-1)+1));$('download').onclick=()=>location.href='/api/export';window.addEventListener('beforeunload',e=>{if(state.dirty){e.preventDefault();e.returnValue=''}});window.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='s'){e.preventDefault();saveCurrent()}});load().catch(e=>msg('加载失败：'+e.message,true));
 </script></body></html>"""
 
@@ -310,7 +312,10 @@ def create_app(json_path: Path) -> FastAPI:
             if index < 0 or index >= len(rules):
                 raise HTTPException(status_code=404, detail="规则不存在")
             duplicated = copy.deepcopy(rules[index])
-            duplicated["id"] = _next_copy_id(candidate, duplicated.get("id"))
+            duplicated["id"] = _next_copy_value(candidate, "id", duplicated.get("id"))
+            duplicated["canonical"] = _next_copy_value(
+                candidate, "canonical", duplicated.get("canonical")
+            )
             rules.insert(index + 1, duplicated)
             payload = persist(candidate)
             payload["index"] = index + 1

@@ -5,6 +5,7 @@ import asyncio
 from pathlib import Path
 
 import pytest
+from fastapi import HTTPException
 
 
 APP_PATH = Path(__file__).parents[1] / "app.py"
@@ -81,6 +82,13 @@ def test_validate_valid_config_variant_equal_and_unknown_fields():
     assert review.validate_config(valid_config())["ok"]
     broken = valid_config(rules=[{"id": "a", "enabled": True, "canonical": "同词", "variants": ["同词"], "match_mode": "direct", "priority": 1}])
     assert any(item["field"] == "variants" for item in review.validate_config(broken)["errors"])
+    duplicate_canonical = valid_config(rules=[
+        {"id": "first", "enabled": True, "canonical": "重复术语", "variants": ["错误一"], "match_mode": "direct", "priority": 1},
+        {"id": "second", "enabled": True, "canonical": "重复术语", "variants": ["错误二"], "match_mode": "direct", "priority": 1},
+    ])
+    result = review.validate_config(duplicate_canonical)
+    assert not result["ok"]
+    assert sum(item["field"] == "canonical" for item in result["errors"]) == 2
 
 
 def test_api_page_config_rules_and_export(tmp_path):
@@ -101,8 +109,12 @@ def test_api_update_create_duplicate_delete_validate_reload(tmp_path):
     assert call(app, "/api/rules/{index}", "PUT", 0, rule)["config"]["rules"][0]["canonical"] == "更新术语"
     created = {"id": "new_rule", "enabled": True, "canonical": "新术语", "variants": ["新错误"], "match_mode": "direct", "priority": 1}
     assert call(app, "/api/rules", "POST", created)["stats"]["rule_count"] == 2
+    with pytest.raises(HTTPException) as duplicate_canonical:
+        call(app, "/api/rules", "POST", {**created, "id": "other_rule"})
+    assert duplicate_canonical.value.status_code == 400
     duplicated = call(app, "/api/rules/{index}/duplicate", "POST", 1)
     assert duplicated["config"]["rules"][2]["id"] == "new_rule_copy"
+    assert duplicated["config"]["rules"][2]["canonical"] == "新术语_copy"
     assert call(app, "/api/rules/{index}", "DELETE", 2)["stats"]["rule_count"] == 2
     assert call(app, "/api/validate", "POST")["ok"] is True
     path.write_text(json.dumps(valid_config(rules=[]), ensure_ascii=False), encoding="utf-8")

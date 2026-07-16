@@ -44,8 +44,8 @@ ai-service/app/services/conversation/industrial_asr_corrections.json
 - `contextual`：除精确命中外，还须根据 `context.any/all/none` 判断。
 - `priority`：确定性规则冲突的优先级。
 
-错误（例如重复 ID、空 canonical、非法 variants 或 contextual 缺少 context）会阻止保存。
-警告（例如重复 variant、direct/contextual 重复 variant、重复 canonical、禁用规则）仅展示，不自动合并或改名。
+错误（例如重复 ID、重复 canonical、空 canonical、非法 variants 或 contextual 缺少 context）会阻止保存。
+警告（例如重复 variant、direct/contextual 重复 variant、禁用规则）仅展示，不自动合并或改名。
 
 ## 保存与备份
 
