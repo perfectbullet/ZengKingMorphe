@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -166,8 +165,8 @@ def _load_rules_from_path(path: Path) -> tuple[_Rule, ...]:
     return rules
 
 
-@lru_cache(maxsize=1)
 def _load_rules() -> tuple[_Rule, ...]:
+    """每次查询从磁盘读取规则，使 JSON 修改无需重启服务即可生效。"""
     return _load_rules_from_path(RULES_PATH)
 
 

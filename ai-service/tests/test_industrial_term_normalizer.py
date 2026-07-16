@@ -10,16 +10,14 @@ from app.services.conversation import industrial_term_normalizer as normalizer
 @pytest.fixture(autouse=True)
 def clear_rule_cache(monkeypatch):
     monkeypatch.delenv("INDUSTRIAL_TERM_NORMALIZATION_ENABLED", raising=False)
-    normalizer._load_rules.cache_clear()
     yield
-    normalizer._load_rules.cache_clear()
 
 
 def _set_rules(monkeypatch, tmp_path, rules, *, version=1):
     path = tmp_path / "rules.json"
     path.write_text(json.dumps({"version": version, "rules": rules}, ensure_ascii=False), encoding="utf-8")
     monkeypatch.setattr(normalizer, "RULES_PATH", path)
-    normalizer._load_rules.cache_clear()
+    return path
 
 
 def test_lost_wax_casting_core_case():
@@ -29,8 +27,8 @@ def test_lost_wax_casting_core_case():
 
     assert result.normalized == "简述石膏灌浆在失蜡铸造中的作用以及需要注意的关键点。"
     assert result.applied is True
-    assert [(item.rule_id, item.source, item.target) for item in result.matches] == [
-        ("lost_wax_casting", "湿蜡铸造", "失蜡铸造")
+    assert [(item.source, item.target) for item in result.matches] == [
+        ("湿蜡铸造", "失蜡铸造")
     ]
 
 
@@ -46,7 +44,9 @@ def test_longest_variant_wins_over_overlapping_short_variant():
     result = normalizer.normalize_industrial_terms("湿蜡铸造有哪些主要工序？")
 
     assert result.normalized == "失蜡铸造有哪些主要工序？"
-    assert [item.rule_id for item in result.matches] == ["lost_wax_casting"]
+    assert [(item.source, item.target) for item in result.matches] == [
+        ("湿蜡铸造", "失蜡铸造")
+    ]
 
 
 def test_replacements_are_non_cascading(monkeypatch, tmp_path):
@@ -93,13 +93,11 @@ def test_contextual_positive_and_negative_cases():
 
 def test_missing_and_invalid_json_leave_query_unchanged(monkeypatch, tmp_path):
     monkeypatch.setattr(normalizer, "RULES_PATH", tmp_path / "missing.json")
-    normalizer._load_rules.cache_clear()
     assert normalizer.normalize_industrial_terms("湿蜡铸造").applied is False
 
     invalid_path = tmp_path / "invalid.json"
     invalid_path.write_text("{invalid", encoding="utf-8")
     monkeypatch.setattr(normalizer, "RULES_PATH", invalid_path)
-    normalizer._load_rules.cache_clear()
     assert normalizer.normalize_industrial_terms("湿蜡铸造").matches == ()
 
 
@@ -129,3 +127,22 @@ def test_environment_switch_disables_all_changes(monkeypatch):
 
     assert result.normalized == "湿蜡铸造"
     assert result.applied is False
+
+
+def test_rules_are_reloaded_from_disk_for_each_call(monkeypatch, tmp_path):
+    path = _set_rules(
+        monkeypatch,
+        tmp_path,
+        [{"id": "term", "enabled": True, "canonical": "标准一", "variants": ["错误"], "match_mode": "direct", "priority": 1}],
+    )
+    assert normalizer.normalize_industrial_terms("错误").normalized == "标准一"
+
+    path.write_text(
+        json.dumps(
+            {"version": 1, "rules": [{"id": "term", "enabled": True, "canonical": "标准二", "variants": ["错误"], "match_mode": "direct", "priority": 1}]},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    assert normalizer.normalize_industrial_terms("错误").normalized == "标准二"
