@@ -27,12 +27,7 @@ from app.services.conversation.intent_routing import (
     ROUTE_BRANCH_GENERAL,
     ROUTE_BRANCH_REALTIME,
 )
-from app.services.query_classifier import (
-    ClassificationResult,
-    augment_dialog_with_persisted_turns,
-    format_dialog_for_resolver,
-    get_query_classifier,
-)
+from app.services.query_classifier import ClassificationResult, get_query_classifier
 from app.services.realtime_intent_heuristic import heuristic_realtime_category
 
 logger = get_logger(__name__)
@@ -147,49 +142,17 @@ class ConversationNodes:
         return state
 
     async def resolve_context_query(self, state: ConversationState) -> ConversationState:
-        """Apply the same history-aware standalone-query resolution to every query."""
+        """Bypass context resolution and preserve the original user query."""
         async with time_node("resolve_context_query", state):
             query = (state.get("user_query") or "").strip()
             state["rewritten_query"] = query
             state["effective_query"] = query
             state["query_rewritten"] = False
-            context_messages = (state.get("context") or {}).get("messages") or []
-            dialog_text = format_dialog_for_resolver(context_messages)
-            if not dialog_text.strip():
-                state["context_dependence"] = "unrelated"
-                state["context_dependence_reason"] = "no_history"
-                state["context_resolution_mode"] = "none"
-                state["context_resolution_skipped_reason"] = "no_history"
-                return state
-            if not getattr(settings, "dynamic_context_memory_enabled", True):
-                state["context_dependence"] = "unrelated"
-                state["context_dependence_reason"] = "disabled"
-                state["context_resolution_mode"] = "none"
-                state["context_resolution_skipped_reason"] = "disabled"
-                return state
-            if state.get("session_id"):
-                try:
-                    db = await get_database()
-                    records = await db.conversations.find(
-                        {"session_id": state["session_id"]}, {"_id": 0, "user_query": 1, "ai_response": 1}
-                    ).sort("created_at", 1).limit(30).to_list(length=30)
-                    dialog_text = augment_dialog_with_persisted_turns(dialog_text, list(records), query)
-                except Exception as exc:
-                    logger.warning("Failed to supplement dialog context: %s", exc)
-            classifier = get_query_classifier()
-            related, reason = await classifier.aclassify_context_dependence(query, dialog_text)
-            state["context_dependence"] = "related" if related else "unrelated"
-            state["context_dependence_reason"] = reason
-            if not related:
-                state["context_resolution_mode"] = "none"
-                state["context_resolution_skipped_reason"] = "unrelated"
-                return state
-            resolved = (await classifier.aresolve_standalone_query(query, dialog_text)).strip() or query
-            state["rewritten_query"] = resolved
-            state["effective_query"] = resolved
-            state["query_rewritten"] = resolved != query
-            state["context_resolution_mode"] = "normal_resolver"
-            state["context_resolution_skipped_reason"] = None
+            state["context_dependence"] = "unrelated"
+            state["context_dependence_reason"] = "disabled"
+            state["context_resolution_mode"] = "none"
+            state["context_resolution_skipped_reason"] = "disabled"
+            logger.info("Context resolution disabled | query=%r", query[:120])
         return state
 
     async def finalize_classification(self, state: ConversationState) -> ConversationState:
