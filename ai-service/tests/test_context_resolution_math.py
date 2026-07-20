@@ -4,11 +4,8 @@
 验证重构后的核心不变量（上下文消歧从 classify_query_type 独立为
 resolve_context_query 节点）：
 
-1. 完整数学题跳过上下文消歧（不调用 aresolve_standalone_query /
-   aclassify_context_dependence，不改写题干）；
-2. 数学追问使用历史上下文（math_context_text 非空），但不调用普通 resolver
-   改写题干；
-3. 非数学追问走普通 resolver 生成 standalone query（query_rewritten=True）；
+1. 所有 Query 均停用上下文消歧（不调用 aresolve_standalone_query /
+   aclassify_context_dependence，不改写题干、不读取历史对话）；
 4. word_to_latex 只在 post_classification_preprocess 调用，
    resolve_context_query / finalize_classification 均不调用；
 5. workflow 顺序为 classify_query_type → resolve_context_query
@@ -25,7 +22,6 @@ from app.services.query_classifier import ClassificationResult
 from app.services.conversation.conversation_nodes import ConversationNodes
 
 GET_CLASSIFIER_PATH = "app.services.conversation.conversation_nodes.get_query_classifier"
-WORD_TO_LATEX_PATH = "app.services.conversation.conversation_nodes.word_to_latex"
 
 # 完整数学题样本（长题干，含"已知/求"，确保被判为完整题而非追问）。
 COMPLETE_MATH_QUERY = (
@@ -77,7 +73,7 @@ def nodes():
 
 
 # =============================================================================
-# 1. 完整数学题不调用 resolver
+# 1. 上下文消歧停用，完整数学题透传
 # =============================================================================
 @pytest.mark.asyncio
 async def test_complete_math_skips_resolver(monkeypatch, nodes):
@@ -100,8 +96,9 @@ async def test_complete_math_skips_resolver(monkeypatch, nodes):
 
     new_state = await nodes.resolve_context_query(state)
 
-    assert new_state["context_resolution_mode"] == "skipped_complete_math"
-    assert new_state["context_resolution_skipped_reason"] == "complete_math_problem"
+    assert new_state["context_resolution_mode"] == "none"
+    assert new_state["context_resolution_skipped_reason"] == "disabled"
+    assert new_state["context_dependence_reason"] == "disabled"
     assert new_state["context_dependence"] == "unrelated"
     assert new_state["query_rewritten"] is False
     assert new_state["effective_query"] == COMPLETE_MATH_QUERY
@@ -113,11 +110,11 @@ async def test_complete_math_skips_resolver(monkeypatch, nodes):
 
 
 # =============================================================================
-# 2. 数学追问使用上下文但不调用普通 resolver
+# 2. 数学追问不再使用历史上下文
 # =============================================================================
 @pytest.mark.asyncio
-async def test_math_followup_uses_context_without_resolver(monkeypatch, nodes):
-    """数学追问应设置 math_context_text，但不改写题干、不调用普通 resolver。"""
+async def test_math_followup_is_passed_through_without_context(monkeypatch, nodes):
+    """数学追问不读取历史上下文，也不改写题干。"""
     fake = _FakeClassifier(dependence=(True, "llm_yes"), resolved="不应被改写")
     monkeypatch.setattr(GET_CLASSIFIER_PATH, lambda: fake)
 
@@ -136,9 +133,10 @@ async def test_math_followup_uses_context_without_resolver(monkeypatch, nodes):
 
     new_state = await nodes.resolve_context_query(state)
 
-    assert new_state["context_resolution_mode"] == "math_context_only"
-    assert new_state["math_context_used"] is True
-    assert new_state["math_context_text"]  # 非空
+    assert new_state["context_resolution_mode"] == "none"
+    assert new_state["context_resolution_skipped_reason"] == "disabled"
+    assert new_state["math_context_used"] is False
+    assert new_state["math_context_text"] is None
     assert new_state["query_rewritten"] is False
     assert new_state["effective_query"] == MATH_FOLLOWUP_QUERY
     # 数学追问不调用普通 resolver，也不走相关性判定
@@ -147,11 +145,11 @@ async def test_math_followup_uses_context_without_resolver(monkeypatch, nodes):
 
 
 # =============================================================================
-# 3. 非数学追问可以调用 resolver
+# 3. 非数学追问也不调用 resolver
 # =============================================================================
 @pytest.mark.asyncio
-async def test_non_math_followup_uses_normal_resolver(monkeypatch, nodes):
-    """非数学追问走普通上下文消歧，调用 aresolve_standalone_query 改写。"""
+async def test_non_math_followup_is_passed_through(monkeypatch, nodes):
+    """非数学追问停用上下文消歧，保持原始 Query。"""
     fake = _FakeClassifier(
         dependence=(True, "llm_yes"),
         resolved="Qwen3-32B推理速度慢怎么优化",
@@ -173,63 +171,39 @@ async def test_non_math_followup_uses_normal_resolver(monkeypatch, nodes):
 
     new_state = await nodes.resolve_context_query(state)
 
-    assert new_state["context_resolution_mode"] == "normal_resolver"
-    assert new_state["query_rewritten"] is True
-    assert new_state["effective_query"] == "Qwen3-32B推理速度慢怎么优化"
-    assert fake.calls["aclassify_context_dependence"] == 1
-    assert fake.calls["aresolve_standalone_query"] == 1
+    assert new_state["context_resolution_mode"] == "none"
+    assert new_state["context_resolution_skipped_reason"] == "disabled"
+    assert new_state["query_rewritten"] is False
+    assert new_state["effective_query"] == NON_MATH_FOLLOWUP_QUERY
+    assert fake.calls["aclassify_context_dependence"] == 0
+    assert fake.calls["aresolve_standalone_query"] == 0
 
 
 # =============================================================================
-# 4. post_classification_preprocess 是数学格式转换唯一位置
+# 4. finalize_classification 复用首次分类
 # =============================================================================
 @pytest.mark.asyncio
-async def test_word_to_latex_only_in_post_classification(monkeypatch, nodes):
-    """resolve_context_query / finalize_classification 均不调用 word_to_latex，
-    仅 post_classification_preprocess 调用。"""
-    called = {"count": 0}
-
-    async def fake_word_to_latex(query):
-        called["count"] += 1
-        return f"\\({query}\\)"
-
-    monkeypatch.setattr(WORD_TO_LATEX_PATH, fake_word_to_latex)
-
+async def test_finalize_reuses_initial_classification_after_context_disabled(
+    monkeypatch, nodes
+):
+    """透传 Query 后，最终分类不应再次调用分类器。"""
     fake = _FakeClassifier(dependence=(True, "llm_yes"), resolved="x")
     monkeypatch.setattr(GET_CLASSIFIER_PATH, lambda: fake)
 
-    # resolve_context_query：完整数学题，不应调用 word_to_latex
-    state_resolve = {
-        "user_query": COMPLETE_MATH_QUERY,
-        "raw_classification_label": "math_problem",
-        "classification_label": "math_problem",
+    state = {
+        "user_query": "什么是掐丝珐琅？",
+        "raw_classification_label": "general_knowledge",
+        "raw_classification_confidence": "high",
+        "raw_classification_reason": "fake",
+        "classification_label": "general_knowledge",
         "context": {"messages": []},
         "sources": [],
     }
-    await nodes.resolve_context_query(state_resolve)
-    assert called["count"] == 0
+    await nodes.resolve_context_query(state)
+    await nodes.finalize_classification(state)
 
-    # finalize_classification：基于已消歧 state 做最终分类，不应调用 word_to_latex
-    state_finalize = {
-        "user_query": COMPLETE_MATH_QUERY,
-        "effective_query": COMPLETE_MATH_QUERY,
-        "raw_classification_label": "math_problem",
-        "raw_classification_confidence": "high",
-        "raw_classification_reason": "test",
-        "sources": [],
-    }
-    await nodes.finalize_classification(state_finalize)
-    assert called["count"] == 0
-
-    # post_classification_preprocess：数学题分类命中，应调用 word_to_latex
-    state_post = {
-        "user_query": COMPLETE_MATH_QUERY,
-        "classification_label": "math_problem",
-        "is_math_problem": True,
-        "answer_mode": "math_llm",
-    }
-    await nodes.post_classification_preprocess(state_post)
-    assert called["count"] == 1
+    assert state["effective_query"] == state["user_query"]
+    assert fake.calls["aclassify"] == 0
 
 
 # =============================================================================

@@ -38,8 +38,6 @@ from app.services.conversation.conversation_state import (
 )
 from app.services.query_classifier import (
     ClassificationResult,
-    augment_dialog_with_persisted_turns,
-    format_dialog_for_resolver,
     get_query_classifier,
 )
 from app.services.realtime_intent_heuristic import heuristic_realtime_category
@@ -160,10 +158,8 @@ def _training_rag_domain_gate_enabled() -> bool:
 
 
 def _training_trigger_keywords() -> list[str]:
-    raw = os.getenv(
-        "TRAINING_RAG_TRIGGER_KEYWORDS",
-        "珐琅,釉料,金属底板,掐丝,平铺珐琅,画珐琅,灰度绘,透空珐琅,内填珐琅,雕金珐琅,金箔,银箔,珐琅炉,首饰设计,烧制,底釉,背釉,透明釉料,不透明釉料",
-    )
+    raw ="珐琅,釉料,金属底板,掐丝,平铺珐琅,画珐琅,灰度绘,透空珐琅,内填珐琅,雕金珐琅,金箔,银箔,珐琅炉,首饰设计,烧制,底釉,背釉,透明釉料,不透明釉料,种蜡,首饰,镶嵌,失蜡,电镀,抛光,硬蜡,软蜡,绘制,车削,包镶,做旧"
+
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
@@ -1010,176 +1006,29 @@ class ConversationNodes:
 
     async def resolve_context_query(self, state: ConversationState) -> ConversationState:
         """
-        上下文消歧决策 — 独立判断本轮 query 是否需要上下文消歧，并据此改写。
+        上下文消歧节点当前停用，仅透传原始 Query。
 
-        三条分支（基于 classify_query_type 的原始分类结论 + 数学启发式）：
-          1. 完整数学题：跳过消歧。不调用 aclassify_context_dependence /
-             aresolve_standalone_query，不改写题干。数学格式转换统一交给
-             post_classification_preprocess，避免普通 resolver 顺手把
-             「a 向量」改写成 LaTeX。
-          2. 数学追问（「第二问怎么做 / 上面那题为什么错」）：允许使用历史上下文，
-             但不调用普通 resolver 改写题干，只把上下文存入 math_context_text，
-             供 math prompt 作为「对话上下文」使用。
-          3. 非数学问题：走普通上下文消歧 —— 先 aclassify_context_dependence
-             判定 related，related 时 aresolve_standalone_query 生成 standalone query。
-
-        写入字段：
-          - context_dependence / context_dependence_reason（兼容既有下游）
-          - context_resolution_mode / context_resolution_skipped_reason（拆分后新增）
-          - math_context_used / math_context_text（数学追问专用）
-          - rewritten_query / query_rewritten / effective_query
+        保留该节点和状态字段，以维持既有工作流拓扑及下游接口；不读取历史对话，
+        不调用上下文相关性分类或 standalone-query resolver，也不改写 Query。
 
         Args:
             state: Current conversation state（已含原始分类结论）
 
         Returns:
-            更新后的状态（已决定是否消歧并改写）
+            更新后的状态（原始 Query 透传）
         """
         async with time_node("resolve_context_query", state):
             query = (state.get("user_query") or "").strip()
-            raw_label = (
-                state.get("raw_classification_label")
-                or state.get("classification_label")
-            )
-            context_messages = (state.get("context") or {}).get("messages") or []
-            session_id = state.get("session_id")
-
-            # 格式化对话上下文（与旧 classify_query_type 一致：上下文不足 2 轮时
-            # 从 DB 补全持久化历史，确保 resolver 能看到完整上下文）
-            dialog_text = format_dialog_for_resolver(context_messages)
-            session_user_count = sum(
-                1
-                for m in context_messages
-                if m.get("role") == "user" and (m.get("content") or "").strip()
-            )
-            if session_id and session_user_count < 2:
-                try:
-                    db = await get_database()
-                    recent_turns = (
-                        await db.conversations.find(
-                            {"session_id": session_id},
-                            {"_id": 0, "user_query": 1, "ai_response": 1},
-                        )
-                        .sort("created_at", 1)
-                        .limit(30)
-                        .to_list(length=30)
-                    )
-                    dialog_text = augment_dialog_with_persisted_turns(
-                        dialog_text, list(recent_turns), query
-                    )
-                except Exception as e:
-                    logger.warning(
-                        f"Failed to merge persisted dialog for resolver: session_id={session_id}, error={e}",
-                        exc_info=True,
-                    )
-
-            classifier = get_query_classifier()
-            dynamic_ctx_enabled = bool(
-                getattr(settings, "dynamic_context_memory_enabled", True)
-            )
-
-            # 数学题不再有独立标签或专用上下文路径，和其它知识问题一样使用
-            # 普通 standalone-query resolver。
-            is_math = False
-            math_followup = False
-            complete_math = False
-
-            # 默认值：未消歧时 effective_query == 原始 query
             state["rewritten_query"] = query
             state["query_rewritten"] = False
             state["effective_query"] = query
+            state["context_dependence"] = "unrelated"
+            state["context_dependence_reason"] = "disabled"
+            state["context_resolution_mode"] = "none"
+            state["context_resolution_skipped_reason"] = "disabled"
             state["math_context_used"] = False
             state["math_context_text"] = None
-
-            # ── 分支 1：完整数学题 → 跳过上下文消歧 ──
-            if complete_math:
-                state["context_dependence"] = "unrelated"
-                state["context_dependence_reason"] = "skip_complete_math_problem"
-                state["context_resolution_mode"] = "skipped_complete_math"
-                state["context_resolution_skipped_reason"] = "complete_math_problem"
-                state["rewritten_query"] = query
-                state["query_rewritten"] = False
-                state["effective_query"] = query
-
-                logger.info(
-                    f"Context resolution skipped for complete math problem: "
-                    f"query={query[:80]!r}, raw_label={raw_label}"
-                )
-                return state
-
-            # ── 分支 2：数学追问 → 用上下文但不调用普通 resolver 改写题干 ──
-            if is_math and math_followup:
-                has_ctx = bool(dialog_text.strip())
-                state["context_dependence"] = "related" if has_ctx else "unrelated"
-                state["context_dependence_reason"] = "math_followup_context_only"
-                state["context_resolution_mode"] = "math_context_only"
-                state["math_context_used"] = has_ctx
-                state["math_context_text"] = dialog_text if has_ctx else None
-                state["rewritten_query"] = query
-                state["query_rewritten"] = False
-                state["effective_query"] = query
-
-                logger.info(
-                    f"Math follow-up uses context without normal resolver: "
-                    f"has_context={has_ctx}, query={query[:80]!r}"
-                )
-                return state
-
-            # ── 分支 3：非数学问题 → 走普通上下文消歧 ──
-            if not dynamic_ctx_enabled:
-                state["context_dependence"] = "unrelated"
-                state["context_dependence_reason"] = "disabled"
-                state["context_resolution_mode"] = "none"
-                state["context_resolution_skipped_reason"] = "disabled"
-                state["effective_query"] = query
-                logger.info(
-                    f"Dynamic context memory disabled, skip resolution | query={query[:80]!r}"
-                )
-                return state
-
-            if not dialog_text.strip():
-                state["context_dependence"] = "unrelated"
-                state["context_dependence_reason"] = "no_history"
-                state["context_resolution_mode"] = "none"
-                state["context_resolution_skipped_reason"] = "no_history"
-                state["effective_query"] = query
-                logger.info(
-                    f"Context resolution skipped (no history) | query={query[:80]!r}"
-                )
-                return state
-
-            is_related, judge_reason = await classifier.aclassify_context_dependence(
-                query, dialog_text
-            )
-            state["context_dependence"] = "related" if is_related else "unrelated"
-            state["context_dependence_reason"] = judge_reason
-
-            if not is_related:
-                state["context_resolution_mode"] = "none"
-                state["context_resolution_skipped_reason"] = "unrelated"
-                state["effective_query"] = query
-                logger.info(
-                    f"Context resolution skipped (unrelated) | reason={judge_reason} | "
-                    f"query={query[:80]!r}"
-                )
-                return state
-
-            resolved = await classifier.aresolve_standalone_query(query, dialog_text)
-            if not (resolved or "").strip():
-                resolved = query
-                state["context_resolution_skipped_reason"] = "empty_resolver_result"
-
-            resolved = resolved.strip()
-            state["rewritten_query"] = resolved
-            state["query_rewritten"] = resolved != query
-            state["effective_query"] = resolved
-            state["context_resolution_mode"] = "normal_resolver"
-
-            logger.info(
-                f"Standalone query resolution: original={query[:80]!r}, "
-                f"resolved={resolved[:80]!r}, query_rewritten={resolved != query}, "
-                f"context_dependence={state.get('context_dependence')}"
-            )
+            logger.info(f"Context resolution disabled | query={query[:80]!r}")
 
         return state
 

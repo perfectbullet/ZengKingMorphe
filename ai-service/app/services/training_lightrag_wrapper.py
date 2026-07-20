@@ -1015,9 +1015,10 @@ def _build_query_param(
     from lightrag.base import QueryParam
 
     user_prompt = (
-        "请使用简体中文回答。请优先依据当前检索到的教材上下文作答，"
-        "不要使用教材外常识补全。若上下文同时包含 Knowledge Graph Data 和 Document Chunks，"
-        "请优先依据 Document Chunks 中的教材原文；实体和关系只作为辅助线索。"
+        "请使用简体中文回答。"
+        "请优先依据当前检索到的资料上下文作答。回答的时候简要回答，不要长篇大论。"
+        "不要使用资料外常识补全。若上下文同时包含 Knowledge Graph Data 和 Document Chunks，"
+        "请优先依据 Document Chunks 中的资料原文；实体和关系只作为辅助线索。"
         "可以对多个相关片段进行归纳整理，但不要加入上下文没有支持的新步骤、新参数、新材料或新结论。"
         "若检索上下文没有覆盖问题核心内容，再明确说明“当前知识库资料不足”。"
         "不要出现“根据知识库资料”,“根据上下文材料”,“根据文档内容”,“根据上下文资料”等与资料库强相关的引导性文案"
@@ -1028,8 +1029,10 @@ def _build_query_param(
         "original textbook text in Document Chunks; use entities and relationships only "
         "as auxiliary clues. You may synthesize multiple relevant passages, but do not "
         "add new steps, parameters, materials, or conclusions that are not supported by "
-        'the context. Only say "当前知识库资料不足" when the retrieved context does not '
-        "cover the core content of the question."
+        "the context. When the retrieved context does not cover the core content, do not "
+        "invent an answer or mention the knowledge base, context, or retrieval. Briefly "
+        "say that the specific method cannot be confirmed yet and invite the user to "
+        "provide the relevant process, material, or operation details."
     )
 
     candidate_kwargs = {
