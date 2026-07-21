@@ -96,6 +96,40 @@ def env_int(name: str, default: int) -> int:
         raise ValueError(f"{name} 必须是整数: {value!r}") from exc
 
 
+def env_float(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return default
+    try:
+        return float(value.strip())
+    except ValueError as exc:
+        raise ValueError(f"{name} 必须是数字: {value!r}") from exc
+
+
+def entity_extraction_settings() -> dict[str, int | float | bool]:
+    """Read Step 6-only extraction settings without changing global LLM defaults."""
+    settings: dict[str, int | float | bool] = {
+        "entity_extraction_use_json": env_bool("ENTITY_EXTRACTION_USE_JSON", True),
+        "entity_extraction_temperature": env_float(
+            "ENTITY_EXTRACTION_TEMPERATURE", 0.0
+        ),
+        "entity_extraction_max_tokens": env_int(
+            "ENTITY_EXTRACTION_MAX_TOKENS", 4096
+        ),
+        "max_gleaning": env_int("MAX_GLEANING", 0),
+        "max_extraction_records": env_int("MAX_EXTRACTION_RECORDS", 30),
+        "max_extraction_entities": env_int("MAX_EXTRACTION_ENTITIES", 12),
+    }
+    if not 0.0 <= float(settings["entity_extraction_temperature"]) <= 2.0:
+        raise ValueError("ENTITY_EXTRACTION_TEMPERATURE 必须在 0 到 2 之间")
+    for key in ("entity_extraction_max_tokens", "max_extraction_records", "max_extraction_entities"):
+        if int(settings[key]) <= 0:
+            raise ValueError(f"{key} 必须大于 0")
+    if int(settings["max_gleaning"]) < 0:
+        raise ValueError("MAX_GLEANING 不能小于 0")
+    return settings
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="使用自建 custom chunks 导入 LightRAG")
     parser.add_argument("--chunks", required=True, type=Path)
@@ -247,6 +281,24 @@ def load_entity_type_profile(path: Path) -> dict[str, Any]:
     for key in ("allowed_entity_types", "allowed_relation_keywords"):
         if not isinstance(profile[key], list) or not all(isinstance(item, str) and item.strip() for item in profile[key]):
             raise ValueError(f"实体类型 YAML 的 {key} 必须为字符串列表")
+    for key in (
+        "excluded_entity_names",
+        "excluded_entity_suffixes",
+        "excluded_entity_patterns",
+        "generic_entity_names",
+        "entity_name_whitelist",
+    ):
+        value = profile.get(key, [])
+        if not isinstance(value, list) or not all(
+            isinstance(item, str) and item.strip() for item in value
+        ):
+            raise ValueError(f"实体类型 YAML 的 {key} 必须为字符串列表")
+        profile[key] = value
+    for pattern in profile["excluded_entity_patterns"]:
+        try:
+            re.compile(pattern)
+        except re.error as exc:
+            raise ValueError(f"实体类型 YAML 的 excluded_entity_patterns 正则无效: {pattern!r}") from exc
     return profile
 
 
@@ -272,6 +324,7 @@ def resolve_entity_type_profile(args: argparse.Namespace) -> tuple[Path | None, 
     if path.parent != ENTITY_TYPE_DIR.resolve() or not path.is_file():
         raise FileNotFoundError(f"教材专属实体类型 YAML 不存在于 prompts/entity_type: {path}")
     profile = load_entity_type_profile(path)
+    extraction_settings = entity_extraction_settings()
     meta = {
         "guidance_mode": "entity_type_prompt_file",
         "profile_path": str(path),
@@ -279,10 +332,7 @@ def resolve_entity_type_profile(args: argparse.Namespace) -> tuple[Path | None, 
         "profile_sha256": prompt_sha256(path.read_text(encoding="utf-8")),
         "allowed_entity_types": profile["allowed_entity_types"],
         "allowed_relation_keywords": profile["allowed_relation_keywords"],
-        "entity_extraction_use_json": env_bool("ENTITY_EXTRACTION_USE_JSON", True),
-        "max_gleaning": env_int("MAX_GLEANING", 1),
-        "max_extraction_records": env_int("MAX_EXTRACTION_RECORDS", 100),
-        "max_extraction_entities": env_int("MAX_EXTRACTION_ENTITIES", 40),
+        **extraction_settings,
     }
     return path, profile, meta
 
@@ -297,17 +347,21 @@ def build_rag(working_dir: Path, *, profile_file_name: str | None = None, entity
         addon_params["entity_type_prompt_file"] = profile_file_name
     elif entity_types_guidance:
         addon_params["entity_types_guidance"] = entity_types_guidance
+    extraction_settings = entity_extraction_settings()
     return LightRAG(
         working_dir=str(working_dir),
         enable_llm_cache=False,
         enable_llm_cache_for_entity_extract=False,
         addon_params=addon_params,
-        llm_model_func=build_llm_model_func(),
+        llm_model_func=build_llm_model_func(
+            max_tokens=int(extraction_settings["entity_extraction_max_tokens"]),
+            temperature=float(extraction_settings["entity_extraction_temperature"]),
+        ),
         embedding_func=build_embedding_func(),
-        entity_extraction_use_json=env_bool("ENTITY_EXTRACTION_USE_JSON", True),
-        entity_extract_max_gleaning=env_int("MAX_GLEANING", 1),
-        entity_extract_max_records=env_int("MAX_EXTRACTION_RECORDS", 100),
-        entity_extract_max_entities=env_int("MAX_EXTRACTION_ENTITIES", 40),
+        entity_extraction_use_json=bool(extraction_settings["entity_extraction_use_json"]),
+        entity_extract_max_gleaning=int(extraction_settings["max_gleaning"]),
+        entity_extract_max_records=int(extraction_settings["max_extraction_records"]),
+        entity_extract_max_entities=int(extraction_settings["max_extraction_entities"]),
     )
 
 
@@ -507,44 +561,162 @@ _NUMBER_RE = re.compile(r"^[+-]?\d+(?:\.\d+)?(?:%|℃|°C|:\d+)?$", re.I)
 _PATH_RE = re.compile(r"(?:https?://|(?:^|/)images/|\.(?:png|jpe?g|webp)$)", re.I)
 
 
-def _reject_entity(name: str, data: dict[str, Any], allowed: set[str]) -> str | None:
+def build_entity_filter_config(profile: dict[str, Any]) -> dict[str, Any]:
+    """Normalize project-level semantic filters declared by a YAML profile."""
+    return {
+        "excluded_names": {
+            item.strip().casefold()
+            for item in profile.get("excluded_entity_names", [])
+        },
+        "excluded_suffixes": tuple(
+            item.strip().casefold()
+            for item in profile.get("excluded_entity_suffixes", [])
+        ),
+        "excluded_patterns": tuple(
+            re.compile(item) for item in profile.get("excluded_entity_patterns", [])
+        ),
+        "generic_names": {
+            item.strip().casefold() for item in profile.get("generic_entity_names", [])
+        },
+        "whitelist": {
+            item.strip().casefold() for item in profile.get("entity_name_whitelist", [])
+        },
+    }
+
+
+def suspicious_entity_name(name: str) -> bool:
+    """Reject menu-like concatenations, while preserving normal technical notation."""
+    for separator in ("|", "｜", "&"):
+        if separator not in name:
+            continue
+        pieces = [piece.strip() for piece in name.split(separator)]
+        if len(pieces) > 1 and all(piece for piece in pieces):
+            return True
+    if "/" not in name:
+        return False
+    pieces = [piece.strip() for piece in name.split("/")]
+    return (
+        len(pieces) > 1
+        and all(len(piece) >= 2 for piece in pieces)
+        and all(re.search(r"[\u4e00-\u9fffA-Za-z]", piece) for piece in pieces)
+    )
+
+
+def _reject_entity(
+    name: str,
+    data: dict[str, Any],
+    allowed: set[str],
+    filter_config: dict[str, Any],
+) -> str | None:
+    name = name.strip()
     entity_type = str(data.get("entity_type") or "").strip()
     description = str(data.get("description") or "").strip()
-    if not name.strip(): return "empty_entity_name"
+    if not name: return "empty_entity_name"
     if not description: return "empty_entity_description"
     if entity_type.casefold() in {"other", "unknown"}: return "forbidden_entity_type"
     if entity_type.casefold() not in {item.casefold() for item in allowed}: return "invalid_entity_type"
     if _FIGURE_RE.fullmatch(name) or _CHAPTER_RE.fullmatch(name): return "numbering_entity"
     if _NUMBER_RE.fullmatch(name): return "numeric_entity"
     if _PATH_RE.search(name): return "image_or_url_entity"
+    folded_name = name.casefold()
+    # Whitelist intentionally only bypasses semantic name filtering. It never
+    # bypasses missing data, invalid types, numbering, URL, or image checks.
+    if folded_name in filter_config["whitelist"]:
+        return None
+    if folded_name in filter_config["excluded_names"]:
+        return "excluded_entity_name"
+    if any(folded_name.endswith(suffix) for suffix in filter_config["excluded_suffixes"]):
+        return "excluded_entity_suffix"
+    if any(pattern.search(name) for pattern in filter_config["excluded_patterns"]):
+        return "excluded_entity_pattern"
+    if folded_name in filter_config["generic_names"]:
+        return "generic_entity_name"
+    if suspicious_entity_name(name):
+        return "suspicious_entity_name"
     return None
+
+
+_INCLUDES = {("Technique", "Process"), ("Process", "Process"), ("Concept", "Concept"), ("Object", "Structure")}
+_COMPOSES = {("Process", "Technique"), ("Process", "Process"), ("Structure", "Object"), ("Structure", "Structure"), ("Material", "Object")}
+_USES = {(source, target) for source in ("Technique", "Method", "Process") for target in ("Tool", "Material")}
+_CREATES = {(source, target) for source in ("Technique", "Process", "Material", "Parameter") for target in ("Property", "Object", "QualityIssue")}
+_HAS_PARAMETER = {(source, "Parameter") for source in ("Technique", "Process", "Tool", "Object")}
+_HAS_PROPERTY = {(source, "Property") for source in ("Material", "Object", "Structure", "Tool", "Concept")}
+_APPLIES_TO = {(source, target) for source in ("Tool", "Material", "Method", "Technique") for target in ("Object", "Process", "Concept")}
+
+
+def normalize_relation_direction(
+    source: str,
+    target: str,
+    keywords: list[str],
+    accepted_entity_types: dict[str, str],
+) -> tuple[str, str, bool] | None:
+    """Return a canonical relation direction, or None when type evidence is weak."""
+    source_type = accepted_entity_types.get(source)
+    target_type = accepted_entity_types.get(target)
+    if not source_type or not target_type:
+        return None
+    pair = (source_type, target_type)
+    reverse_pair = (target_type, source_type)
+    expected_pairs: set[tuple[str, str]] | None = None
+    for keyword in keywords:
+        if keyword == "包括": expected_pairs = _INCLUDES
+        elif keyword == "组成": expected_pairs = _COMPOSES
+        elif keyword == "使用": expected_pairs = _USES
+        elif keyword in {"产生", "形成", "导致"}: expected_pairs = _CREATES
+        elif keyword == "具有参数": expected_pairs = _HAS_PARAMETER
+        elif keyword == "具有属性": expected_pairs = _HAS_PROPERTY
+        elif keyword in {"用于", "适用于"}: expected_pairs = _APPLIES_TO
+        elif keyword in {"先于", "后于"}:
+            expected_pairs = {("Process", "Process")}
+        else:
+            # The relation keyword itself defines the direction, but only retain
+            # it when both endpoints carry a recognized, typed extraction.
+            continue
+        if pair in expected_pairs:
+            continue
+        if reverse_pair in expected_pairs:
+            if source == target:
+                return None
+            source, target = target, source
+            source_type, target_type = target_type, source_type
+            pair = (source_type, target_type)
+            continue
+        return None
+    return source, target, False
 
 
 def filter_extraction_results(extraction_results: Any, profile: dict[str, Any] | None) -> tuple[list, dict[str, int], list[dict[str, Any]]]:
     """Apply project validation before LightRAG's merge surface."""
     if not profile:
-        return list(extraction_results or []), {"raw_entity_mentions": 0, "accepted_entity_mentions": 0, "rejected_entity_mentions": 0, "raw_relation_mentions": 0, "accepted_relation_mentions": 0, "rejected_relation_mentions": 0}, []
+        return list(extraction_results or []), {"raw_entity_mentions": 0, "accepted_entity_mentions": 0, "rejected_entity_mentions": 0, "raw_relation_mentions": 0, "accepted_relation_mentions": 0, "rejected_relation_mentions": 0, "normalized_relation_direction_count": 0}, []
     allowed_types = {str(item).strip() for item in profile["allowed_entity_types"]}
     allowed_relations = {str(item).strip().casefold() for item in profile["allowed_relation_keywords"]}
+    filter_config = build_entity_filter_config(profile)
     counters = Counter()
     rejected: list[dict[str, Any]] = []
     filtered: list = []
     for nodes, edges in extraction_results or []:
         accepted_nodes: dict[str, list] = {}
         accepted_names: set[str] = set()
+        accepted_entity_types: dict[str, str] = {}
         seen_entities: set[tuple[str, str]] = set()
         for name, candidates in (nodes or {}).items():
             for data in candidates or []:
                 counters["raw_entity_mentions"] += 1
-                reason = _reject_entity(str(name), data, allowed_types)
+                entity_name = str(name).strip()
+                reason = _reject_entity(entity_name, data, allowed_types, filter_config)
                 identity = (str(name), str(data.get("entity_type") or ""))
                 if reason is None and identity in seen_entities: reason = "duplicate_entity"
                 if reason:
                     counters["rejected_entity_mentions"] += 1
                     rejected.append({"kind": "entity", "reason": reason, "entity_name": name, "entity": data})
                     continue
-                seen_entities.add(identity); accepted_names.add(str(name))
-                accepted_nodes.setdefault(str(name), []).append(data)
+                seen_entities.add(identity); accepted_names.add(entity_name)
+                accepted_entity_types.setdefault(
+                    entity_name, str(data.get("entity_type") or "").strip()
+                )
+                accepted_nodes.setdefault(entity_name, []).append(data)
                 counters["accepted_entity_mentions"] += 1
         accepted_edges: dict[tuple[str, str], list] = {}
         seen_edges: set[tuple[str, str, str]] = set()
@@ -560,6 +732,19 @@ def filter_extraction_results(extraction_results: Any, profile: dict[str, Any] |
                 if source not in accepted_names or target not in accepted_names: reason = "invalid_relation_endpoint"
                 elif not keywords or any(item.casefold() not in allowed_relations for item in keywords): reason = "invalid_relation_keyword"
                 elif not str(data.get("description") or "").strip(): reason = "empty_relation_description"
+                normalized = None
+                if reason is None:
+                    normalized = normalize_relation_direction(
+                        source, target, keywords, accepted_entity_types
+                    )
+                    if normalized is None:
+                        reason = "ambiguous_relation_direction"
+                    else:
+                        normalized_source, normalized_target, _ = normalized
+                        if (normalized_source, normalized_target) != (source, target):
+                            counters["normalized_relation_direction_count"] += 1
+                            source, target = normalized_source, normalized_target
+                            data = {**data, "src_id": source, "tgt_id": target}
                 identity = (source, target, ",".join(keywords))
                 if reason is None and identity in seen_edges: reason = "duplicate_relation"
                 if reason:
@@ -569,7 +754,7 @@ def filter_extraction_results(extraction_results: Any, profile: dict[str, Any] |
                 seen_edges.add(identity); accepted_edges.setdefault((source, target), []).append(data)
                 counters["accepted_relation_mentions"] += 1
         filtered.append((accepted_nodes, accepted_edges))
-    for key in ("raw_entity_mentions", "accepted_entity_mentions", "rejected_entity_mentions", "raw_relation_mentions", "accepted_relation_mentions", "rejected_relation_mentions"):
+    for key in ("raw_entity_mentions", "accepted_entity_mentions", "rejected_entity_mentions", "raw_relation_mentions", "accepted_relation_mentions", "rejected_relation_mentions", "normalized_relation_direction_count"):
         counters.setdefault(key, 0)
     return filtered, dict(counters), rejected
 
@@ -1149,6 +1334,7 @@ async def run(args: argparse.Namespace) -> int:
         "raw_relation_mentions": result.get("validation_stats", {}).get("raw_relation_mentions", 0),
         "accepted_relation_mentions": result.get("validation_stats", {}).get("accepted_relation_mentions", 0),
         "rejected_relation_mentions": result.get("validation_stats", {}).get("rejected_relation_mentions", 0),
+        "normalized_relation_direction_count": result.get("validation_stats", {}).get("normalized_relation_direction_count", 0),
         "rejected_by_reason": dict(Counter(item.get("reason") for item in result.get("rejected_extractions", []) if item.get("reason"))),
         "rejected_extractions_path": str(rejected_path),
         "prompt_profile": prompt_meta,
@@ -1162,6 +1348,20 @@ async def run(args: argparse.Namespace) -> int:
     if error_message:
         report["error"] = error_message
     write_json(report_path, report)
+    logger.info(
+        "extraction validation | raw_entity_mentions=%d accepted_entity_mentions=%d "
+        "rejected_entity_mentions=%d raw_relation_mentions=%d "
+        "accepted_relation_mentions=%d rejected_relation_mentions=%d "
+        "normalized_relation_direction_count=%d rejected_by_reason=%s",
+        report["raw_entity_mentions"],
+        report["accepted_entity_mentions"],
+        report["rejected_entity_mentions"],
+        report["raw_relation_mentions"],
+        report["accepted_relation_mentions"],
+        report["rejected_relation_mentions"],
+        report["normalized_relation_direction_count"],
+        dict(list(report["rejected_by_reason"].items())[:8]),
+    )
     logger.info("导入报告 | %s", report_path)
     if failed_kg_chunk_count:
         logger.error("导入存在失败 chunks=%d | %s", failed_kg_chunk_count, failed_path)

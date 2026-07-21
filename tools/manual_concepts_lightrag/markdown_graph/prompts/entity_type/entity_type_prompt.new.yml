@@ -1,0 +1,153 @@
+profile_version: entity_type_prompt.precision.v1
+domain: industrial_training
+language: Chinese
+
+allowed_entity_types:
+  - Technique
+  - Method
+  - Process
+  - Principle
+  - Concept
+  - Tool
+  - Material
+  - Object
+  - Structure
+  - Property
+  - Parameter
+  - QualityIssue
+
+allowed_relation_keywords:
+  - 包括
+  - 组成
+  - 属于
+  - 使用
+  - 用于
+  - 适用于
+  - 基于
+  - 遵循
+  - 先于
+  - 后于
+  - 产生
+  - 形成
+  - 影响
+  - 控制
+  - 需要
+  - 具有参数
+  - 具有属性
+  - 导致
+  - 解决
+
+# 项目级硬过滤：白名单只绕过名称语义过滤，不绕过空描述、非法类型、URL 或编号校验。
+excluded_entity_names:
+  - 标题栏
+  - 菜单栏
+  - 指令栏
+  - 状态栏
+  - 标准工具栏
+  - 主要工具列
+  - 辅助面板
+  - 鼠标
+  - Enter键
+  - Alt键
+  - 方向键
+  - Page Up键
+  - Page Down键
+  - Page Up/Page Down键
+  - 预览
+  - 复制选项
+  - 硬性选项
+
+excluded_entity_suffixes:
+  - 工具按钮
+  - 下三角按钮
+  - 拓展工具面板
+  - 扩展工具面板
+  - 选项卡
+
+excluded_entity_patterns:
+  - '^第[一二三四五六七八九十0-9]+参考点$'
+  - '^第[一二三四五六七八九十0-9]+选项$'
+  - '^(单击|双击|点击|选择|输入|确认|取消).*$'
+
+generic_entity_names:
+  - 物件
+  - 设置
+  - 选项
+  - 操作步骤
+  - 功能
+  - 应用
+  - 工具
+  - 参数
+  - 方法
+
+entity_name_whitelist:
+  - NURBS曲线
+  - NURBS曲面
+  - 控制点
+  - 工作平面
+  - 曲线
+  - 曲面
+  - 直线
+  - 点
+
+entity_types_guidance: |
+  目标是精确率优先。仅抽取可独立定义、可跨段落复用、能直接支撑专业问答的核心实体；无法确定是否为核心实体时，不抽取。不属于允许类型时直接忽略，不得输出空类型、未知类型或自造类型。
+
+  每个实体必须同时满足：能脱离当前句子被定义；能在教材其他段落或同领域问答中复用；属于允许实体类型；能直接支撑专业概念、技法、流程、材料、结构、参数、属性或质量问题问答。名称保留教材专业术语，描述只依据当前文本；不要为同一概念拼接菜单路径、操作序列或多个并列名称。
+
+  - Technique：可复用的操作技法、制作工艺、画法或专业建模操作。
+  - Method：设计、创作、研究、分析或决策策略。
+  - Process：具有目标、结果或先后关系的流程、工序和步骤。
+  - Principle：原理、理论基础、规律和法则。
+  - Concept：可被明确定义的专业术语、类别、领域或流派。
+  - Tool：专业工具、设备、机器、软件或插件。
+  - Material：原材料、辅助材料、化学试剂和耗材。
+  - Object：被设计、加工、制作或检测的成品、半成品和工件。
+  - Structure：稳定的组成部分、连接方式和空间构造。
+  - Property：属性、性能、外观效果和感知结果。
+  - Parameter：具有专业含义的尺寸、温度、时间、比例、范围、数据表和标准数据。
+  - QualityIssue：缺陷、异常和质量问题。
+
+  标题只作为候选信号，必须由当前正文支持。“XX工艺、XX技法、XX画法”通常为 Technique；“XX流程、XX工序”以及明确流程中的阶段通常为 Process；“XX原理、XX理论基础、XX规律”通常为 Principle；“什么是X、X概述、X简介、X简述”抽取中心概念 X。
+
+  明确不抽取标题栏、菜单栏、指令栏、状态栏、标准工具栏、主要工具列、普通面板、工具按钮、下三角按钮、拓展工具面板、选项卡；不抽取鼠标、Enter键、Alt键、方向键、Page Up/Page Down键；不抽取单击、双击、选择、输入、确认、取消、预览；不抽取第一参考点、第二参考点等一次性位置，以及“设置、选项、操作步骤、功能、应用、物件”等泛化词。案例编号、章节号、页码、图片编号、一次性作品名和仅用于演示单个操作的案例名称也不抽取。不要抽取菜单导航、按钮位置及其关系。
+
+  专业软件技法必须保留，例如单轨扫掠、双轨扫掠、布尔运算、放样、偏移曲线、沿着曲线流动、曲率分析、曲面连续性检查；位置连续（G0）、正切连续（G1）和曲率连续（G2）是可复用的专业属性或原理，不能因括号、破折号或简称被丢弃。短实体不是拒绝理由；白名单中的点、直线、曲线、曲面、工作平面、控制点、NURBS曲线和NURBS曲面在类型和描述合法时保留。
+
+  关系必须由正文或明确目录层级支持，两个端点都必须已抽取。使用稳定关键词且方向一致：包括为整体到部分，组成为部分到整体，使用为技法/方法/工序到工具或材料，产生/形成/导致为工艺条件到结果，具有参数为对象或过程到参数，具有属性为材料、对象、结构或工具到属性，用于/适用于为工具、材料、方法或技法到对象、过程或场景概念。没有明确证据时宁可只保留实体，不要因共现建边。
+
+entity_extraction_examples:
+  - |
+    entity{tuple_delimiter}掐丝珐琅工艺{tuple_delimiter}Technique{tuple_delimiter}教材列出的珐琅制作工艺。
+    entity{tuple_delimiter}掐丝{tuple_delimiter}Process{tuple_delimiter}掐丝珐琅制作中的工序。
+    relation{tuple_delimiter}掐丝珐琅工艺{tuple_delimiter}掐丝{tuple_delimiter}包括{tuple_delimiter}正文支持该工艺包括掐丝工序。
+    {completion_delimiter}
+
+entity_extraction_json_examples:
+  - |
+    {
+      "entities": [
+        {"name": "掐丝珐琅工艺", "type": "Technique", "description": "掐丝珐琅工艺是以金属丝形成纹样并烧制的珐琅工艺。"},
+        {"name": "掐丝", "type": "Process", "description": "掐丝是将金属丝按纹样固定的制作工序。"},
+        {"name": "金属丝", "type": "Material", "description": "金属丝用于形成掐丝珐琅纹样。"},
+        {"name": "烧制温度", "type": "Parameter", "description": "烧制温度是影响珐琅烧制结果的工艺参数。"}
+      ],
+      "relationships": [
+        {"source": "掐丝珐琅工艺", "target": "掐丝", "keywords": "包括", "description": "该工艺包括掐丝工序。"},
+        {"source": "掐丝", "target": "金属丝", "keywords": "使用", "description": "掐丝工序使用金属丝。"},
+        {"source": "掐丝珐琅工艺", "target": "烧制温度", "keywords": "具有参数", "description": "烧制温度是该工艺的参数。"}
+      ]
+    }
+  - |
+    {
+      "entities": [
+        {"name": "Rhino", "type": "Tool", "description": "Rhino 是用于首饰数字建模的软件。"},
+        {"name": "NURBS曲线", "type": "Concept", "description": "NURBS曲线是 Rhino 建模使用的曲线概念。"},
+        {"name": "控制点曲线", "type": "Technique", "description": "控制点曲线是通过控制点创建和编辑曲线的建模操作。"},
+        {"name": "曲率连续（G2）", "type": "Property", "description": "曲率连续（G2）描述相邻曲线或曲面的连续性属性。"}
+      ],
+      "relationships": [
+        {"source": "控制点曲线", "target": "NURBS曲线", "keywords": "用于", "description": "控制点曲线操作用于创建 NURBS 曲线。"},
+        {"source": "NURBS曲线", "target": "曲率连续（G2）", "keywords": "具有属性", "description": "曲率连续（G2）可作为曲线连续性属性。"}
+      ]
+    }
