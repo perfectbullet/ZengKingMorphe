@@ -612,6 +612,7 @@ def _reject_entity(
     entity_type = str(data.get("entity_type") or "").strip()
     description = str(data.get("description") or "").strip()
     if not name: return "empty_entity_name"
+    if len(name) == 1: return "single_character_entity"
     if not description: return "empty_entity_description"
     if entity_type.casefold() in {"other", "unknown"}: return "forbidden_entity_type"
     if entity_type.casefold() not in {item.casefold() for item in allowed}: return "invalid_entity_type"
