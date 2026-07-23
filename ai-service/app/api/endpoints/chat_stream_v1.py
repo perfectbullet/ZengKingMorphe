@@ -13,6 +13,7 @@ import time
 from datetime import datetime
 
 from typing import AsyncGenerator, Optional, Any
+from copy import deepcopy
 
 from fastapi import Request
 
@@ -125,8 +126,8 @@ def _build_chunk_citations_from_chunks(
             "reference_id": reference_id,
             "source": citation_source,
             "file_path": file_path,
-            "chunk_id": chunk_id,
-            "text": _short_text(chunk.get("content"), max_text_len),
+            "doc_id": chunk_id,
+            "content": "",
         }
         if "rerank_score" in chunk:
             citation["rerank_score"] = chunk.get("rerank_score")
@@ -657,7 +658,7 @@ def _build_initial_state(
 ) -> ConversationState:
     """基于 _STATE_DEFAULTS 构建初始状态，覆盖请求相关字段。"""
     return {
-        **_STATE_DEFAULTS,
+        **deepcopy(_STATE_DEFAULTS),
         "user_query": user_query,
         "user_id": request.user_id,
         "session_id": session_id,
@@ -1399,32 +1400,13 @@ async def generate_openai_stream_v1(
                                 f"mode={content.get('mode') or mode}"
                             )
                     elif chunk_type == "sources":
-                        sources = content
-                        if sources.get("entities"):
-                            current_state["sources"].append(
-                                {
-                                    "type": "entity",
-                                    "from": "【知识图谱】",
-                                    "backend": backend,
-                                    "entities": sources["entities"],
-                                }
-                            )
-                        if sources.get("relationships"):
-                            current_state["sources"].append(
-                                {
-                                    "type": "relationship",
-                                    "from": "【知识图谱关系】",
-                                    "backend": backend,
-                                    "relationships": sources["relationships"],
-                                }
-                            )
-                        if sources.get("chunks"):
+                        if content.get("chunks"):
                             current_state["sources"].append(
                                 {
                                     "type": "chunk",
                                     "from": "【文档块】",
                                     "backend": backend,
-                                    "chunks": sources["chunks"],
+                                    "chunks": content["chunks"],
                                 }
                             )
                     elif chunk_type == "error":
