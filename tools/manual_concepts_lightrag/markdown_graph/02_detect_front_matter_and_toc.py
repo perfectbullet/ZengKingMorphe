@@ -513,7 +513,7 @@ async def run(args: argparse.Namespace) -> Path:
         catalog_prompt,
         raw_output_path=catalog_raw_path,
         guided_json_schema=CATALOG_JSON_SCHEMA,
-        max_tokens=8192,
+        max_tokens=16384,
     )
     if not isinstance(catalog, dict):
         raise ValueError("目录骨架 LLM 必须返回一个 JSON 对象")

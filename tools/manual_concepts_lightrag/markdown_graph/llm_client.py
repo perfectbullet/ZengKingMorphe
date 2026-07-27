@@ -32,7 +32,8 @@ async def call_llm_json(
     llm_func = build_llm_model_func(max_tokens=max_tokens)
     raw_text = ""
     try:
-        extra_body = {"guided_json": guided_json_schema} if guided_json_schema else None
+        # extra_body = {"guided_json": guided_json_schema} if guided_json_schema else None
+        extra_body = {"structured_outputs": {"json": guided_json_schema}} if guided_json_schema else None
         raw_text = await llm_func(
             prompt,
             system_prompt=system_prompt,

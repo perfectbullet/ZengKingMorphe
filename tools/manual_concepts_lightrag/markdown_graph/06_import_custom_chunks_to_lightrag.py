@@ -286,7 +286,6 @@ def load_entity_type_profile(path: Path) -> dict[str, Any]:
         "excluded_entity_suffixes",
         "excluded_entity_patterns",
         "generic_entity_names",
-        "entity_name_whitelist",
     ):
         value = profile.get(key, [])
         if not isinstance(value, list) or not all(
@@ -578,9 +577,6 @@ def build_entity_filter_config(profile: dict[str, Any]) -> dict[str, Any]:
         "generic_names": {
             item.strip().casefold() for item in profile.get("generic_entity_names", [])
         },
-        "whitelist": {
-            item.strip().casefold() for item in profile.get("entity_name_whitelist", [])
-        },
     }
 
 
@@ -620,10 +616,6 @@ def _reject_entity(
     if _NUMBER_RE.fullmatch(name): return "numeric_entity"
     if _PATH_RE.search(name): return "image_or_url_entity"
     folded_name = name.casefold()
-    # Whitelist intentionally only bypasses semantic name filtering. It never
-    # bypasses missing data, invalid types, numbering, URL, or image checks.
-    if folded_name in filter_config["whitelist"]:
-        return None
     if folded_name in filter_config["excluded_names"]:
         return "excluded_entity_name"
     if any(folded_name.endswith(suffix) for suffix in filter_config["excluded_suffixes"]):
@@ -637,60 +629,10 @@ def _reject_entity(
     return None
 
 
-_INCLUDES = {("Technique", "Process"), ("Process", "Process"), ("Concept", "Concept"), ("Object", "Structure")}
-_COMPOSES = {("Process", "Technique"), ("Process", "Process"), ("Structure", "Object"), ("Structure", "Structure"), ("Material", "Object")}
-_USES = {(source, target) for source in ("Technique", "Method", "Process") for target in ("Tool", "Material")}
-_CREATES = {(source, target) for source in ("Technique", "Process", "Material", "Parameter") for target in ("Property", "Object", "QualityIssue")}
-_HAS_PARAMETER = {(source, "Parameter") for source in ("Technique", "Process", "Tool", "Object")}
-_HAS_PROPERTY = {(source, "Property") for source in ("Material", "Object", "Structure", "Tool", "Concept")}
-_APPLIES_TO = {(source, target) for source in ("Tool", "Material", "Method", "Technique") for target in ("Object", "Process", "Concept")}
-
-
-def normalize_relation_direction(
-    source: str,
-    target: str,
-    keywords: list[str],
-    accepted_entity_types: dict[str, str],
-) -> tuple[str, str, bool] | None:
-    """Return a canonical relation direction, or None when type evidence is weak."""
-    source_type = accepted_entity_types.get(source)
-    target_type = accepted_entity_types.get(target)
-    if not source_type or not target_type:
-        return None
-    pair = (source_type, target_type)
-    reverse_pair = (target_type, source_type)
-    expected_pairs: set[tuple[str, str]] | None = None
-    for keyword in keywords:
-        if keyword == "包括": expected_pairs = _INCLUDES
-        elif keyword == "组成": expected_pairs = _COMPOSES
-        elif keyword == "使用": expected_pairs = _USES
-        elif keyword in {"产生", "形成", "导致"}: expected_pairs = _CREATES
-        elif keyword == "具有参数": expected_pairs = _HAS_PARAMETER
-        elif keyword == "具有属性": expected_pairs = _HAS_PROPERTY
-        elif keyword in {"用于", "适用于"}: expected_pairs = _APPLIES_TO
-        elif keyword in {"先于", "后于"}:
-            expected_pairs = {("Process", "Process")}
-        else:
-            # The relation keyword itself defines the direction, but only retain
-            # it when both endpoints carry a recognized, typed extraction.
-            continue
-        if pair in expected_pairs:
-            continue
-        if reverse_pair in expected_pairs:
-            if source == target:
-                return None
-            source, target = target, source
-            source_type, target_type = target_type, source_type
-            pair = (source_type, target_type)
-            continue
-        return None
-    return source, target, False
-
-
 def filter_extraction_results(extraction_results: Any, profile: dict[str, Any] | None) -> tuple[list, dict[str, int], list[dict[str, Any]]]:
     """Apply project validation before LightRAG's merge surface."""
     if not profile:
-        return list(extraction_results or []), {"raw_entity_mentions": 0, "accepted_entity_mentions": 0, "rejected_entity_mentions": 0, "raw_relation_mentions": 0, "accepted_relation_mentions": 0, "rejected_relation_mentions": 0, "normalized_relation_direction_count": 0}, []
+        return list(extraction_results or []), {"raw_entity_mentions": 0, "accepted_entity_mentions": 0, "rejected_entity_mentions": 0, "raw_relation_mentions": 0, "accepted_relation_mentions": 0, "rejected_relation_mentions": 0, "normalized_relation_direction_count": 0, "unlisted_relation_keyword_count": 0, "unlisted_relation_keywords": {}}, []
     allowed_types = {str(item).strip() for item in profile["allowed_entity_types"]}
     allowed_relations = {str(item).strip().casefold() for item in profile["allowed_relation_keywords"]}
     filter_config = build_entity_filter_config(profile)
@@ -700,7 +642,6 @@ def filter_extraction_results(extraction_results: Any, profile: dict[str, Any] |
     for nodes, edges in extraction_results or []:
         accepted_nodes: dict[str, list] = {}
         accepted_names: set[str] = set()
-        accepted_entity_types: dict[str, str] = {}
         seen_entities: set[tuple[str, str]] = set()
         for name, candidates in (nodes or {}).items():
             for data in candidates or []:
@@ -714,9 +655,6 @@ def filter_extraction_results(extraction_results: Any, profile: dict[str, Any] |
                     rejected.append({"kind": "entity", "reason": reason, "entity_name": name, "entity": data})
                     continue
                 seen_entities.add(identity); accepted_names.add(entity_name)
-                accepted_entity_types.setdefault(
-                    entity_name, str(data.get("entity_type") or "").strip()
-                )
                 accepted_nodes.setdefault(entity_name, []).append(data)
                 counters["accepted_entity_mentions"] += 1
         accepted_edges: dict[tuple[str, str], list] = {}
@@ -731,21 +669,9 @@ def filter_extraction_results(extraction_results: Any, profile: dict[str, Any] |
                 keywords = [item.strip() for item in re.split(r"[,，]", str(data.get("keywords") or "")) if item.strip()]
                 reason = None
                 if source not in accepted_names or target not in accepted_names: reason = "invalid_relation_endpoint"
-                elif not keywords or any(item.casefold() not in allowed_relations for item in keywords): reason = "invalid_relation_keyword"
+                elif not keywords: reason = "empty_relation_keyword"
                 elif not str(data.get("description") or "").strip(): reason = "empty_relation_description"
-                normalized = None
-                if reason is None:
-                    normalized = normalize_relation_direction(
-                        source, target, keywords, accepted_entity_types
-                    )
-                    if normalized is None:
-                        reason = "ambiguous_relation_direction"
-                    else:
-                        normalized_source, normalized_target, _ = normalized
-                        if (normalized_source, normalized_target) != (source, target):
-                            counters["normalized_relation_direction_count"] += 1
-                            source, target = normalized_source, normalized_target
-                            data = {**data, "src_id": source, "tgt_id": target}
+                elif source == target: reason = "self_relation"
                 identity = (source, target, ",".join(keywords))
                 if reason is None and identity in seen_edges: reason = "duplicate_relation"
                 if reason:
@@ -754,10 +680,38 @@ def filter_extraction_results(extraction_results: Any, profile: dict[str, Any] |
                     continue
                 seen_edges.add(identity); accepted_edges.setdefault((source, target), []).append(data)
                 counters["accepted_relation_mentions"] += 1
+                for keyword in keywords:
+                    if keyword.casefold() not in allowed_relations:
+                        counters["unlisted_relation_keyword_count"] += 1
+                        counters[f"unlisted_relation_keyword:{keyword}"] += 1
         filtered.append((accepted_nodes, accepted_edges))
-    for key in ("raw_entity_mentions", "accepted_entity_mentions", "rejected_entity_mentions", "raw_relation_mentions", "accepted_relation_mentions", "rejected_relation_mentions", "normalized_relation_direction_count"):
+    for key in ("raw_entity_mentions", "accepted_entity_mentions", "rejected_entity_mentions", "raw_relation_mentions", "accepted_relation_mentions", "rejected_relation_mentions", "normalized_relation_direction_count", "unlisted_relation_keyword_count"):
         counters.setdefault(key, 0)
-    return filtered, dict(counters), rejected
+    validation_stats = dict(counters)
+    validation_stats["unlisted_relation_keywords"] = {
+        key.removeprefix("unlisted_relation_keyword:"): count
+        for key, count in counters.items()
+        if key.startswith("unlisted_relation_keyword:")
+    }
+    return filtered, validation_stats, rejected
+
+
+def merge_validation_stats(
+    totals: Counter,
+    unlisted_keywords: Counter,
+    validation_stats: dict[str, Any],
+) -> None:
+    """Accumulate scalar validation counters and keyword audit frequencies."""
+    totals.update(
+        {
+            key: value
+            for key, value in validation_stats.items()
+            if isinstance(value, int)
+        }
+    )
+    unlisted_keywords.update(
+        validation_stats.get("unlisted_relation_keywords", {})
+    )
 
 
 def failed_chunk_record(
@@ -983,6 +937,7 @@ async def import_custom_chunks(
         succeeded_kg_chunk_count = 0
         failed_chunks: list[dict[str, Any]] = []
         validation_totals: Counter = Counter()
+        unlisted_relation_keywords: Counter = Counter()
         rejected_extractions: list[dict[str, Any]] = []
         total_batches = sum(
             len(
@@ -1033,7 +988,12 @@ async def import_custom_chunks(
                     extraction_result_count += result_count
                     extracted_entity_mentions += entity_mentions
                     extracted_relation_mentions += relation_mentions
-                    validation_totals.update(validation_stats); rejected_extractions.extend(rejected)
+                    merge_validation_stats(
+                        validation_totals,
+                        unlisted_relation_keywords,
+                        validation_stats,
+                    )
+                    rejected_extractions.extend(rejected)
                     succeeded_kg_chunk_count += len(batch_chunks)
                     logger.info(
                         "extract batch done | doc_id=%s batch=%d/%d chunks=%d "
@@ -1080,7 +1040,12 @@ async def import_custom_chunks(
                             extraction_result_count += result_count
                             extracted_entity_mentions += entity_mentions
                             extracted_relation_mentions += relation_mentions
-                            validation_totals.update(validation_stats); rejected_extractions.extend(rejected)
+                            merge_validation_stats(
+                                validation_totals,
+                                unlisted_relation_keywords,
+                                validation_stats,
+                            )
+                            rejected_extractions.extend(rejected)
                         elif failed_chunk is not None:
                             failed_chunks.append(failed_chunk)
                             if not continue_on_chunk_error:
@@ -1123,7 +1088,12 @@ async def import_custom_chunks(
                         extraction_result_count += result_count
                         extracted_entity_mentions += entity_mentions
                         extracted_relation_mentions += relation_mentions
-                        validation_totals.update(validation_stats); rejected_extractions.extend(rejected)
+                        merge_validation_stats(
+                            validation_totals,
+                            unlisted_relation_keywords,
+                            validation_stats,
+                        )
+                        rejected_extractions.extend(rejected)
                     elif failed_chunk is not None:
                         failed_chunks.append(failed_chunk)
                         if not continue_on_chunk_error:
@@ -1154,7 +1124,10 @@ async def import_custom_chunks(
             "extraction_result_count": extraction_result_count,
             "extracted_entity_mentions": extracted_entity_mentions,
             "extracted_relation_mentions": extracted_relation_mentions,
-            "validation_stats": dict(validation_totals),
+            "validation_stats": {
+                **validation_totals,
+                "unlisted_relation_keywords": dict(unlisted_relation_keywords),
+            },
             "rejected_extractions": rejected_extractions,
         }
     except BaseException as exc:
@@ -1335,7 +1308,10 @@ async def run(args: argparse.Namespace) -> int:
         "raw_relation_mentions": result.get("validation_stats", {}).get("raw_relation_mentions", 0),
         "accepted_relation_mentions": result.get("validation_stats", {}).get("accepted_relation_mentions", 0),
         "rejected_relation_mentions": result.get("validation_stats", {}).get("rejected_relation_mentions", 0),
+        # 历史兼容字段，当前流程不再自动调整关系方向。
         "normalized_relation_direction_count": result.get("validation_stats", {}).get("normalized_relation_direction_count", 0),
+        "unlisted_relation_keyword_count": result.get("validation_stats", {}).get("unlisted_relation_keyword_count", 0),
+        "unlisted_relation_keywords": result.get("validation_stats", {}).get("unlisted_relation_keywords", {}),
         "rejected_by_reason": dict(Counter(item.get("reason") for item in result.get("rejected_extractions", []) if item.get("reason"))),
         "rejected_extractions_path": str(rejected_path),
         "prompt_profile": prompt_meta,
@@ -1353,7 +1329,8 @@ async def run(args: argparse.Namespace) -> int:
         "extraction validation | raw_entity_mentions=%d accepted_entity_mentions=%d "
         "rejected_entity_mentions=%d raw_relation_mentions=%d "
         "accepted_relation_mentions=%d rejected_relation_mentions=%d "
-        "normalized_relation_direction_count=%d rejected_by_reason=%s",
+        "normalized_relation_direction_count=%d unlisted_relation_keyword_count=%d "
+        "rejected_by_reason=%s",
         report["raw_entity_mentions"],
         report["accepted_entity_mentions"],
         report["rejected_entity_mentions"],
@@ -1361,6 +1338,7 @@ async def run(args: argparse.Namespace) -> int:
         report["accepted_relation_mentions"],
         report["rejected_relation_mentions"],
         report["normalized_relation_direction_count"],
+        report["unlisted_relation_keyword_count"],
         dict(list(report["rejected_by_reason"].items())[:8]),
     )
     logger.info("导入报告 | %s", report_path)
