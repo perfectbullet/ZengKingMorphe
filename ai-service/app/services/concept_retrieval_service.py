@@ -8,7 +8,7 @@
 
 设计要点：
 - 复制 tools/manual_concepts_lightrag 中的必要逻辑，不直接 import
-- 命中人工概念库后完全跳过 RAGAnything，只依据 concept_context 生成答案
+- 命中人工概念库后完全跳过知识库流式检索，只依据 concept_context 生成答案
 - 支持新旧两种 entity_type（MANUAL_CONCEPT 新默认，MANUAL_MATH_CONCEPT legacy）
 """
 

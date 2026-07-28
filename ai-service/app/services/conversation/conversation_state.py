@@ -176,14 +176,11 @@ class ConversationState(TypedDict):
     channel_name: Optional[str]
     team_id: Optional[str]
     # Streaming output configuration for unified RAG integration
-    streaming_type: Optional[str]  # "langchain_llm" / "rag_stream" / legacy types
+    streaming_type: Optional[str]  # "langchain_llm" / "rag_stream" / "math_llm"
     streaming_llm: Optional[Any]  # LLM instance (for langchain_llm)
     streaming_messages: Optional[List]  # Messages (for langchain_llm)
     rag_query: Optional[str]  # Query for unified RAG stream
     rag_mode: Optional[str]  # Unified RAG mode (hybrid, local, global, naive)
-    rag_backend: Optional[str]  # Active RAG backend (lightrag_file / raganything)
-    raganything_query: Optional[str]  # Query for RAGAnything
-    raganything_mode: Optional[str]  # RAGAnything mode (hybrid, local, global, naive)
     direct_text_answer: Optional[str]  # 直接文本答案，不走LLM（如：系统时间）
     sources: List[Dict[str, Any]]  # 累积的数据源列表
     is_math_problem: bool  # 是否为数学题目

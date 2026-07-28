@@ -150,7 +150,6 @@ def test_threshold_is_configurable_via_settings():
          patch("app.services.conversation.conversation_nodes.build_generation_messages",
                return_value=[]):
         m_settings.realtime_traffic_min_web_score = 0.05
-        m_settings.raganything_enabled = False  # 防止其他分支误进
         nodes = ConversationNodes.__new__(ConversationNodes)
         class _W:
             def get_streaming_llm(self, _state):

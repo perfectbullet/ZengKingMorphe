@@ -51,12 +51,6 @@ def _split_csv_like(value: str) -> list[str]:
     return [part.strip() for part in re.split(r"[，,]", value) if part.strip()]
 
 
-def _split_semicolon_like(value: str) -> list[str]:
-    if not value:
-        return []
-    return [part.strip() for part in re.split(r"[;；]", value) if part.strip()]
-
-
 def _pick_env(candidates: list[str], default: str | None = None) -> str | None:
     for name in candidates:
         value = os.getenv(name)
@@ -261,10 +255,6 @@ def _rag_debug_max_text() -> int:
         return 4000
 
 
-def _rag_debug_preview_only() -> bool:
-    return _env_bool("TRAINING_RAG_STREAM_DEBUG_PREVIEW_ONLY", True)
-
-
 def _new_trace_id() -> str:
     return uuid.uuid4().hex[:8]
 
@@ -362,10 +352,6 @@ def _iter_text_chunks(text: str, step: int = 48) -> list[str]:
     if not text:
         return []
     return [text[i : i + step] for i in range(0, len(text), step)]
-
-
-def _is_async_iterable(value: Any) -> bool:
-    return hasattr(value, "__aiter__")
 
 
 async def _maybe_await(value: Any) -> Any:
@@ -537,30 +523,6 @@ def _to_json_safe_scalar(value: Any) -> Any:
         except Exception:
             return repr(value)
     return repr(value)
-
-
-def _match_guard_terms(query: str, terms: list[str]) -> list[str]:
-    if not query or not terms:
-        return []
-    matches: list[tuple[int, int, str]] = []
-    occupied: list[tuple[int, int]] = []
-    for term in sorted(set(terms), key=lambda x: (-len(x), x)):
-        start = query.find(term)
-        while start != -1:
-            end = start + len(term)
-            overlap = any(not (end <= s or start >= e) for s, e in occupied)
-            if not overlap:
-                matches.append((start, end, term))
-                occupied.append((start, end))
-            start = query.find(term, start + 1)
-    matches.sort(key=lambda item: item[0])
-    seen: set[str] = set()
-    ordered: list[str] = []
-    for _, _, term in matches:
-        if term not in seen:
-            seen.add(term)
-            ordered.append(term)
-    return ordered
 
 
 def _allow_short_entity_term(entity_type: str | None) -> bool:

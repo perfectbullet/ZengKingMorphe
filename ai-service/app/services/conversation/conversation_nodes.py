@@ -10,7 +10,7 @@ LangGraph 对话工作流节点实现。
 - 答案生成节点
 - 对话保存节点
 
-注：已使用 RAGAnything 简化 RAG 检索流程。
+注：RAG 查询统一使用文件型 LightRAG。
 已移除节点：intent_recognition, knowledge_retrieval, grade_documents,
            compress_context, match_faq, rewrite_query
 """
@@ -136,7 +136,7 @@ _REALTIME_HEURISTIC_SKIP_LABELS = frozenset(
 #   - 旧版 B: 顶层 kb_ids
 #   - 旧版 C: capabilities.kb_ids
 # 用集中维护的“路径表”避免在节点里到处写 if/else，且新增路径只改这两个表即可。
-# 注：RAGAnything 是单一全局知识库，kb_ids 仅作展示/审计用，不再作为路由开关。
+# 注：当前 LightRAG 是单一全局知识库，kb_ids 仅作展示/审计用，不再作为路由开关。
 # =============================================================================
 _EMPLOYEE_KB_ID_PATHS: tuple[tuple[str, ...], ...] = (
     ("setting", "knowledge_kb_ids"),
@@ -187,10 +187,6 @@ def _env_bool(name: str, default: bool) -> bool:
     if value is None or not value.strip():
         return default
     return value.strip().lower() in {"true", "1", "yes", "on"}
-
-
-def _training_rag_backend() -> str:
-    return os.getenv("TRAINING_RAG_BACKEND", "lightrag_file").strip() or "lightrag_file"
 
 
 def _training_rag_enabled() -> bool:
@@ -757,7 +753,7 @@ class ConversationNodes:
                 employee["setting"] = setting_doc
 
             # 解析 kb_ids 时按 _EMPLOYEE_KB_ID_PATHS 优先级取值，并规范化到 employee_config["kb_ids"]，
-            # 给老调用方留向后兼容；路由本身不再依赖 kb_ids（RAGAnything 是全局单库）。
+            # 给老调用方留向后兼容；路由本身不再依赖 kb_ids（当前为全局 LightRAG 库）。
             kb_ids = _resolve_employee_kb_ids(employee)
             employee["kb_ids"] = kb_ids
             state["employee_config"] = employee
@@ -1459,8 +1455,7 @@ class ConversationNodes:
                     )
 
             if (
-                _training_rag_backend() == "lightrag_file"
-                and _training_rag_enabled()
+                _training_rag_enabled()
                 and _training_rag_domain_gate_enabled()
             ):
                 matched_keyword = _match_training_trigger_keyword(resolved or query)
@@ -1652,8 +1647,8 @@ class ConversationNodes:
         职责：
         - 对 concept_explain 意图进行人工概念库检索
         - 支持精确匹配（concept_name/alias）和 LightRAG local 模式召回
-        - 命中时完全跳过 RAGAnything，只依据 concept_context 生成答案
-        - 未命中时继续走 evaluate_complexity → generate_answer（RAGAnything 兜底）
+        - 命中时只依据 concept_context 生成答案
+        - 未命中时继续走 evaluate_complexity → generate_answer（通用 LLM 兜底）
 
         设计要点：
         - 只有 classification_label 为 "concept_explain" 时才执行检索
@@ -1667,14 +1662,6 @@ class ConversationNodes:
             state["concept_retrieval_reason"] = None
             state["concept_context"] = None
             state["concept_context_source"] = None
-
-            backend = _training_rag_backend()
-            if backend == "lightrag_file":
-                state["concept_retrieval_enabled"] = False
-                state["concept_retrieval_hit"] = False
-                state["concept_retrieval_reason"] = "skip_training_lightrag_backend"
-                logger.info("Concept retrieval skipped for training LightRAG backend")
-                return state
 
             # 只处理 concept_explain 意图
             label = state.get("classification_label")
@@ -1727,8 +1714,6 @@ class ConversationNodes:
                     state["web_search_results"] = []
                     state["web_search_used"] = False
                     state["web_search_error"] = None
-                    state["raganything_query"] = None
-                    state["raganything_mode"] = None
 
                     # 追加来源
                     sources = state.get("sources", [])
@@ -2485,7 +2470,7 @@ class ConversationNodes:
                         web_results
                     )
                     confidence = max(0.75, avg_web_score)
-            else:  # normal query with RAGAnything
+            else:  # normal query
                 confidence = 0.8
 
             # 根据 answer_mode（由 classify_query_type 写入）配置流式输出。
@@ -2497,7 +2482,7 @@ class ConversationNodes:
             # - 新分支只在本 if/elif 链中追加一条，对应 INTENT_TO_ANSWER_MODE 表。
             answer_mode = state.get("answer_mode") or AnswerMode.GENERAL_LLM.value
 
-            # 人工概念上下文优先：命中人工概念库后完全跳过 RAGAnything，
+            # 人工概念上下文优先：命中人工概念库后跳过知识库流式检索，
             # 只依据 concept_context 生成概念讲解答案。
             if state.get("concept_retrieval_hit") and state.get("concept_context"):
                 concept_context = state.get("concept_context") or {}
@@ -2562,7 +2547,6 @@ class ConversationNodes:
                 employee_config = state.get("employee_config", {})
                 training_rag_enabled = _training_rag_enabled()
                 rag_disabled = _resolve_employee_rag_disabled(employee_config)
-                backend = _training_rag_backend()
                 mode = os.getenv("TRAINING_RAG_QUERY_MODE", "hybrid").strip() or "hybrid"
 
                 if (not training_rag_enabled) or rag_disabled:
@@ -2583,12 +2567,8 @@ class ConversationNodes:
                     rewritten_for_rag = (state.get("rewritten_query") or "").strip()
                     state["rag_query"] = rewritten_for_rag or state["user_query"]
                     state["rag_mode"] = mode
-                    state["rag_backend"] = backend
-                    state["raganything_query"] = state["rag_query"]
-                    state["raganything_mode"] = state["rag_mode"]
-
                     logger.info(
-                        f"Streaming configured: type=rag_stream, backend={backend}, "
+                        f"Streaming configured: type=rag_stream, backend=lightrag_file, "
                         f"mode={mode}, query={state['rag_query'][:80]}"
                     )
             else:

@@ -8,7 +8,7 @@
 
 回答模式（AnswerMode）
 ======================
-- ``RAG_WITH_FALLBACK``：先走 RAG（RAGAnything 知识图谱+向量检索），
+- ``RAG_WITH_FALLBACK``：先走文件型 LightRAG，
   当 RAG 全局禁用 / 员工禁用 RAG / RAG 未召回到任何相关内容时，
   自动降级到通用 LLM 回答（避免空回答）。
 
@@ -139,7 +139,7 @@ def resolve_answer_mode(classification_label: str | None) -> AnswerMode:
 ROUTE_BRANCH_GREETING = "greeting"  # 含 noise，走 generate_answer 直出
 ROUTE_BRANCH_REALTIME = "realtime"  # 走 web_search 后再 generate_answer
 ROUTE_BRANCH_MATH = "math"          # 走 generate_answer（数学模型）
-ROUTE_BRANCH_RAG = "rag"            # 走 concept_retrieval → evaluate_complexity / generate_answer（training RAG / legacy raganything）
+ROUTE_BRANCH_RAG = "rag"            # 走 concept_retrieval → evaluate_complexity / generate_answer（LightRAG）
 ROUTE_BRANCH_GENERAL = "general"    # 走 generate_answer（通用 LLM，不走 RAG）
 # 概念检索后的路由分支
 ROUTE_BRANCH_CONCEPT_HIT = "concept_hit"      # 命中人工概念库，直接走 generate_answer

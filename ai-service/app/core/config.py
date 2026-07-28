@@ -398,34 +398,7 @@ class Settings(BaseSettings):
         description="Enable context compression to reduce token usage"
     )
 
-    # RAGAnything Configuration (替代 llama-rag-sdk)
-    raganything_working_dir: str = Field(
-        default="./rag_storage_db",
-        description="Working directory for RAGAnything storage"
-    )
-    raganything_enabled: bool = Field(
-        default=True,
-        description="Enable RAGAnything for RAG queries"
-    )
-
-    # Milvus Configuration (向量数据库)
-    milvus_uri: str = Field(
-        default="http://192.168.8.233:19530",
-        description="Milvus service URI"
-    )
-    milvus_user: str = Field(default="root", description="Milvus username")
-    milvus_password: str = Field(default="", description="Milvus password")
-    milvus_db_name: str = Field(default="rag_db", description="Milvus database name")
-
-    # Neo4j Configuration (图数据库)
-    neo4j_uri: str = Field(
-        default="bolt://192.168.8.233:7687",
-        description="Neo4j connection URI"
-    )
-    neo4j_username: str = Field(default="neo4j", description="Neo4j username")
-    neo4j_password: str = Field(default="", description="Neo4j password")
-
-    # VLLM Embedding Configuration (RAGAnything 使用)
+    # VLLM Embedding Configuration
     vllm_embedding_base_url: str = Field(
         default="http://192.168.8.233:8092",
         description="VLLM embedding service base URL"

@@ -36,7 +36,7 @@ async def test_math_detection_and_routing():
             "name": "普通问题",
             "query": "人工智能的发展历史",
             "expected_is_math": False,
-            "expected_streaming_type": "raganything_stream"
+            "expected_streaming_type": "langchain_llm"
         }
     ]
 

@@ -71,7 +71,6 @@ async def run_one(question: str, index: int) -> bool:
 
 
 async def amain() -> int:
-    print("TRAINING_RAG_BACKEND =", os.getenv("TRAINING_RAG_BACKEND", "lightrag_file"))
     print(
         "TRAINING_LIGHTRAG_WORKING_DIR =",
         os.getenv(

@@ -21,7 +21,7 @@
 
 每条用例：
 - 单独使用一个全新 session_id（避免历史污染）；
-- 同一问题连发 2 次（覆盖 raganything 索引/缓存暖机后的稳态）；
+- 同一问题连发 2 次（覆盖知识库索引/缓存暖机后的稳态）；
 - body 主导语言必须与本轮 query 语言完全一致，否则 FAIL。
 """
 from __future__ import annotations

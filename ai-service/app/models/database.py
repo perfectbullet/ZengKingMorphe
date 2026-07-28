@@ -228,7 +228,7 @@ class RawTokenModel(BaseModel):
     conversation_id: Optional[str] = None
     token_text: str
     token_index: int        # 单调递增序列号
-    streaming_source: str   # "raganything" | "math_llm" | "langchain_llm" | "rag_fallback"
+    streaming_source: str   # "rag_stream" | "math_llm" | "langchain_llm" | "rag_fallback"
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 

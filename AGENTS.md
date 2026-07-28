@@ -4,7 +4,7 @@ This file gives coding-agent instructions for this repository. It applies to the
 
 ## Project overview
 
-`ZengKingMorphe` is a Digital Employee AI Service. The main application lives in `ai-service/` and is a FastAPI service with LangGraph-based conversation flow, RAG/knowledge-base support, OpenAI-compatible streaming chat APIs, web search, MinerU document parsing, and integration with MongoDB, ElasticSearch, Milvus, Neo4j, vLLM/Ollama/OpenAI-compatible LLM services, and RAGAnything.
+`ZengKingMorphe` is a Digital Employee AI Service. The main application lives in `ai-service/` and is a FastAPI service with LangGraph-based conversation flow, LightRAG knowledge-base support, OpenAI-compatible streaming chat APIs, web search, MinerU document parsing, and integration with MongoDB, ElasticSearch, vLLM/Ollama/OpenAI-compatible LLM services.
 
 ## Working directory
 
@@ -77,7 +77,7 @@ Key files and responsibilities:
 | Conversation node implementations | `ai-service/app/services/conversation/conversation_nodes.py` |
 | Conversation state TypedDict | `ai-service/app/services/conversation/conversation_state.py` |
 | Intent routing table | `ai-service/app/services/conversation/intent_routing.py` |
-| RAGAnything singleton integration | `ai-service/app/services/raganything_wrapper.py` |
+| LightRAG file knowledge-base integration | `ai-service/app/services/training_lightrag_wrapper.py` |
 | Query classification | `ai-service/app/services/query_classifier.py` |
 | Tests | `ai-service/tests/` |
 
@@ -122,7 +122,7 @@ Keep the graph easy to inspect. If using graph debug output, write it under igno
 
 ## RAG, document parsing, and external services
 
-- RAGAnything, Milvus, Neo4j, MongoDB, ElasticSearch, embedding services, rerankers, MinerU, and vLLM/Ollama endpoints may be environment-dependent. Treat failures as integration-environment issues unless the code path is clearly wrong.
+- LightRAG, MongoDB, ElasticSearch, embedding services, rerankers, MinerU, and vLLM/Ollama endpoints may be environment-dependent. Treat failures as integration-environment issues unless the code path is clearly wrong.
 - For RAG/document changes, avoid assuming every dependency is locally available. Add graceful fallbacks and clear logs where the current architecture already does so.
 - Keep file-upload and document-processing paths safe. Do not introduce path traversal risks; normalize and validate user-controlled filenames/paths.
 - Do not commit uploaded documents, extracted images, parsed PDF chunks, large JSON outputs, or benchmark artifacts.
@@ -143,14 +143,18 @@ For quick local streaming-chat smoke tests, use the project root and the active 
 cd /data/metahuman_work/ZengKingMorphe
 source venv/bin/activate
 
-# Local development environment
-cd /home/zj/ZengKingMorphe
-conda activate morphe
+# Local mathematics development environment
+cd /home/zj/ZengKingMorphe-math/ai-service
+/home/zj/miniconda3/envs/morphe/bin/python -m tests.test_chat_stream_v1 -q "求解不等式x的平方减去5x加上6小于0的解"
+/home/zj/miniconda3/envs/morphe/bin/python -m tests.test_chat_stream_v1 -q "平铺珐琅工艺的基本制作流程是什么？"
 
+# Equivalent when the conda environment has been activated
+conda activate morphe
 python -m tests.test_chat_stream_v1 -q "求解不等式x的平方减去5x加上6小于0的解"
-python -m tests.test_chat_stream_v1 -q "什么是土豆什么是马铃薯"
+python -m tests.test_chat_stream_v1 -q "平铺珐琅工艺的基本制作流程是什么？"
 
 # Test meaningless input handling
+python -m tests.test_chat_stream_v1 -q "什么是土豆什么是马铃薯"
 python -m tests.test_chat_stream_v1 -q "负三的值阿巴阿巴阿巴"
 ```
 

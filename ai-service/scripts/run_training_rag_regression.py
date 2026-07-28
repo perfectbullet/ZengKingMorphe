@@ -366,7 +366,6 @@ def _run_single_question(question: str, books_config: dict[str, dict[str, Any]])
 def _build_report_rows(qa_items: list[QAItem], results: list[dict[str, Any]]) -> str:
     lines = ["# 工训教材通用问答回归报告", ""]
     lines.append(f"- generated_at: {datetime.now().isoformat(timespec='seconds')}")
-    lines.append(f"- TRAINING_RAG_BACKEND: {os.getenv('TRAINING_RAG_BACKEND', '')}")
     lines.append(f"- TRAINING_RAG_KEYWORD_INJECTION_MODE: {os.getenv('TRAINING_RAG_KEYWORD_INJECTION_MODE', '')}")
     lines.append(f"- TRAINING_RAG_ENTITY_TERMS_FILE: {os.getenv('TRAINING_RAG_ENTITY_TERMS_FILE', '')}")
     lines.append(f"- TRAINING_RAG_BOOK_ENTITY_DIR: {os.getenv('TRAINING_RAG_BOOK_ENTITY_DIR', '')}")

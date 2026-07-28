@@ -13,7 +13,7 @@
         → [条件分支: greeting/noise?]   → generate_answer
         → [条件分支: realtime?]          → web_search → generate_answer
         → [条件分支: math?]              → generate_answer（数学模型；ASR→LaTeX 已在上一个节点完成）
-        → [条件分支: rag (concept)?]     → evaluate_complexity → generate_answer（RAGAnything）
+        → [条件分支: rag (concept)?]     → evaluate_complexity → generate_answer（LightRAG）
         → [条件分支: general?]           → generate_answer（通用 LLM，不走 RAG）
         → save_conversation → END
 
@@ -25,7 +25,7 @@ classify_query_type 的 LLM 分类器判定是否为数学题，再统一调用 
 ``app/services/conversation/intent_routing.py``（INTENT_TO_ANSWER_MODE）。
 新增分类标签或调整路由策略只改那张表，不需要改工作流。
 
-注：已使用 RAGAnything 简化 RAG 检索流程。
+注：RAG 查询统一使用文件型 LightRAG。
 已移除节点：intent_recognition, knowledge_retrieval, grade_documents,
             compress_context, match_faq, rewrite_query, check_math_problem
 """
@@ -55,7 +55,7 @@ class ConversationWorkflow:
     特性：
     - 双 LLM 支持：本地 Ollama 负责快速响应，远程 API 负责复杂任务
     - 混合路由：根据查询复杂度自动选择 LLM
-    - RAGAnything 集成：知识图谱 + 向量检索 + 流式输出
+    - LightRAG 集成：知识图谱 + 向量检索 + 流式输出
     - 基于 LLM 的查询分类：QueryClassifier 支持 9 种意图
     - 精简工作流：8 节点
 
@@ -63,7 +63,7 @@ class ConversationWorkflow:
 
     LLM 路由策略（hybrid 模式）：
     - 本地 Ollama：问候语、简单查询（<30 字）、前几轮对话
-    - 远程 API：RAGAnything 查询、联网搜索、长上下文、复杂查询
+    - 远程 API：LightRAG 查询、联网搜索、长上下文、复杂查询
     """
 
     def __init__(self):
@@ -299,7 +299,7 @@ class ConversationWorkflow:
         - 中间：classify_query_type 条件路由
         - 出口：save_conversation → END
 
-        使用 RAGAnything 简化 RAG 检索流程。
+        使用 LightRAG 提供知识库检索流程。
 
         Returns:
             编译完成的 StateGraph，可执行
@@ -374,7 +374,7 @@ class ConversationWorkflow:
             }
         )
 
-        # 概念/教材流程：复杂度评估 → 生成答案（RAGAnything）
+        # 概念/教材流程：复杂度评估 → 生成答案（LightRAG）
         graph.add_edge("evaluate_complexity", "generate_answer")
 
         # 最终顺序

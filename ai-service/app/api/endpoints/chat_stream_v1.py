@@ -612,9 +612,6 @@ _STATE_DEFAULTS: ConversationState = {
     "streaming_messages": None,
     "rag_query": None,
     "rag_mode": None,
-    "rag_backend": None,
-    "raganything_query": None,
-    "raganything_mode": None,
     # ── 客户端附加上下文 ──
     "channel_name": None,
     "team_id": None,
@@ -1260,7 +1257,7 @@ async def generate_openai_stream_v1(
                 logger.info(f"First token received | ttfb_ms={ttfb_ms}")
             model_name = streaming_type or model_name
             # 根据 streaming_type 选择不同的流式输出方式
-            if streaming_type in ("rag_stream", "raganything_stream"):
+            if streaming_type == "rag_stream":
                 base_query = (
                     current_state.get("rag_query")
                     or current_state.get("effective_query")
@@ -1268,28 +1265,14 @@ async def generate_openai_stream_v1(
                     or current_state.get("user_query")
                     or ""
                 )
-                legacy_raw_query = (
-                    current_state.get("raganything_query")
-                    or current_state.get("rewritten_query")
-                    or current_state.get("user_query")
-                    or ""
-                )
-
                 mode = (
                     current_state.get("rag_mode")
-                    or current_state.get("raganything_mode")
                     or os.getenv("TRAINING_RAG_QUERY_MODE", "hybrid")
                 )
-                backend = current_state.get("rag_backend") or os.getenv(
-                    "TRAINING_RAG_BACKEND", "lightrag_file"
-                )
-                include_history = not (
-                    backend == "lightrag_file" and not _training_rag_include_history()
-                )
+                backend = "lightrag_file"
+                include_history = _training_rag_include_history()
                 if include_history:
-                    raw_query = (
-                        legacy_raw_query if backend == "raganything" else base_query
-                    )
+                    raw_query = base_query
                     context_messages = (current_state.get("context") or {}).get(
                         "messages"
                     ) or []
