@@ -23,12 +23,12 @@ from app.services.rag_stream_wrapper import get_rag_stream  # noqa: E402
 
 
 QUESTIONS = [
-    "平铺珐琅工艺的基本制作流程是什么？",
-    "掐丝珐琅工艺中金属丝的作用是什么？",
+    "什么是二项式定理？",
+    "等差数列的前 n 项和公式是什么？",
     "透明釉料和不透明釉料有什么区别？",
-    "画珐琅工艺需要哪些工具和材料？",
-    "金箔和银箔在珐琅工艺中如何使用？",
-    "现代艺术首饰中珐琅工艺有哪些应用方式？",
+    "如何理解函数的定义域和值域？",
+    "排列与组合有什么区别？",
+    "导数的几何意义是什么？",
 ]
 
 
@@ -41,7 +41,7 @@ async def run_one(question: str, index: int) -> bool:
 
     async for item in get_rag_stream(
         query=question,
-        mode=os.getenv("TRAINING_RAG_QUERY_MODE", "hybrid"),
+        mode=os.getenv("RAG_QUERY_MODE", "hybrid"),
         prefer_zh_output=True,
         debug_meta={"script": "test_rag_stream.py", "question_index": index},
     ):
@@ -72,18 +72,18 @@ async def run_one(question: str, index: int) -> bool:
 
 async def amain() -> int:
     print(
-        "TRAINING_LIGHTRAG_WORKING_DIR =",
+        "LIGHTRAG_WORKING_DIR =",
         os.getenv(
-            "TRAINING_LIGHTRAG_WORKING_DIR",
-            "/home/zj/ZengKingMorphe/ai-service/data/lightrag_industrial_training_enamel_debug",
+            "LIGHTRAG_WORKING_DIR",
+            "/home/zj/ZengKingMorphe-math/ai-service/data/lightrag_manual_math_concepts",
         ),
     )
-    print("TRAINING_RAG_QUERY_MODE =", os.getenv("TRAINING_RAG_QUERY_MODE", "hybrid"))
-    print("TRAINING_RAG_STREAM_DEBUG_ENABLED =", os.getenv("TRAINING_RAG_STREAM_DEBUG_ENABLED", "true"))
+    print("RAG_QUERY_MODE =", os.getenv("RAG_QUERY_MODE", "hybrid"))
+    print("RAG_STREAM_DEBUG_ENABLED =", os.getenv("RAG_STREAM_DEBUG_ENABLED", "true"))
     print(
-        "TRAINING_RAG_STREAM_DEBUG_DIR =",
+        "RAG_STREAM_DEBUG_DIR =",
         os.getenv(
-            "TRAINING_RAG_STREAM_DEBUG_DIR",
+            "RAG_STREAM_DEBUG_DIR",
             str(ROOT / "logs" / "rag_stream_debug"),
         ),
     )

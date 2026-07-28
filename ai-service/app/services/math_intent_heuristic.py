@@ -11,7 +11,7 @@ qwen2.5:47b 这类小模型分类器对长问句 / 不带"求/解/计算"动词�
 
 本模块以"轻量正则规则 + 互斥优先级"做兜底纠偏，**只在主分类器给出
 弱标签（general_knowledge / chit_chat / other）时才介入**，避免覆盖
-LLM 已经识别准确的强分类（math_problem / concept_explain / realtime_query 等）。
+LLM 已经识别准确的强分类（math_problem / math_concept_explain / realtime_query 等）。
 
 与 ``realtime_intent_heuristic`` 同思路：
 - 规则数据化（正则 + 词表），扩展只加规则不改业务代码；
@@ -40,7 +40,7 @@ _CONCEPT_INDICATOR = re.compile(
 
 # 教学语境：明显在"讲教材 / 讲课程"，常见于学校/课程问答。
 # 单独命中只是弱信号，需要再叠加 _CONCEPT_INDICATOR 或长度阈值才升级到
-# concept_explain，避免把"在数学课上认识了一位老师"等闲聊误判为教材题。
+# math_concept_explain，避免把"在数学课上认识了一位老师"等闲聊误判为数学概念题。
 _TEACHING_CONTEXT = re.compile(
     r"(在.{0,10}的?学习中|我们\s*学(?:习|过)了?|从教材中|在课本中|"
     r"根据教材|根据课本|教材中|课本中|课程中)"
@@ -111,11 +111,11 @@ def heuristic_concept_explain(query: str) -> bool:
        后基本可以排除噪声 / 闲聊。
 
     短问句（< 25 字）即便命中 _CONCEPT_INDICATOR 也不在这里强制升级——
-    那种短句（"什么是导数"）一般主分类器自己就能给出 concept_explain，
+    那种短句（"什么是导数"）一般主分类器自己就能给出 math_concept_explain，
     不需要启发式干预。
 
     Returns:
-        True  → 强烈建议升级为 ``concept_explain``（走 RAG）
+       True  → 强烈建议升级为 ``math_concept_explain``（走 LightRAG）
         False → 不构成概念题强信号，保持调用方原标签
     """
     q = (query or "").strip()
@@ -137,7 +137,7 @@ def heuristic_concept_explain(query: str) -> bool:
 
 
 # 调用方使用："只对这些弱标签触发启发式纠偏"
-# 不包括 ``math_problem / concept_explain / realtime_query / english_query / greeting / noise``，
+# 不包括 ``math_problem / math_concept_explain / realtime_query / english_query / greeting / noise``，
 # 避免覆盖 LLM 已经识别准确的强分类。
 HEURISTIC_PROMOTABLE_LABELS: frozenset[str] = frozenset(
     {"general_knowledge", "chit_chat", "other"}

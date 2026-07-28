@@ -2,9 +2,9 @@
 基于 LangGraph 的数字员工对话工作流。
 
 本模块实现基于状态机的对话工作流，支持：
-- 多源知识检索（RAG + FAQ + Web Search）
+- 数学概念知识检索（LightRAG + Web Search）
 - 基于 LLM 的查询分类（QueryClassifier）
-- 双 LLM 架构（本地 Ollama + 远程 OpenAI 兼容 API）
+- 基于 vLLM OpenAI 兼容接口的模型调用
 - 流式响应与性能监控
 
 工作流图（9 节点）：
@@ -13,7 +13,7 @@
         → [条件分支: greeting/noise?]   → generate_answer
         → [条件分支: realtime?]          → web_search → generate_answer
         → [条件分支: math?]              → generate_answer（数学模型；ASR→LaTeX 已在上一个节点完成）
-        → [条件分支: rag (concept)?]     → evaluate_complexity → generate_answer（LightRAG）
+        → [条件分支: math concept?]      → concept_retrieval → evaluate_complexity → generate_answer（LightRAG）
         → [条件分支: general?]           → generate_answer（通用 LLM，不走 RAG）
         → save_conversation → END
 
@@ -53,27 +53,23 @@ class ConversationWorkflow:
     基于 LangGraph 的数字员工对话工作流。
 
     特性：
-    - 双 LLM 支持：本地 Ollama 负责快速响应，远程 API 负责复杂任务
-    - 混合路由：根据查询复杂度自动选择 LLM
-    - LightRAG 集成：知识图谱 + 向量检索 + 流式输出
-    - 基于 LLM 的查询分类：QueryClassifier 支持 9 种意图
-    - 精简工作流：8 节点
+    - 统一使用 vLLM OpenAI 兼容接口
+    - LightRAG 用于数学概念解释
+    - 基于 LLM 的查询分类：QueryClassifier 支持数学题、数学概念等意图
+    - 流式响应与 LangGraph 路由
 
-    工作流由 8 个节点通过条件边连接。
-
-    LLM 路由策略（hybrid 模式）：
-    - 本地 Ollama：问候语、简单查询（<30 字）、前几轮对话
-    - 远程 API：LightRAG 查询、联网搜索、长上下文、复杂查询
+    两个 ChatOpenAI 客户端均连接同一 vLLM 服务；保留它们是为了兼容现有
+    ``llm_routing_mode`` 的调用接口，而不是使用不同模型供应商。
     """
 
     def __init__(self):
-        """初始化工作流，创建双 LLM 实例用于混合路由。"""
+        """初始化工作流，创建 vLLM 客户端。"""
         # 统一 LLM 配置（单一数据源）
         llm_base_url = os.getenv("LLM_BASE_URL")
         llm_model = os.getenv("LLM_MODEL")
         llm_api_key = os.getenv("LLM_API_KEY", "no-key")
 
-        # 初始化本地 LLM — 用于快速、简单的响应
+        # 兼容现有混合路由接口的主 vLLM 客户端。
         self.local_llm = ChatOpenAI(
             base_url=llm_base_url,
             api_key=llm_api_key,
@@ -81,14 +77,13 @@ class ConversationWorkflow:
             streaming=True,
         )
         logger.info(
-            f"Local LLM configured | base_url={self.local_llm.openai_api_base} | "
+            f"vLLM primary client configured | base_url={self.local_llm.openai_api_base} | "
             f"model={llm_model} | temperature={self.local_llm.temperature}"
         )
 
-        # 初始化远程 LLM — 用于复杂、精确的响应
-        # 统一配置下与 local_llm 相同，保留双对象架构供 hybrid 路由使用
+        # 兼容现有混合路由接口的次 vLLM 客户端，与主客户端使用同一服务。
         logger.info(
-            f"Initializing remote LLM (unified config) | model={llm_model} | "
+            f"Initializing vLLM secondary client (unified config) | model={llm_model} | "
             f"base_url={llm_base_url}"
         )
         self.remote_llm = ChatOpenAI(

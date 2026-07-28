@@ -186,7 +186,7 @@ def select_llm(state: ConversationState, local_llm, remote_llm) -> Tuple[Any, st
 
     选择逻辑（混合模式）：
     1. 主要依据：complexity_score（0-10）
-       - 0-6分：使用本地 Ollama（简单到中等复杂）
+       - 0-6分：使用主 vLLM 客户端（简单到中等复杂）
        - 7-10分：使用外部 API（高复杂度）
     2. 特殊情况：
        - greeting、FAQ 命中：强制使用本地模型
@@ -195,8 +195,8 @@ def select_llm(state: ConversationState, local_llm, remote_llm) -> Tuple[Any, st
 
     Args:
         state: 当前对话状态
-        local_llm: 本地 Ollama LLM 实例
-        remote_llm: 远端 OpenAI 风格 LLM 实例
+        local_llm: 主 vLLM LLM 实例
+        remote_llm: 次 vLLM LLM 实例
 
     Returns:
         (llm, model_name) 元组
@@ -204,7 +204,7 @@ def select_llm(state: ConversationState, local_llm, remote_llm) -> Tuple[Any, st
     routing_mode = getattr(settings, "llm_routing_mode", "local_only")
 
     # 统一模型名解析
-    model_name = os.getenv("LLM_MODEL") or settings.ollama_model
+    model_name = os.getenv("LLM_MODEL") or settings.llm_model
 
     # Non-hybrid modes: return pre-configured LLM
     if routing_mode == "local_only":
@@ -248,7 +248,7 @@ def select_llm(state: ConversationState, local_llm, remote_llm) -> Tuple[Any, st
         use_remote = True
         reason = ["needs_big_world_knowledge", *reason]
 
-    model_name = os.getenv("LLM_MODEL") or settings.ollama_model
+    model_name = os.getenv("LLM_MODEL") or settings.llm_model
     # 使用 f-string 输出选择详情，避免 Loguru 静默吞掉 keyword arg。
     logger.info(
         f"LLM selection: routing_mode=hybrid, selected={model_name}, "

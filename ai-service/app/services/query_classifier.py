@@ -5,8 +5,7 @@
 
 分类类别:
 - math_problem: 数学题目解答
-- industrial_training_query: 工训教材 / 工业实训知识库问题
-- concept_explain: 概念解释
+- math_concept_explain: 数学概念解释
 - greeting: 问候语
 - english_query: 英语问题
 - realtime_query: 联网检索
@@ -151,8 +150,7 @@ def augment_dialog_with_persisted_turns(
 # =============================================================================
 ClassificationLabel = Literal[
     "math_problem",
-    "industrial_training_query",
-    "concept_explain",
+    "math_concept_explain",
     "greeting",
     "english_query",
     "realtime_query",
@@ -185,8 +183,7 @@ class QueryClassifier:
     # 分类标签名称映射
     LABEL_NAMES = {
         "math_problem": "数学题目解答",
-        "industrial_training_query": "工业实训知识库问答",
-        "concept_explain": "概念解释",
+        "math_concept_explain": "数学概念解释",
         "greeting": "问候语",
         "english_query": "英语问题",
         "realtime_query": "联网检索",
@@ -215,8 +212,8 @@ class QueryClassifier:
 - "证明：若 a>b>0，则 1/a < 1/b"
 - "你帮我求一下这个方程的解"
 
-### 2. concept_explain（概念解释）
-用户询问概念、定义、定理、公式的含义，不需要计算求解。
+### 2. math_concept_explain（数学概念解释）
+用户询问数学概念、定义、定理、公式的含义，不需要计算求解。
 **特征**：
 - 包含概念性词汇：什么是、是什么、介绍、解释、定义、概念、含义
 - 不涉及具体计算或求解
@@ -347,7 +344,7 @@ class QueryClassifier:
 }
 ```
 
-**label 取值**：`math_problem`, `concept_explain`, `greeting`, `realtime_query`, `general_knowledge`, `chit_chat`, `noise`, `other`
+**label 取值**：`math_problem`, `math_concept_explain`, `greeting`, `english_query`, `realtime_query`, `general_knowledge`, `chit_chat`, `noise`, `other`
 
 **重要约束（为了可维护的下游路由）**：
 - 当 `label` 为 `realtime_query` 时，`reason` 必须返回下面枚举之一（全小写英文）：

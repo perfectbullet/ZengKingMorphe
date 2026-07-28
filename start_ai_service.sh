@@ -11,12 +11,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORK_DIR="$SCRIPT_DIR"
 VENV_PATH="$WORK_DIR/venv"
 SERVICE_DIR="$WORK_DIR/ai-service"
-PYTHONPATH="$SERVICE_DIR"
+# 可通过 AI_SERVICE_PYTHON（推荐）或 PYTHON_BIN 指定解释器。
+# 未指定时保留项目 venv 兼容性，并兼容两套 morphe conda 环境。
+PYTHON_BIN="${AI_SERVICE_PYTHON:-${PYTHON_BIN:-}}"
+SERVICE_PYTHONPATH="$SERVICE_DIR"
 HOST="0.0.0.0"
 PORT=8100
 PID_FILE="$SERVICE_DIR/.ai_service.pid"
 LOG_FILE="$SERVICE_DIR/logs/ai_service.log"
-UVICORN_ARGS="--reload --log-level info"
+# 仅监视 Python 源码，避免配置目录存在非 UTF-8 文件名时 watchfiles 崩溃。
+UVICORN_ARGS="--log-level info"
 
 # 颜色输出
 RED='\033[0;31m'
@@ -38,6 +42,37 @@ log_warn() {
 
 log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
+}
+
+# 选择实际运行服务的 Python。直接执行解释器，避免依赖 shell activate，
+# 这样 conda 环境和 venv 都能以相同方式启动。
+resolve_python() {
+    local candidate
+    local candidates=()
+
+    if [ -n "$PYTHON_BIN" ]; then
+        candidates=("$PYTHON_BIN")
+    else
+        candidates=(
+            "$VENV_PATH/bin/python"
+            "/data/chenna/miniconda3/envs/morphe/bin/python"
+            "/home/zj/miniconda3/envs/morphe/bin/python"
+        )
+    fi
+
+    for candidate in "${candidates[@]}"; do
+        if [ -x "$candidate" ]; then
+            PYTHON_BIN="$candidate"
+            return 0
+        fi
+    done
+
+    if [ -n "$PYTHON_BIN" ]; then
+        log_error "指定的 Python 解释器不可执行: $PYTHON_BIN"
+    else
+        log_error "未找到可用 Python。请设置 AI_SERVICE_PYTHON=/path/to/python"
+    fi
+    return 1
 }
 
 # 检查 TCP 端口是否可达（超时 3 秒）
@@ -141,10 +176,10 @@ start_service() {
     # ── 依赖服务健康检查 ──
     log_info "检查依赖服务..."
     local failed=0
-    check_port 192.168.8.233 27017 "MongoDB"       || failed=$((failed+1))
-    check_port 192.168.8.233 9200  "ElasticSearch" || failed=$((failed+1))
-    check_port 192.168.8.233 19530 "Milvus"        || failed=$((failed+1))
-    check_port 192.168.8.233 7687  "Neo4j"         || failed=$((failed+1))
+    check_port 192.168.100.202 27017 "MongoDB"       || failed=$((failed+1))
+    check_port 192.168.100.202 9200  "ElasticSearch" || failed=$((failed+1))
+    check_port 192.168.100.202 19530 "Milvus"        || failed=$((failed+1))
+    check_port 192.168.100.202 7687  "Neo4j"         || failed=$((failed+1))
     # check_port 192.168.8.231 11434 "Ollama"        || failed=$((failed+1))
 
     if [ $failed -gt 0 ]; then
@@ -163,11 +198,14 @@ start_service() {
         return 1
     fi
 
-    # 检查虚拟环境
-    if [ ! -f "$VENV_PATH/bin/activate" ]; then
-        log_error "虚拟环境不存在: $VENV_PATH"
+    if ! resolve_python; then
         return 1
     fi
+    if ! "$PYTHON_BIN" -c 'import uvicorn' >/dev/null 2>&1; then
+        log_error "Python 环境缺少 uvicorn: $PYTHON_BIN"
+        return 1
+    fi
+    log_info "使用 Python: $PYTHON_BIN ($($PYTHON_BIN --version 2>&1))"
 
     # 创建日志目录（确保权限正确）
     LOG_DIR="$(dirname "$LOG_FILE")"
@@ -184,12 +222,10 @@ start_service() {
     # 切换到服务目录并启动
     cd "$SERVICE_DIR" || exit 1
 
-    # 启动服务（后台运行）
-    nohup bash -c "
-        source '$VENV_PATH/bin/activate'
-        export PYTHONPATH='$PYTHONPATH'
-        exec uvicorn main:app --host $HOST --port $PORT $UVICORN_ARGS
-    " >> "$LOG_FILE" 2>&1 &
+    # 启动服务（后台运行）。解释器由 resolve_python 统一选择。
+    nohup env "PYTHONPATH=$SERVICE_PYTHONPATH${PYTHONPATH:+:$PYTHONPATH}" \
+        "$PYTHON_BIN" -m uvicorn main:app --host "$HOST" --port "$PORT" \
+        $UVICORN_ARGS >> "$LOG_FILE" 2>&1 &
 
     PID=$!
     echo $PID > "$PID_FILE"

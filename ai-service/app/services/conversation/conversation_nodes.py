@@ -193,27 +193,6 @@ def _training_rag_enabled() -> bool:
     return _env_bool("TRAINING_RAG_ENABLED", True)
 
 
-def _training_rag_domain_gate_enabled() -> bool:
-    return _env_bool("TRAINING_RAG_DOMAIN_GATE_ENABLED", True)
-
-
-def _training_trigger_keywords() -> list[str]:
-    raw = os.getenv(
-        "TRAINING_RAG_TRIGGER_KEYWORDS",
-        "珐琅,釉料,金属底板,掐丝,平铺珐琅,画珐琅,灰度绘,透空珐琅,内填珐琅,雕金珐琅,金箔,银箔,珐琅炉,首饰设计,烧制,底釉,背釉,透明釉料,不透明釉料",
-    )
-    return [item.strip() for item in raw.split(",") if item.strip()]
-
-
-def _match_training_trigger_keyword(text: str) -> str | None:
-    if not text:
-        return None
-    for keyword in _training_trigger_keywords():
-        if keyword in text:
-            return keyword
-    return None
-
-
 def _extract_weather_location(query: str) -> str | None:
     """
     从自然语言天气问句中提取地点，失败时返回 None。
@@ -1424,7 +1403,7 @@ class ConversationNodes:
                     reason="general",
                 )
 
-            # 数学题 / 教材概念题 启发式补位
+            # 数学题 / 数学概念题启发式补位
             #
             # 背景：qwen3:14b 这类小分类器对没有"求/解/计算"动词的几何应用题，
             # 以及长篇教材式提问存在系统性漏判，会落到 general_knowledge / chit_chat /
@@ -1444,46 +1423,14 @@ class ConversationNodes:
                     )
                 elif heuristic_concept_explain(resolved):
                     logger.info(
-                        "Concept heuristic promoted to concept_explain: "
+                        "Math concept heuristic promoted to math_concept_explain: "
                         f"prev_label={result.label}, prev_confidence={result.confidence}, "
                         f"query={resolved[:80]}"
                     )
                     result = ClassificationResult(
-                        label="concept_explain",
+                        label="math_concept_explain",
                         confidence=result.confidence,
                         reason="heuristic_concept",
-                    )
-
-            if (
-                _training_rag_enabled()
-                and _training_rag_domain_gate_enabled()
-            ):
-                matched_keyword = _match_training_trigger_keyword(resolved or query)
-                if matched_keyword and result.label not in {
-                    "math_problem",
-                    "realtime_query",
-                    "greeting",
-                    "noise",
-                }:
-                    logger.info(
-                        "Industrial training domain gate promoted to industrial_training_query: "
-                        f"keyword={matched_keyword}, prev_label={result.label}, "
-                        f"query={resolved[:80]}"
-                    )
-                    result = ClassificationResult(
-                        label="industrial_training_query",
-                        confidence=result.confidence,
-                        reason=f"industrial_training_keyword:{matched_keyword}",
-                    )
-                elif result.label == "concept_explain":
-                    logger.info(
-                        "Generic concept_explain downgraded to general_knowledge by training domain gate: "
-                        f"query={resolved[:80]}"
-                    )
-                    result = ClassificationResult(
-                        label="general_knowledge",
-                        confidence=result.confidence,
-                        reason="generic_concept_not_industrial_training",
                     )
 
             logger.info(
@@ -1574,7 +1521,7 @@ class ConversationNodes:
                             "citations": [],
                         }
                     )
-                # 默认通用查询（含 concept_explain / english_query / general_knowledge / chit_chat / other）
+                # 默认通用查询（含 english_query / general_knowledge / chit_chat / other）
                 case _:
                     state["is_realtime_query"] = False
                     state["intent"] = "general_query"
@@ -1645,13 +1592,13 @@ class ConversationNodes:
         人工概念检索节点。
 
         职责：
-        - 对 concept_explain 意图进行人工概念库检索
+        - 对 math_concept_explain 意图进行人工数学概念库检索
         - 支持精确匹配（concept_name/alias）和 LightRAG local 模式召回
         - 命中时只依据 concept_context 生成答案
         - 未命中时继续走 evaluate_complexity → generate_answer（通用 LLM 兜底）
 
         设计要点：
-        - 只有 classification_label 为 "concept_explain" 时才执行检索
+        - 只有 classification_label 为 "math_concept_explain" 时才执行检索
         - 命中后清理其他 RAG 上下文，避免混合
         - 使用 ConceptRetrievalService 执行检索逻辑
         """
@@ -1663,13 +1610,13 @@ class ConversationNodes:
             state["concept_context"] = None
             state["concept_context_source"] = None
 
-            # 只处理 concept_explain 意图
+            # 只处理 math_concept_explain 意图
             label = state.get("classification_label")
-            if label != "concept_explain":
-                state["concept_retrieval_reason"] = "skip_non_concept_explain"
+            if label != "math_concept_explain":
+                state["concept_retrieval_reason"] = "skip_non_math_concept_explain"
                 logger.info(
                     f"Concept retrieval skipped: classification_label={label}, "
-                    f"reason=not_concept_explain"
+                    f"reason=not_math_concept_explain"
                 )
                 return state
 
@@ -1784,7 +1731,7 @@ class ConversationNodes:
         查询复杂度评估 — 决定使用本地还是外部模型。
 
         使用启发式规则快速评估问题复杂度（0-10分）：
-        - 0-3分：简单问题 — 本地 Ollama 足够
+        - 0-3分：简单问题 — 主 vLLM 客户端即可
         - 4-6分：中等复杂 — 可用本地，必要时用外部
         - 7-10分：复杂问题 — 使用外部 API 模型
 

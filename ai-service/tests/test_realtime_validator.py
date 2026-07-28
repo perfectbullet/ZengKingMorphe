@@ -4,7 +4,7 @@
 覆盖场景：
 - aneed_realtime 自身的 yes/no 解析（含异常容错）
 - classify_query_type 兜底分支：
-  1. 主分类误判 general_knowledge / chit_chat / concept_explain / other
+  1. 主分类误判 general_knowledge / chit_chat / math_concept_explain / other
      + confidence != "high" + 二元 LLM 返 yes → 升级 realtime_query
   2. math_problem / greeting / noise / realtime_query 永远不触发兜底
   3. 主分类 confidence == "high" 时不触发
@@ -110,7 +110,7 @@ def _should_trigger_fallback(
     "label, expected_can_trigger",
     [
         ("general_knowledge", True),
-        ("concept_explain", True),
+        ("math_concept_explain", True),
         ("chit_chat", True),
         ("english_query", True),
         ("other", True),
@@ -172,7 +172,7 @@ def test_disabled_switch_skipped():
     [
         # 触发条件齐全 + 二元 yes → 升级
         (True, "general_knowledge", True),
-        (True, "concept_explain", True),
+        (True, "math_concept_explain", True),
         (True, "chit_chat", True),
         # 触发条件齐全 + 二元 no → 不升级
         (False, "general_knowledge", False),

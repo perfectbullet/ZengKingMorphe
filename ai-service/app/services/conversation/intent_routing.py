@@ -31,8 +31,7 @@
 按用户需求映射 QueryClassifier 的 9 种标签：
 
     数学题目（math_problem）         → MATH_LLM
-    工训教材 / 工业实训知识库问题（industrial_training_query）→ RAG_WITH_FALLBACK
-    通用概念解释（concept_explain）      → GENERAL_LLM
+    数学概念解释（math_concept_explain） → RAG_WITH_FALLBACK
     问候（greeting）                  → GENERAL_LLM
     英语问答（english_query）         → GENERAL_LLM
     常识性问题（general_knowledge）   → GENERAL_LLM
@@ -86,10 +85,8 @@ class AnswerMode(str, Enum):
 INTENT_TO_ANSWER_MODE: Mapping[str, AnswerMode] = {
     # 数学题目 → 数学模型推理，不走 RAG
     "math_problem": AnswerMode.MATH_LLM,
-    # 工训教材 / 工业实训知识库问题 → RAG（无召回时降级 LLM）
-    "industrial_training_query": AnswerMode.RAG_WITH_FALLBACK,
-    # 通用概念解释 → 通用 LLM，不进入工训 LightRAG
-    "concept_explain": AnswerMode.GENERAL_LLM,
+    # 数学概念解释 → LightRAG（无召回时降级 LLM）
+    "math_concept_explain": AnswerMode.RAG_WITH_FALLBACK,
     # 问候 / 英语 / 常识 / 闲聊 → 直接通用 LLM
     "greeting": AnswerMode.GENERAL_LLM,
     "english_query": AnswerMode.GENERAL_LLM,
@@ -117,7 +114,7 @@ def resolve_answer_mode(classification_label: str | None) -> AnswerMode:
 
     Args:
         classification_label: ``QueryClassifier`` 返回的分类标签
-            （如 ``"math_problem"`` / ``"concept_explain"`` 等）。
+            （如 ``"math_problem"`` / ``"math_concept_explain"`` 等）。
             ``None`` 或空串表示未分类。
 
     Returns:

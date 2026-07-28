@@ -59,7 +59,7 @@ SYSTEM_PROMPT = """你是一个用户查询分类专家。你的任务是对用�
 - "证明：若 a>b>0，则 1/a < 1/b"
 - "你帮我求一下这个方程的解"
 
-### 2. concept_explain（概念解释）
+### 2. math_concept_explain（数学概念解释）
 用户询问概念、定义、定理、公式的含义，不需要计算求解。
 **特征**：
 - 包含概念性词汇：什么是、是什么、介绍、解释、定义、概念、含义
@@ -171,7 +171,7 @@ SYSTEM_PROMPT = """你是一个用户查询分类专家。你的任务是对用�
 }
 ```
 
-**label 取值**：`math_problem`, `concept_explain`, `greeting`, `realtime_query`, `general_knowledge`, `chit_chat`, `noise`, `other`
+**label 取值**：`math_problem`, `math_concept_explain`, `greeting`, `realtime_query`, `general_knowledge`, `chit_chat`, `noise`, `other`
 
 **confidence 说明**：
 - `high`：类别判断非常明确，无明显歧义
@@ -329,7 +329,7 @@ def main():
     # 分类标签定义
     LABEL_NAMES = {
         "math_problem": "数学题目解答",
-        "concept_explain": "概念解释",
+        "math_concept_explain": "数学概念解释",
         "greeting": "问候语",
         "english_query": "英语问题",
         "realtime_query": "联网检索",
@@ -467,7 +467,7 @@ def main():
     print("\n" + "=" * 60)
     print("分类完成！统计结果：")
     print("=" * 60)
-    for label in ["math_problem", "concept_explain", "greeting", "english_query",
+    for label in ["math_problem", "math_concept_explain", "greeting", "english_query",
                   "realtime_query", "general_knowledge", "chit_chat", "noise", "other", "unknown"]:
         if label in stats:
             name = LABEL_NAMES.get(label, label)
@@ -509,7 +509,7 @@ def main():
         f.write("分类统计:\n")
         f.write("=" * 60 + "\n")
 
-        for label in ["math_problem", "concept_explain", "greeting", "english_query",
+        for label in ["math_problem", "math_concept_explain", "greeting", "english_query",
                       "realtime_query", "general_knowledge", "chit_chat", "noise", "other", "unknown"]:
             if label in stats:
                 name = LABEL_NAMES.get(label, label)
@@ -521,7 +521,7 @@ def main():
         f.write("各分类示例（前 5 条）：\n")
         f.write("=" * 60 + "\n\n")
 
-        for label in ["math_problem", "concept_explain", "greeting", "realtime_query",
+        for label in ["math_problem", "math_concept_explain", "greeting", "realtime_query",
                       "general_knowledge", "chit_chat", "noise", "other"]:
             name = LABEL_NAMES.get(label, label)
             examples = [r for r in sorted_results if r["label"] == label][:5]
