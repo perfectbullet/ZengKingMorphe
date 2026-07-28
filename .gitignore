@@ -139,4 +139,15 @@ ai-service/data/lightrag_manual_concepts_custom_kg/*
 ai-service/data/lightrag_industrial_training/
 ai-service/tests/saved_responses/*
 tools/call_online_mineru/output/
-tools/manual_concepts_lightrag/markdown_graph/backups/lightrag_industrial_training_before_import_20260706_145323.tar.gz
+tools/manual_concepts_lightrag/markdown_graph/backups/*
+ai-service/app/services/conversation/bak_industrial_asr_corrections/*
+ai-service/config/entities/*
+ai-service/config/qa/*
+tools/manual_concepts_lightrag/markdown_graph/prompts/entity_type/*
+tools/manual_concepts_lightrag/.env.bak.20260711_171431
+tools/manual_concepts_lightrag/.env_math
+mylog.log
+debug_contexts/*
+ai-service/data/*
+ai-service/config/industrial_training_hot_words copy.txt
+tools/manual_concepts_lightrag/markdown_graph/run_step_by_step.md
