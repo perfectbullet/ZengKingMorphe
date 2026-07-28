@@ -321,10 +321,7 @@ def _run_single_question(question: str, books_config: dict[str, dict[str, Any]])
         stdout,
     )
     label_match = re.search(r"LLM classification: label=([^,]+)", stdout)
-    matched_entities = before.get("matched_entities") or []
     retrieved_chunk_books, retrieved_chunk_subjects, retrieved_book_unknown = _summarize_chunk_books(citations, books_config)
-    matched_entity_books = sorted({item.get("book_id") for item in matched_entities if item.get("book_id")})
-    matched_entity_subjects = sorted({item.get("subject") for item in matched_entities if item.get("subject")})
 
     return {
         "question": question,
@@ -337,9 +334,6 @@ def _run_single_question(question: str, books_config: dict[str, dict[str, Any]])
         "original_query": before.get("original_query"),
         "effective_query": before.get("effective_query"),
         "aquery_llm_query_is_original": before.get("aquery_llm_query_is_original"),
-        "keyword_injection_mode": before.get("keyword_injection_mode"),
-        "injected_hl_keywords": before.get("injected_hl_keywords") or [],
-        "injected_ll_keywords": before.get("injected_ll_keywords") or [],
         "low_level_keywords": (after.get("keyword_debug") or {}).get("low_level_keywords") or [],
         "high_level_keywords": (after.get("keyword_debug") or {}).get("high_level_keywords") or [],
         "entities_count": int(info_match.group(2)) if info_match else 0,
@@ -350,9 +344,6 @@ def _run_single_question(question: str, books_config: dict[str, dict[str, Any]])
         "final_chunks_count": info_match.group(7) if info_match else None,
         "chunk_file_paths": [c.get("file_path") for c in citations if c.get("file_path")],
         "chunk_citations": citations,
-        "matched_entities": matched_entities,
-        "matched_entity_books": matched_entity_books,
-        "matched_entity_subjects": matched_entity_subjects,
         "retrieved_chunk_books": retrieved_chunk_books,
         "retrieved_chunk_subjects": retrieved_chunk_subjects,
         "retrieved_book_unknown": retrieved_book_unknown,
@@ -366,10 +357,6 @@ def _run_single_question(question: str, books_config: dict[str, dict[str, Any]])
 def _build_report_rows(qa_items: list[QAItem], results: list[dict[str, Any]]) -> str:
     lines = ["# 工训教材通用问答回归报告", ""]
     lines.append(f"- generated_at: {datetime.now().isoformat(timespec='seconds')}")
-    lines.append(f"- TRAINING_RAG_KEYWORD_INJECTION_MODE: {os.getenv('TRAINING_RAG_KEYWORD_INJECTION_MODE', '')}")
-    lines.append(f"- TRAINING_RAG_ENTITY_TERMS_FILE: {os.getenv('TRAINING_RAG_ENTITY_TERMS_FILE', '')}")
-    lines.append(f"- TRAINING_RAG_BOOK_ENTITY_DIR: {os.getenv('TRAINING_RAG_BOOK_ENTITY_DIR', '')}")
-    lines.append(f"- TRAINING_RAG_BOOKS_CONFIG: {os.getenv('TRAINING_RAG_BOOKS_CONFIG', '')}")
     lines.append(f"- TRAINING_RAG_QA_FILE: {os.getenv('TRAINING_RAG_QA_FILE', '')}")
     lines.append("")
     for qa, result in zip(qa_items, results):
@@ -402,14 +389,8 @@ def _build_report_rows(qa_items: list[QAItem], results: list[dict[str, Any]]) ->
                 f"- original_query: {result.get('original_query')}",
                 f"- effective_query: {result.get('effective_query')}",
                 f"- aquery_llm_query_is_original: {result.get('aquery_llm_query_is_original')}",
-                f"- keyword_injection_mode: {result.get('keyword_injection_mode')}",
-                f"- injected_ll_keywords: {result.get('injected_ll_keywords')}",
-                f"- injected_hl_keywords: {result.get('injected_hl_keywords')}",
                 f"- low_level_keywords: {result.get('low_level_keywords')}",
                 f"- high_level_keywords: {result.get('high_level_keywords')}",
-                f"- matched_entities: {result.get('matched_entities')}",
-                f"- matched_entity_books: {result.get('matched_entity_books')}",
-                f"- matched_entity_subjects: {result.get('matched_entity_subjects')}",
                 f"- entities_count: {result.get('entities_count')}",
                 f"- relationships_count: {result.get('relationships_count')}",
                 f"- chunks_count: {result.get('chunks_count')}",
