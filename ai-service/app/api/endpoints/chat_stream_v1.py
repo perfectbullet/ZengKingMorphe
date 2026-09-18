@@ -1035,7 +1035,7 @@ async def generate_openai_stream_v1(
                 )
 
             # 拒答 content chunk：content 与 voice_content 同文案，不进入
-            # 公式转换 / MathAgentService / RAG。chunk_type 与普通回答一致用 "token"，
+            # 公式转换 / 数学 ChatOpenAI / RAG。chunk_type 与普通回答一致用 "token"，
             # 便于前端按既有逻辑渲染；finish chunk 与 [DONE] 交给收尾段统一发送。
             content_chunk_data = {
                 "id": chat_id,
@@ -1606,10 +1606,6 @@ async def generate_openai_stream_v1(
                 # 数学模型推理流式输出
                 streaming_llm = current_state.get("streaming_llm")
                 messages = current_state.get("streaming_messages")
-                # math_runtime_mode 已由 generate_answer 节点写入 state（值为
-                # direct/cot/tir）；不再从 ChatOpenAI 对象 getattr 一个不存在的 mode
-                # 属性，旧 ``llm`` 模式已彻底删除。
-                math_runtime_mode = current_state.get("math_runtime_mode") or "direct"
                 if not streaming_llm or not messages:
                     logger.error(
                         "streaming_llm or messages not configured for math_llm type"
@@ -1619,13 +1615,12 @@ async def generate_openai_stream_v1(
                     streaming_llm, "openai_api_base", None
                 ) or getattr(streaming_llm, "base_url", "unknown")
                 logger.info(
-                    f"Using math LLM stream | mode={math_runtime_mode} | "
-                    f"model={model_name} | base_url={_llm_base_url}"
+                    f"Using math ChatOpenAI stream | model={model_name} | base_url={_llm_base_url}"
                 )
 
                 # 使用真正的流式输出
                 logger.info(
-                    f"Starting streaming response with astream | type=math_llm | mode={math_runtime_mode}"
+                    "Starting streaming response with astream | type=math_llm"
                 )
                 first_token_received = False
                 full_answer = ""
@@ -1647,7 +1642,7 @@ async def generate_openai_stream_v1(
                                 employee_id=request.employee_id,
                                 session_id=session_id,
                                 chat_id=chat_id,
-                                runtime_mode=math_runtime_mode,
+                                runtime_mode="direct",
                             )
                             math_model_name = (
                                 getattr(streaming_llm, "model_name", None)
@@ -1660,7 +1655,7 @@ async def generate_openai_stream_v1(
                                 employee_id=request.employee_id,
                                 session_id=session_id,
                                 chat_id=chat_id,
-                                runtime_mode=math_runtime_mode,
+                                runtime_mode="direct",
                                 model_name=math_model_name,
                                 base_url=_llm_base_url,
                                 user_query=current_state.get("user_query") or "",

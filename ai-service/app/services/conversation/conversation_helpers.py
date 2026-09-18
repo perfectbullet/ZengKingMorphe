@@ -21,9 +21,13 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.services.conversation.conversation_state import ConversationState
 from app.utils.common import detect_dominant_language
-from app.services.math_agent_service import MathAgentService
-
 logger = get_logger(__name__)
+
+
+MATH_SYSTEM_PROMPTS = {
+    "zh": "请逐步推理，并将最终答案放在 \\boxed{} 中。请全程使用中文作答。",
+    "en": "Please reason step by step, and put your final answer within \\boxed{}.",
+}
 
 
 def clean_user_query(text: str) -> str:
@@ -1243,39 +1247,22 @@ User question:
     return messages
 
 
-def build_math_generation_messages(
-    state: ConversationState,
-    include_system_prompt: bool = True,
-    math_runtime_mode: str = "direct",
-    math_runtime_lang: str = "zh",
-) -> List:
+def build_math_generation_messages(state: ConversationState) -> List:
     """
     构建数学问题的模型消息。
 
-    系统提示词统一来自 ``MathAgentService.get_system_prompt(mode, lang)``：
-    - ``direct`` 模式：``include_system_prompt=True``，注入对应语言的 direct system prompt；
-    - ``cot`` / ``tir`` 模式：``include_system_prompt=False``，模式提示词由 Qwen-Agent
-      自己的 Assistant / TIRMathAgent system_message 决定，这里不再额外注入，避免两套
-      模式提示互相叠加。
+    数学模型固定为原生 ``ChatOpenAI``，始终注入系统提示词。
+    提示词语言由本轮输出语言偏好决定。
 
     数学历史一律禁用（``history_msgs=[]``）。
 
     Args:
         state: Current conversation state
-        include_system_prompt: 是否注入数学 system prompt
-        math_runtime_mode: 数学运行模式（direct / cot / tir），决定使用哪套提示词
-        math_runtime_lang: 提示词语言（zh / en）
-
     Returns:
         List of Message objects for math LLM
     """
-    messages = []
-    if include_system_prompt:
-        system_prompt = MathAgentService.get_system_prompt(
-            mode=math_runtime_mode,
-            lang=math_runtime_lang,
-        )
-        messages.append(SystemMessage(content=system_prompt))
+    math_lang = "zh" if resolve_prefer_zh_output(state) else "en"
+    messages = [SystemMessage(content=MATH_SYSTEM_PROMPTS[math_lang])]
 
     # 数学模型一律不携带历史对话：历史上下文会污染推理（如敏感词命中后的拒答
     # 话术、空 assistant 消息等被一并送入），导致数学模型 prompt 串入噪声。
@@ -1302,10 +1289,8 @@ def build_math_generation_messages(
     messages.append(HumanMessage(content=user_content))
 
     logger.info(
-        "build_math_generation_messages [qwen_math]: "
-        f"include_system_prompt={include_system_prompt}, "
-        f"math_runtime_mode={math_runtime_mode}, "
-        f"math_runtime_lang={math_runtime_lang}, "
+        "build_math_generation_messages [ChatOpenAI]: "
+        f"math_lang={math_lang}, "
         f"history_msgs={len(history_msgs)}, "
         f"math_history_disabled=True, "
         f"math_context_used={math_context_used}, "

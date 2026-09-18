@@ -50,7 +50,6 @@ from app.services.math_intent_heuristic import (
     heuristic_concept_explain,
     is_math_problem,
 )
-from app.services.math_agent_service import MathAgentService
 from app.services.conversation.conversation_helpers import (
     time_node,
     heuristic_complexity,
@@ -2464,29 +2463,14 @@ class ConversationNodes:
                 # 数学题：数学模型推理，明确不走 RAG
                 streaming_llm, model_name = self.workflow.get_math_streaming_llm(state)
 
-                # 运行模式/语言来自 state（由 conversation_service.get_math_streaming_llm
-                # 写入），不再从 ChatOpenAI 对象上 getattr 一个并不存在的 mode 属性。
-                math_runtime_mode = state.get("math_runtime_mode") or "direct"
-                math_runtime_mode = MathAgentService.validate_runtime_mode(
-                    math_runtime_mode
-                )
-                math_runtime_lang = state.get("math_runtime_lang") or "zh"
-
-                messages = build_math_generation_messages(
-                    state,
-                    include_system_prompt=MathAgentService.is_direct_mode(
-                        math_runtime_mode
-                    ),
-                    math_runtime_mode=math_runtime_mode,
-                    math_runtime_lang=math_runtime_lang,
-                )
+                # math_llm 固定为 ChatOpenAI；数学消息始终含系统提示词。
+                messages = build_math_generation_messages(state)
                 state["streaming_llm"] = streaming_llm
                 state["streaming_messages"] = messages
                 state["streaming_type"] = "math_llm"
-                state["math_runtime_mode"] = math_runtime_mode
                 logger.info(
                     f"Streaming configured: type=math_llm, model={model_name}, "
-                    f"runtime_mode={math_runtime_mode}, answer_mode={answer_mode}, "
+                    f"answer_mode={answer_mode}, "
                     f"query={state['user_query'][:50]}..., "
                     f"message_count={len(messages)}"
                 )

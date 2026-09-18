@@ -21,7 +21,7 @@ services:
     command:
       - /models/Qwen3-32B
       - --served-model-name
-      - Qwen3-32B
+      - Qwen3-32B-AWQ
       - --host
       - 0.0.0.0
       - --port

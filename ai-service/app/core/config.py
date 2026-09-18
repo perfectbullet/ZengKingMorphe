@@ -67,7 +67,7 @@ class Settings(BaseSettings):
     openai_grader_model: str = Field(default="deepseek-ai/DeepSeek-V3")
     openai_temperature: float = Field(default=0.0, ge=0.0, le=2.0)
 
-    # Math Model Configuration 已迁移到环境变量（MATH_LLM_BASE_URL / MATH_MODEL_NAME / MATH_LLM_ENABLED），
+    # Math Model Configuration 已迁移到环境变量（MATH_MODEL_BASE_URL / MATH_MODEL_NAME / MATH_LLM_ENABLED），
     # 在 conversation_service.py 的 get_math_streaming_llm() 中直接读取。
 
     # 混合模式复杂度阈值配置 (hybrid 模式下生效)

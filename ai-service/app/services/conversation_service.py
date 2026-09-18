@@ -39,7 +39,6 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.services.conversation.conversation_state import ConversationState
 from app.services.conversation.conversation_nodes import ConversationNodes
-from app.services.math_agent_service import MathAgentService, MathRuntimeConfig
 from app.utils.get_vllm_first_model import get_vllm_first_model
 
 logger = get_logger(__name__)
@@ -185,14 +184,12 @@ class ConversationWorkflow:
 
     def get_math_streaming_llm(self, state: ConversationState):
         """
-        动态创建数学流式 LLM（不存储为实例变量）。
+        动态创建数学流式 LLM（原生 ChatOpenAI，不存储为实例变量）。
 
         通过环境变量配置：
         - MATH_LLM_ENABLED: 是否启用（默认 true）
         - MATH_MODEL_BASE_URL: API 地址
         - MATH_MODEL_NAME: 模型名（不设则通过 vLLM 自动发现）
-        - MATH_RUNTIME_MODE: direct / cot / tir（旧 ``llm`` 已删除，配置 ``llm`` 会抛错）
-        - MATH_RUNTIME_LANG: zh / en（不设时按 query 粗略推断）
         - MATH_TEMPERATURE / MATH_TOP_P: 非 Qwen3-32B 模型的采样参数；
           Qwen3-32B 始终使用服务端 generation_config.json
 
@@ -222,53 +219,38 @@ class ConversationWorkflow:
         math_temperature = float(os.getenv("MATH_TEMPERATURE", 0.6))
         math_max_token = int(os.getenv("MATH_MAX_TOKEN", 10240))
         math_top_p = float(os.getenv("MATH_TOP_P", 0.95))
-        use_model_generation_defaults = (
-            MathAgentService.is_model_generation_default(model_id)
-        )
+        use_model_generation_defaults = self._uses_model_generation_defaults(model_id)
         if use_model_generation_defaults:
             math_temperature = None
             math_top_p = None
-        raw_runtime_mode = os.getenv("MATH_RUNTIME_MODE", "direct")
-        # 非法值（含已删除的 llm）直接抛 ValueError，让配置问题暴露，不静默 fallback。
-        runtime_mode = MathAgentService.validate_runtime_mode(raw_runtime_mode)
-        runtime_lang = (os.getenv("MATH_RUNTIME_LANG") or "").strip().lower()
-
-        query_text = (
-            state.get("rewritten_query")
-            or state.get("user_query")
-            or ""
-        )
-        if runtime_lang not in {"zh", "en"}:
-            runtime_lang = MathAgentService.resolve_lang(query_text, fallback="zh")
-
-        math_service = MathAgentService(MathRuntimeConfig(
-            base_url=base_url,
-            api_key=math_api_key,
-            model=model_id,
-            temperature=math_temperature,
-            max_tokens=math_max_token,
-            streaming=True,
-            top_p=math_top_p,
-        ))
-        math_llm = math_service.create_streaming_interface(
-            mode=runtime_mode,
-            lang=runtime_lang,
-        )
+        math_llm_kwargs = {
+            "base_url": base_url,
+            "api_key": math_api_key,
+            "model": model_id,
+            "max_tokens": math_max_token,
+            "streaming": True,
+        }
+        if math_temperature is not None:
+            math_llm_kwargs["temperature"] = math_temperature
+        if math_top_p is not None:
+            math_llm_kwargs["top_p"] = math_top_p
+        math_llm = ChatOpenAI(**math_llm_kwargs)
 
         logger.info(
-            f"Math runtime created | mode={runtime_mode} | lang={runtime_lang} | "
-            f"model={model_id} | base_url={base_url} | "
+            f"Math ChatOpenAI client created | model={model_id} | base_url={base_url} | "
             f"sampling={'model_default' if use_model_generation_defaults else 'env'} | "
             f"math_temperature={math_temperature} | math_top_p={math_top_p} | "
             f"math_max_token={math_max_token}"
         )
 
-        # 把运行模式/语言写入 state，供下游节点（conversation_nodes）构建数学消息时读取，
-        # 避免再从 ChatOpenAI 对象上 getattr 一个不存在的 mode 属性。
-        state["math_runtime_mode"] = runtime_mode
-        state["math_runtime_lang"] = runtime_lang
-
         return math_llm, model_id
+
+    @staticmethod
+    def _uses_model_generation_defaults(model: str | None) -> bool:
+        """Qwen3-32B 使用模型服务端 generation_config.json 的采样参数。"""
+        if not model:
+            return False
+        return "qwen3-32b" in model.lower().replace("_", "-")
 
     async def save_conversation(self, state: ConversationState):
         """

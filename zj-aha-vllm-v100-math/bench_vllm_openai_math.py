@@ -14,7 +14,7 @@ What it measures:
 - Per-request JSONL and summary CSV
 
 Example:
-  python bench_vllm_openai.py \
+  python bench_vllm_openai_math.py \
     --base-url http://192.168.100.230:8200/v1 \
     --model Qwen3-32B \
     --concurrency 1 \
@@ -22,7 +22,7 @@ Example:
     --max-tokens 512
 
 Concurrent test:
-  python bench_vllm_openai.py \
+  python bench_vllm_openai_math.py \
     --base-url http://192.168.100.230:8200/v1 \
     --model Qwen3-32B \
     --concurrency 4 \

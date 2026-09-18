@@ -20,7 +20,7 @@
 
 约束:
     - 不修改线上接口逻辑
-    - 不修改 ai-service/app/services/math_agent_service.py
+    - 不修改线上数学 ChatOpenAI 调用逻辑
     - 第一版串行执行 (concurrency=1)
 
 环境变量 (直接读取, 不写进 config.py):
