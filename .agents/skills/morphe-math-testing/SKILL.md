@@ -48,8 +48,8 @@ v2 脚本输出 SSE 文本、首 token 延迟和响应 metadata。路由不在�
 cd ai-service
 PY=/home/zj/miniconda3/envs/morphe/bin/python
 
-# 数学题端到端回复和数学 / 非数学路由
-$PY -m pytest -v tests/test_math_problems.py tests/test_math_concept_intent_routing.py
+# 数学 / 非数学路由
+$PY -m pytest -v tests/test_math_concept_intent_routing.py
 
 # 数学追问、题干 LaTeX 化、流式分块
 $PY -m pytest -v tests/test_context_resolution_math.py tests/test_latex_utils.py tests/test_stream_chunks.py
@@ -57,12 +57,13 @@ $PY -m pytest -v tests/test_context_resolution_math.py tests/test_latex_utils.py
 
 | 文件 | 覆盖点 |
 |---|---|
-| `tests/test_math_problems.py` | 数学题端到端回复 |
 | `tests/test_math_concept_intent_routing.py` | 数学标签与非数学标签的路由 |
 | `tests/test_context_resolution_math.py` | 数学追问的上下文补全 |
 | `tests/test_latex_utils.py` | LaTeX 清洗与规范化 |
 | `tests/test_stream_chunks.py` | 流式分块格式 |
 | `tests/test_chat_stream_v2.py` | v2 流式端点联调（本分支唯一使用的冒烟脚本） |
+
+旧 v1 直调脚本及批量数学题脚本已归档到 `archive/legacy-v1/tests/`，不用于本分支验收。
 
 ## 路由验收标准
 

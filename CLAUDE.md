@@ -24,8 +24,11 @@ cd ai-service && uvicorn main:app --reload --port 8000
 # Run all tests
 cd ai-service && python -m pytest tests/ -v
 
-# Run single test file
-cd ai-service && python -m pytest tests/test_chat_stream_v1.py -v
+# Run a focused unit test
+cd ai-service && python -m pytest tests/test_latex_utils.py -v
+
+# Smoke-test the real v2 streaming endpoint (the service must be running)
+cd ai-service && python -m tests.test_chat_stream_v2 -q "求解不等式x的平方减去5x加上6小于0的解" --host http://localhost:8100
 
 # Run with coverage
 cd ai-service && python -m pytest tests/ --cov=app --cov-report=html -v

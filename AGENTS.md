@@ -139,23 +139,19 @@ cd ai-service
 For quick local streaming-chat smoke tests, use the project root and the active local or server Python environment:
 
 ```bash
-# Server environment
-cd /data/metahuman_work/ZengKingMorphe
-source venv/bin/activate
-
-# Local mathematics development environment
+# Local mathematics development environment; the v2 service must already be running.
 cd /home/zj/ZengKingMorphe-math/ai-service
-/home/zj/miniconda3/envs/morphe/bin/python -m tests.test_chat_stream_v1 -q "求解不等式x的平方减去5x加上6小于0的解"
-/home/zj/miniconda3/envs/morphe/bin/python -m tests.test_chat_stream_v1 -q "平铺珐琅工艺的基本制作流程是什么？"
+/home/zj/miniconda3/envs/morphe/bin/python -m tests.test_chat_stream_v2 -q "求解不等式x的平方减去5x加上6小于0的解" --host http://localhost:8100
+/home/zj/miniconda3/envs/morphe/bin/python -m tests.test_chat_stream_v2 -q "北京今天天气怎么样" --host http://localhost:8100
 
 # Equivalent when the conda environment has been activated
 conda activate morphe
-python -m tests.test_chat_stream_v1 -q "求解不等式x的平方减去5x加上6小于0的解"
-python -m tests.test_chat_stream_v1 -q "平铺珐琅工艺的基本制作流程是什么？"
+python -m tests.test_chat_stream_v2 -q "求解不等式x的平方减去5x加上6小于0的解" --host http://localhost:8100
+python -m tests.test_chat_stream_v2 -q "北京今天天气怎么样" --host http://localhost:8100
 
 # Test meaningless input handling
-python -m tests.test_chat_stream_v1 -q "什么是土豆什么是马铃薯"
-python -m tests.test_chat_stream_v1 -q "负三的值阿巴阿巴阿巴"
+python -m tests.test_chat_stream_v2 -q "什么是土豆什么是马铃薯" --host http://localhost:8100
+python -m tests.test_chat_stream_v2 -q "负三的值阿巴阿巴阿巴" --host http://localhost:8100
 ```
 
 For endpoint, routing, or conversation changes, prefer adding or updating tests under `ai-service/tests/`. If tests cannot run because local services or secrets are unavailable, state exactly what was not run and why.
