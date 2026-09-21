@@ -129,7 +129,7 @@ def main():
     )
     parser.add_argument(
         "--host",
-        default="192.168.8.233",
+        default="192.168.100.233",
         help="WebSocket server host (default: localhost)"
     )
     parser.add_argument(
