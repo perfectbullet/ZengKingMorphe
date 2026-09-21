@@ -9,7 +9,6 @@ from app.core.logging import get_logger
 from app.core.database import get_database
 from app.utils.embeddings import get_embedding
 # from app.core.chroma import chroma_db
-from app.core.elasticsearch import es_db
 
 logger = get_logger(__name__)
 
@@ -24,8 +23,7 @@ class FaqProcessor:
             3. 使用combined_text生成向量（已在sync时生成）
             4. 调用Embedding API生成向量
             5. 写入ChromaDB（向量存储）
-            6. 写入ElasticSearch（关键词索引）
-            7. 更新MongoDB的synced_at时间戳
+            6. 更新MongoDB的synced_at时间戳
         """
         db = await get_database()
         try:
@@ -127,18 +125,6 @@ class FaqProcessor:
                            f"error={str(e)}", exc_info=True)
             raise
 
-        # 删除ElasticSearch记录
-        try:
-            await es_db.delete_document(
-                index="faq",
-                doc_id=faq_id
-            )
-            logger.debug(f"delete_faq_vectorization_data Deleted FAQ faq_id={faq_id} from ElasticSearch")
-        except Exception as e:
-            logger.warning(f"delete_faq_vectorization_data ElasticSearch delete failed: faq_id={faq_id} "
-                           f"error={str(e)}", exc_info=True)
-            raise
-
     async def create_faq_vectorization_data(self, faq: Any, update_time: str):
         faq_id = faq["faq_id"]
         logger.info(f"create_faq_vectorization_data is disabled and delete chroma_db: faq_id={faq_id}", exc_info=True)
@@ -182,32 +168,6 @@ class FaqProcessor:
             logger.error(f"create_faq_vectorization_data Failed to write FAQ to ChromaDB: faq_id={faq_id} "
                          f"error={str(e)}", exc_info=True)
             raise
-
-        # 6: 生成ElasticSearch的查询关键字索引
-        try:
-            es_doc = {
-                "faq_id": faq_id,
-                "employee_id": faq["employee_id"],
-                "question_name": faq.get("question_name", ""),
-                "similar_questions": faq.get("similar_questions", []),
-                "combined_text": combined_text,
-                "answers": faq.get("answers", []),
-                "is_enable": faq.get("is_enable", 1),
-                "update_time": update_time
-            }
-
-            await es_db.index_document(
-                index="faq",
-                doc_id=faq_id,
-                document=es_doc
-            )
-
-            logger.info(f"create_faq_vectorization_data indexed in ElasticSearch: faq_id={faq_id}")
-        except Exception as e:
-            logger.error(f"create_faq_vectorization_data Failed to write FAQ to ElasticSearch: faq_id={faq_id} "
-                         f"error={str(e)}", exc_info=True)
-            raise
-
 
 # Global faq processor instance
 faq_processor = FaqProcessor()

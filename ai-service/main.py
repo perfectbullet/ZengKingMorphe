@@ -11,7 +11,6 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.core.config import settings
 from app.core.logging import setup_logging, get_logger
 from app.core.database import mongodb
-from app.core.elasticsearch import es_db
 
 from app.api.middleware.error_handler import (
     http_exception_handler,
@@ -49,14 +48,13 @@ async def lifespan(app: FastAPI):
     logger.info("Starting Digital Employee AI Service...")
     
     try:
-        # Connect to databases
+        # Connect to runtime data store
         await mongodb.connect()
-        await es_db.connect()
         
         # Start task processor
         # await task_processor.start()
 
-        logger.info("All databases connected and task processor started successfully")
+        logger.info("MongoDB connected and task processor started successfully")
         
     except Exception as e:
         logger.error(f"Failed to start application: error={str(e)}")
@@ -72,12 +70,9 @@ async def lifespan(app: FastAPI):
         # await task_processor.stop()
         logger.debug("Task processor stopped")
 
-        # Disconnect databases in reverse order (按相反顺序断开数据库连接)
+        # Disconnect runtime data store
         await mongodb.disconnect()
         logger.debug("MongoDB disconnected")
-
-        await es_db.disconnect()
-        logger.debug("ElasticSearch disconnected")
 
         logger.info("All services stopped successfully")
 
@@ -139,8 +134,6 @@ async def health_check():
     return {
         "status": "healthy",
         "mongodb": "connected" if mongodb.db is not None else "disconnected",
-        "chroma": "connected" if chroma_db.client is not None else "disconnected",
-        "elasticsearch": "connected" if es_db.client is not None else "disconnected"
     }
 
 

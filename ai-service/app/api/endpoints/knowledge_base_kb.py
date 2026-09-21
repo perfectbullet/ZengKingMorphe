@@ -10,7 +10,6 @@ from pathlib import Path
 
 from app.api.middleware.auth import get_api_key
 # from app.core.chroma import chroma_db
-from app.core.elasticsearch import es_db
 from app.core.logging import get_logger
 from app.core.database import get_database
 from app.core.config import settings
@@ -176,8 +175,7 @@ async def delete_knowledge_bases(
         2. 删除 SDK DocStore 数据 (collection="docstore")
         3. 删除 MongoDB document_chunks (保留用于查询功能)
         4. 删除 MongoDB documents
-        5. 删除 ElasticSearch 索引数据 (保留用于关键词搜索)
-        6. 删除知识库元数据
+        5. 删除知识库元数据
 
         Args:
             - kb_id: knowledge base ID
@@ -230,17 +228,7 @@ async def delete_knowledge_bases(
         docs_result = await db.documents.delete_many({"kb_id": kb_id})
         logger.info(f"delete_knowledge_bases delete documents: kb_id={kb_id}, count={docs_result.deleted_count}")
 
-        # 5. 删除 ElasticSearch 索引数据 (保留用于关键词搜索)
-        try:
-            await es_db.delete_by_query(
-                index='doc',
-                body={"query": {"term": {"kb_id": kb_id}}},
-            )
-            logger.info(f"delete_knowledge_bases: deleted from ElasticSearch, kb_id={kb_id}")
-        except Exception as e:
-            logger.warning(f"delete_knowledge_bases ElasticSearch delete exception: kb_id={kb_id} error={str(e)}")
-
-        # 6. 最后删除知识库元数据
+        # 5. 最后删除知识库元数据
         result = await db.knowledge_bases.delete_one({'kb_id': kb_id})
 
         if result and result.deleted_count == 1:

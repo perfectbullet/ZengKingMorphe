@@ -169,6 +169,8 @@ class OpenAIChatRequest(BaseModel):
     # Custom fields for our system
     employee_id: str = Field(default="29", description="Digital employee ID")
     user_id: str = Field(default="user_20260122", description="User ID")
+    user_name: Optional[str] = Field(default="用户名称", description="User name")
+    head_url: Optional[str] = Field(default=None, description="User avatar URL")
     session_id: Optional[str] = Field(default="sess_4_42478261_29", description="Session ID")
     channel_name: Optional[str] = Field(default=None, description="Channel name (web, mobile, etc.)")
     team_id: Optional[str] = Field(default=None, description="Team ID")

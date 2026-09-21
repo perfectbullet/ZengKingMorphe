@@ -9,7 +9,6 @@ from app.core.logging import get_logger
 from app.core.database import get_database
 from app.utils.embeddings import get_embedding
 # from app.core.chroma import chroma_db
-from app.core.elasticsearch import es_db
 
 logger = get_logger(__name__)
 
@@ -24,8 +23,7 @@ class ThesaurusSensitiveProcessor:
             3. 使用combined_text生成向量（已在sync时生成）
             4. 调用Embedding API生成向量
             5. 写入ChromaDB（向量存储）
-            6. 写入ElasticSearch（关键词索引）
-            7. 更新MongoDB的synced_at时间戳
+            6. 更新MongoDB的synced_at时间戳
         """
         db = await get_database()
         try:
@@ -46,7 +44,7 @@ class ThesaurusSensitiveProcessor:
         thesaurus_id = thesaurus["thesaurus_id"]
         logger.info(f"_thesaurus_vectorization request: thesaurus_id={thesaurus_id}")
         try:
-            # 1、词库不启用则删除向量数据库记录和ES记录
+            # 1、词库不启用则删除向量数据库记录
             if thesaurus.get("is_enable", 0) == 0:
                 await self.delete_thesaurus_vectorization_data(thesaurus_id)
 
@@ -132,20 +130,6 @@ class ThesaurusSensitiveProcessor:
                            f"error={str(e)}", exc_info=True)
             raise
 
-        # 删除ElasticSearch记录
-        try:
-            await es_db.delete_document(
-                index="sensitive",
-                doc_id=thesaurus_id
-            )
-            logger.debug(
-                f"delete_thesaurus_vectorization_data Deleted FAQ thesaurus_id={thesaurus_id} from ElasticSearch")
-        except Exception as e:
-            logger.warning(
-                f"delete_thesaurus_vectorization_data ElasticSearch delete failed: thesaurus_id={thesaurus_id} "
-                f"error={str(e)}", exc_info=True)
-            raise
-
     async def create_thesaurus_vectorization_data(self, thesaurus: Any, update_time: str):
         thesaurus_id = thesaurus["thesaurus_id"]
         logger.info(
@@ -196,31 +180,6 @@ class ThesaurusSensitiveProcessor:
                 f"create_thesaurus_vectorization_data Failed to write FAQ to ChromaDB: thesaurus_id={thesaurus_id} "
                 f"error={str(e)}", exc_info=True)
             raise
-
-        # 6: 生成ElasticSearch的查询关键字索引
-        try:
-            es_doc = {
-                "thesaurus_id": thesaurus_id,
-                "employee_id": thesaurus["employee_id"],
-                "thesaurus_name": thesaurus.get("thesaurus_name", ""),
-                "word_name": thesaurus.get("word_name", ""),
-                "combined_text": combined_text,
-                "is_enable": thesaurus.get("is_enable", 1),
-                "update_time": update_time
-            }
-
-            await es_db.index_document(
-                index="sensitive",
-                doc_id=thesaurus_id,
-                document=es_doc
-            )
-
-            logger.info(f"create_thesaurus_vectorization_data indexed in ElasticSearch: thesaurus_id={thesaurus_id}")
-        except Exception as e:
-            logger.error(f"create_thesaurus_vectorization_data Failed to write FAQ to ElasticSearch: thesaurus_id={thesaurus_id} "
-                         f"error={str(e)}", exc_info=True)
-            raise
-
 
 # Global thesaurus_sensitive processor instance
 thesaurus_sensitive_processor = ThesaurusSensitiveProcessor()

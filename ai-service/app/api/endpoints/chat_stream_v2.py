@@ -544,13 +544,26 @@ async def generate_openai_stream_v2(
                     # Break out of workflow loop
                     break
 
-                # Build messages for LLM
-                messages = conversation_workflow.build_generation_messages(final_state)
+                # 数学题和人工概念命中时，工作流已经选择了模型并准备了专用消息。
+                # 不能在这里重新按通用策略选模型，否则会把 math_llm 降级为通用 LLM。
+                if streaming_type in {"math_llm", "langchain_llm"}:
+                    streaming_llm = final_state.get("streaming_llm")
+                    messages = final_state.get("streaming_messages")
+                    if not streaming_llm or not messages:
+                        raise RuntimeError(
+                            f"Streaming state is incomplete for type={streaming_type}"
+                        )
+                    model_name = (
+                        getattr(streaming_llm, "model_name", None)
+                        or getattr(streaming_llm, "model", None)
+                        or SERVER_MODEL
+                    )
+                else:
+                    messages = conversation_workflow.build_generation_messages(final_state)
+                    streaming_llm, model_name = conversation_workflow.get_streaming_llm(final_state)
 
-                # Get appropriate LLM for streaming
-                streaming_llm, model_name = conversation_workflow.get_streaming_llm(final_state)
                 logger.info(
-                    f"Streaming with LLM: {model_name} | "
+                    f"Streaming with LLM: {model_name} | type={streaming_type or 'general_llm'} | "
                     f"intent={final_state.get('intent')} | "
                     f"faq_matched={bool(final_state.get('faq_matched'))} | "
                     f"web_search_used={final_state.get('web_search_used', False)}"
@@ -571,7 +584,7 @@ async def generate_openai_stream_v2(
                             "id": chat_id,
                             "object": "chat.completion.chunk",
                             "created": created,
-                            "model": SERVER_MODEL,
+                            "model": model_name,
                             "choices": [
                                 {
                                     "index": 0,
@@ -681,5 +694,4 @@ async def generate_openai_stream_v2(
             logger.error(f"Failed to save error chunk to DB | error={str(db_error)}", exc_info=True)
 
         yield json.dumps(error_chunk_data)
-
 

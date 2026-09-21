@@ -177,7 +177,6 @@ start_service() {
     log_info "检查依赖服务..."
     local failed=0
     check_port 192.168.100.202 27017 "MongoDB"       || failed=$((failed+1))
-    check_port 192.168.100.202 9200  "ElasticSearch" || failed=$((failed+1))
     check_port 192.168.100.202 19530 "Milvus"        || failed=$((failed+1))
     check_port 192.168.100.202 7687  "Neo4j"         || failed=$((failed+1))
     # check_port 192.168.8.231 11434 "Ollama"        || failed=$((failed+1))

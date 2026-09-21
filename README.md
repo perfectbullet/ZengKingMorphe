@@ -9,17 +9,13 @@
 - **后端框架**: FastAPI
 - **AI 引擎**: LangGraph + OpenAI/Claude/DeepSeek/Qwen
 - **向量数据库**: Chroma
-- **全文检索**: ElasticSearch
 - **数据库**: MongoDB
 - **联网检索**: Tavily
-- **容器化**: Docker + Docker Compose
 
 ## 快速开始
 
 ### 1. 环境要求
 
-- Docker 20.10+
-- Docker Compose 2.0+
 - Python 3.11+ (本地开发)
 
 ### 2. 配置环境变量
@@ -39,24 +35,31 @@ TAVILY_API_KEY=your-tavily-api-key
 JWT_SECRET_KEY=your-jwt-secret-key
 ```
 
+#### 233 开发服务器环境文件
+
+233 的环境变量由本地维护的 `ai-service/.env.233` 提供。该文件包含服务器
+连接信息和密钥，受 `.gitignore` 保护，不能提交或通过同步脚本传输。
+
+手动复制文件到服务器后，在目标项目目录改名为 `.env`：
+
+```bash
+cd /data/metahuman_work/ZengKingMorphe-math/ai-service
+mv .env.233 .env
+```
+
+服务启动时会自动读取 `ai-service/.env`。修改环境变量后，需要重启服务才会生效：
+
+```bash
+cd /data/metahuman_work/ZengKingMorphe-math
+./start_ai_service_233.sh restart
+```
+
 ### 3. 启动服务
 
-使用 Docker Compose 启动所有服务：
+在配置好 MongoDB、模型和向量服务地址后，使用启动脚本运行 API：
 
 ```bash
-docker-compose up -d
-```
-
-查看服务状态：
-
-```bash
-docker-compose ps
-```
-
-查看日志：
-
-```bash
-docker-compose logs -f ai-service
+./start_ai_service.sh start
 ```
 
 ### 4. 访问服务
@@ -65,7 +68,6 @@ docker-compose logs -f ai-service
 - **API 文档 (ReDoc)**: http://localhost:8000/redoc
 - **健康检查**: http://localhost:8000/health
 - **MongoDB**: mongodb://localhost:27017
-- **ElasticSearch**: http://localhost:9200
 - **Chroma**: http://localhost:8001
 
 ## 本地开发
@@ -91,14 +93,7 @@ pip install mineru==3.0.8
 pip install -e .
 ```
 
-### 2. 启动数据库服务
-
-```bash
-# 只启动数据库服务
-docker-compose up -d mongodb elasticsearch chroma
-```
-
-### 3. 运行开发服务器
+### 2. 运行开发服务器
 
 **方式一：使用启动脚本（推荐）**
 
@@ -181,7 +176,7 @@ ai-service/
 
 - [x] **Phase 1**: 基础框架搭建
   - [x] FastAPI 服务框架
-  - [x] 数据库连接（MongoDB, Chroma, ElasticSearch）
+  - [x] 数据库连接（MongoDB）
   - [x] 鉴权和限流中间件
   - [x] 错误处理
   - [x] API 端点框架
