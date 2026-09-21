@@ -155,3 +155,4 @@ ai-service/data/lightrag_industrial_training_enamel_debug_bak20260712/*
 ai-service/data/lightrag_manual_math_concepts/*
 zj-aha-vllm-v100-math/bench_results/*
 ai-service/bak_env/*
+docs/runtime-architecture.*
