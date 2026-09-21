@@ -831,7 +831,12 @@ async def generate_openai_stream_v1(
 ) -> AsyncGenerator[str, None]:
     """
     生成 OpenAI 风格的 v1 API 流式响应。
-    本版本可针对 v1 端点的自定义行为进行修改。
+
+    维护说明：v1 保留给工业实训分支的既有调用方和回归验证使用。
+    当前数学 / 非数学分流分支的联调统一使用 v2 HTTP 端点
+    ``/api/chat/v2/chat/completions`` 与 ``tests.test_chat_stream_v2``；
+    不要以本函数的进程内直调结果作为当前分支的验收依据。
+
     Args:
         request: OpenAI 聊天请求
     Yields:

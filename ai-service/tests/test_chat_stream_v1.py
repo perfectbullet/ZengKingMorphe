@@ -1,5 +1,10 @@
 """
-测试 generate_openai_stream_v1 流式输出
+测试 generate_openai_stream_v1 流式输出。
+
+维护说明：本脚本直接导入服务端函数，不经过 HTTP 端点，并会加载完整运行配置
+（包括 ``ai-service/.env`` 中的 ``API_KEY`` 与合法布尔值 ``DEBUG``）。它保留给
+工业实训分支的 v1 兼容回归测试；当前数学 / 非数学分流分支禁止用它做联调验收。
+请改用 ``python -m tests.test_chat_stream_v2 --host <服务地址>``。
 
 基于日志参数测试流式输出功能：
 - model=qwen3:14b
