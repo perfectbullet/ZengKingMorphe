@@ -156,3 +156,4 @@ ai-service/data/lightrag_manual_math_concepts/*
 zj-aha-vllm-v100-math/bench_results/*
 ai-service/bak_env/*
 docs/runtime-architecture.*
+ai-service/.ai_service.pid

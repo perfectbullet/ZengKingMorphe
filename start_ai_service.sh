@@ -176,10 +176,9 @@ start_service() {
     # ── 依赖服务健康检查 ──
     log_info "检查依赖服务..."
     local failed=0
-    check_port 192.168.100.202 27017 "MongoDB"       || failed=$((failed+1))
-    check_port 192.168.100.202 19530 "Milvus"        || failed=$((failed+1))
-    check_port 192.168.100.202 7687  "Neo4j"         || failed=$((failed+1))
-    # check_port 192.168.8.231 11434 "Ollama"        || failed=$((failed+1))
+    check_port 192.168.100.233 27017 "MongoDB"       || failed=$((failed+1))
+    check_port 192.168.100.233 19530 "Milvus"        || failed=$((failed+1))
+    check_port 192.168.100.233 7687  "Neo4j"         || failed=$((failed+1))
 
     if [ $failed -gt 0 ]; then
         log_error "$failed 个依赖服务不可达，是否继续启动？(y/N)"
