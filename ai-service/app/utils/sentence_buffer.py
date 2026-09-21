@@ -579,6 +579,7 @@ class SentenceBuffer:
             if is_punct[i]:
                 if result:
                     result[-1] += segments[i]
+                    i += 1
                 else:
                     # Collect consecutive punctuation at start
                     j = i

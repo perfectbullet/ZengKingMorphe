@@ -1,7 +1,7 @@
 """
 Chat API endpoints.
 """
-from typing import List, Optional
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi import Query
 from sse_starlette.sse import EventSourceResponse
@@ -19,6 +19,7 @@ from app.core.database import get_database
 # Import stream generators for v1 and v2 endpoints
 from app.api.endpoints.chat_stream_v1 import generate_openai_stream_v1
 from app.api.endpoints.chat_stream_v2 import generate_openai_stream_v2
+from app.services.chat.request_resolver import RequestResolver
 
 logger = get_logger(__name__)
 
@@ -186,163 +187,37 @@ async def openai_chat_completions(
 async def openai_chat_completions_v2(
     request: OpenAIChatRequest
 ):
-    """
-    兼容 OpenAI 的对话补全接口 (v2 - 原版保留)
+    """Return the OpenAI-compatible, TTS-oriented v2 SSE stream."""
+    context = RequestResolver().resolve(request)
 
-    v2版本保留原始行为，不做任何修改。
-
-    与 OpenAI 软件开发工具包（SDK）及应用程序接口（API）格式完全兼容
-
-    参数说明:
-
-        request: 符合 OpenAI 格式的对话请求，包含:
-            - model: 模型名称
-            - messages: 对话消息列表
-            - stream: 是否启用流式传输
-            - temperature: 采样温度 (0.0-2.0)
-            - top_p: 核采样参数 (0.0-1.0)
-            - max_tokens: 最大生成token数
-            - presence_penalty: 存在惩罚 (-2.0-2.0)
-            - frequency_penalty: 频率惩罚 (-2.0-2.0)
-            - seed: 随机种子
-            - n: 生成候选数量
-            - tools: 工具/函数调用列表
-            - employee_id: 数字员工ID
-            - user_id: 用户ID
-            - session_id: 会话ID
-            - channel_name: 渠道名称
-            - team_id: 团队id
-            - user_name: 用户名称
-            - head_url: 用户头像
-
-        api_key: 来自身份验证的应用程序接口密钥
-
-    返回:
-
-        符合 OpenAI 格式的响应或服务器发送事件（SSE）流
-    """
-    # 处理 extra_body 参数（OpenAI SDK 通过 extra_body 传递非标准参数）
-    effective_team_id = request.team_id
-    effective_user_id = request.user_id
-    effective_employee_id = request.employee_id
-    effective_channel_name = request.channel_name
-    effective_user_name = request.user_name
-    effective_head_url = request.head_url
-
-    # 只有当 team_id/user_id/employee_id 不存在时，才从 channel_name 解析
-    if request.extra_body and "channel_name" in request.extra_body:
-        channel_name = request.extra_body["channel_name"]
-        if channel_name and not effective_channel_name:
-            effective_channel_name = channel_name
-            # 检查是否需要解析（参数缺失时）
-            need_parse = not effective_team_id or not effective_user_id or not effective_employee_id
-
-            if need_parse:
-                logger.info(f"Received channel_name from extra_body: {channel_name}")
-                # 解析 channel_name: employee_<team_id>_<user_id>_<employee_id>
-                parts = channel_name.split('_')
-                if len(parts) >= 4 and parts[0] == "employee":
-                    try:
-                        parsed_team_id = parts[1]
-                        parsed_user_id = parts[2]
-                        parsed_employee_id = parts[3]
-                        parsed_user_name = parts[4]
-                        parsed_head_url = parts[5]
-
-                        # 只覆盖缺失的值
-                        if not effective_team_id:
-                            effective_team_id = parsed_team_id
-                        if not effective_user_id:
-                            effective_user_id = parsed_user_id
-                        if not effective_employee_id:
-                            effective_employee_id = parsed_employee_id
-                        if not effective_user_name:
-                            effective_user_name = parsed_user_name
-                        if not effective_head_url:
-                            effective_head_url = parsed_head_url
-
-                        logger.info(
-                            f"Parsed from channel_name: team_id={effective_team_id}, "
-                            f"user_id={effective_user_id}, employee_id={effective_employee_id}"
-                        )
-                    except (ValueError, IndexError) as e:
-                        logger.error(f"Failed to parse channel_name '{channel_name}': {e}")
-                else:
-                    logger.error(f"Invalid channel_name format: '{channel_name}', expected 'employee_<team_id>_<user_id>_<employee_id>'")
-
-    # extra_body 中的直接参数优先级最高（覆盖所有其他来源）
-    if request.extra_body:
-        if "session_id" in request.extra_body and request.extra_body["session_id"]:
-            request.session_id = request.extra_body["session_id"]
-        if "team_id" in request.extra_body and request.extra_body["team_id"]:
-            effective_team_id = request.extra_body["team_id"]
-        if "user_id" in request.extra_body and request.extra_body["user_id"]:
-            effective_user_id = request.extra_body["user_id"]
-        if "employee_id" in request.extra_body and request.extra_body["employee_id"]:
-            effective_employee_id = request.extra_body["employee_id"]
-        if "channel_name" in request.extra_body and request.extra_body["channel_name"] and not effective_channel_name:
-            effective_channel_name = request.extra_body["channel_name"]
-        if "user_name" in request.extra_body and request.extra_body["user_name"]:
-            effective_user_name = request.extra_body["user_name"]
-        if "head_url" in request.extra_body and request.extra_body["head_url"]:
-            effective_head_url = request.extra_body["head_url"]
-
-    # Rate limiting
     await rate_limit_middleware(
-        request=None, user_id=effective_user_id, session_id=request.session_id
+        request=None,
+        user_id=context.user_id,
+        session_id=context.session_id,
     )
-
-    # 提取最后一条用户消息用于日志
-    last_user_message = ""
-    for msg in reversed(request.messages):
-        if msg.role == "user":
-            last_user_message = msg.content
-            break
 
     logger.info(
         f"OpenAI v2 chat completion request | "
         f"model={request.model} | "
-        f"user_id={effective_user_id} | "
-        f"user_name={effective_user_name} | "
-        f"head_url={effective_head_url} | "
-        f"employee_id={effective_employee_id} | "
-        f"session_id={request.session_id} | "
+        f"user_id={context.user_id} | "
+        f"user_name={context.user_name} | "
+        f"employee_id={context.employee_id} | "
+        f"session_id={context.session_id} | "
         f"stream={request.stream} | "
-        f"temperature={request.temperature} | "
-        f"top_p={request.top_p} | "
-        f"max_tokens={request.max_tokens} | "
-        f"presence_penalty={request.presence_penalty} | "
-        f"frequency_penalty={request.frequency_penalty} | "
-        f"seed={request.seed} | "
-        f"n={request.n} | "
-        f"has_tools={request.tools is not None} | "
-        f"channel_name={effective_channel_name} | "
-        f"team_id={effective_team_id} | "
+        f"channel_name={context.channel_name} | "
+        f"team_id={context.team_id} | "
         f"extra_body_provided={request.extra_body is not None} | "
         f"messages_count={len(request.messages)} | "
-        f"last_user_message={last_user_message[:200] if last_user_message else ''}"
+        f"last_user_message={context.user_query[:200]}"
     )
 
     if request.stream:
-        # Return streaming response with effective parameters
-        stream_request = request.model_copy(
-            update={
-                "user_id": effective_user_id,
-                "user_name": effective_user_name,
-                "head_url": effective_head_url,
-                "employee_id": effective_employee_id,
-                "team_id": effective_team_id,
-                "channel_name": effective_channel_name,
-            }
-        )
-        # ping=15: 长时间思考（如数学题）期间发送 SSE keepalive，避免前端/代理误判连接超时断开
-        return EventSourceResponse(generate_openai_stream_v2(stream_request), ping=15)
-    else:
-        # Non-streaming response (not implemented)
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="没有实现非流式响应",
-        )
+        return EventSourceResponse(generate_openai_stream_v2(context), ping=15)
+
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail="没有实现非流式响应",
+    )
 
 
 @router.get("/stream/chunks", response_model=StreamChunkResponse)

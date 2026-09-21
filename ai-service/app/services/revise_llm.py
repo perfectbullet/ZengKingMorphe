@@ -247,6 +247,64 @@ def _is_simple_unboxed_content(text: str) -> bool:
     return True
 
 
+def basic_math_to_voice(text: str) -> str:
+    """Deterministically remove common LaTeX/math syntax for failure fallback."""
+    result = _strip_latex_delimiters(_remove_boxed_wrappers(text)).strip()
+
+    # Resolve common two-argument and one-argument commands before dropping braces.
+    fraction = re.compile(r"\\frac\s*\{([^{}]+)\}\s*\{([^{}]+)\}")
+    square_root = re.compile(r"\\sqrt\s*\{([^{}]+)\}")
+    for _ in range(4):
+        updated = fraction.sub(r"\1 除以 \2", result)
+        updated = square_root.sub(r"根号下 \1", updated)
+        if updated == result:
+            break
+        result = updated
+
+    command_replacements = {
+        r"\times": "乘以",
+        r"\cdot": "乘以",
+        r"\div": "除以",
+        r"\pm": "正负",
+        r"\leq": "小于等于",
+        r"\le": "小于等于",
+        r"\geq": "大于等于",
+        r"\ge": "大于等于",
+        r"\neq": "不等于",
+        r"\approx": "约等于",
+        r"\infty": "无穷",
+        r"\pi": "派",
+    }
+    for command, spoken in command_replacements.items():
+        result = result.replace(command, f" {spoken} ")
+
+    result = re.sub(r"([A-Za-z0-9)])\s*\^\s*\{?2\}?", r"\1 的平方", result)
+    result = re.sub(r"([A-Za-z0-9)])\s*\^\s*\{?3\}?", r"\1 的立方", result)
+    result = re.sub(
+        r"([A-Za-z0-9)])\s*\^\s*\{([^{}]+)\}",
+        r"\1 的 \2 次方",
+        result,
+    )
+    result = re.sub(r"([A-Za-z0-9)])\s*\^\s*([A-Za-z0-9]+)", r"\1 的 \2 次方", result)
+
+    for symbol, spoken in (
+        ("<=", "小于等于"), (">=", "大于等于"), ("!=", "不等于"),
+        ("≤", "小于等于"), ("≥", "大于等于"), ("≠", "不等于"),
+        ("≈", "约等于"), ("∈", "属于"), ("∪", "并集"), ("∩", "交集"),
+        ("=", "等于"), ("+", "加"), ("-", "减"), ("×", "乘以"),
+        ("*", "乘以"), ("÷", "除以"), ("/", "除以"),
+        ("<", "小于"), (">", "大于"), ("√", "根号"), ("∞", "无穷"),
+    ):
+        result = result.replace(symbol, f" {spoken} ")
+
+    result = re.sub(r"\\(?:left|right|mathrm|mathbf|text)\b", "", result)
+    result = re.sub(r"\\[A-Za-z]+", " ", result)
+    result = result.replace("{", " ").replace("}", " ")
+    result = result.replace("$", "").replace(r"\(", "").replace(r"\)", "")
+    result = result.replace(r"\[", "").replace(r"\]", "").replace("\\", "")
+    return re.sub(r"\s+", " ", result).strip()
+
+
 # =============================================================================
 # Text inspection helpers
 # =============================================================================
@@ -299,7 +357,7 @@ async def _convert_single_formula(formula: str) -> str:
         logger.info(
             f"[_convert_single_formula] Formula unboxed and returned directly | input={formula[:100]!r} | output={stripped_formula[:100]!r}"
         )
-        return stripped_formula
+        return basic_math_to_voice(stripped_formula)
 
     messages = [
         {"role": "system", "content": FORMULA_ONLY_PROMPT},
@@ -318,18 +376,18 @@ async def _convert_single_formula(formula: str) -> str:
             logger.warning(
                 f"[_convert_single_formula] Empty conversion result, fallback to unboxed formula | input={formula[:300]!r} | unboxed={stripped_formula[:300]!r}"
             )
-            return stripped_formula or unboxed_formula
+            return basic_math_to_voice(stripped_formula or unboxed_formula)
 
         logger.info(
             f"[_convert_single_formula] Formula converted by LLM | input={formula[:100]!r} | normalized={stripped_formula[:100]!r} | output={result[:100]!r}"
         )
-        return result
+        return basic_math_to_voice(result) if re.search(r"[\\$=+×÷≤≥≠≈]", result) else result
 
     except Exception:
         logger.exception(
             f"[_convert_single_formula] Formula conversion failed, fallback to unboxed formula | input={formula[:300]!r} | unboxed={stripped_formula[:300]!r}"
         )
-        return stripped_formula or unboxed_formula
+        return basic_math_to_voice(stripped_formula or unboxed_formula)
 
 
 # =============================================================================
@@ -349,6 +407,8 @@ async def convert_formula_to_voice(text: str) -> str:
         normalized_text = _remove_boxed_wrappers(text)
 
         if not _has_any_formula_marker(normalized_text):
+            if "\\" in normalized_text:
+                return basic_math_to_voice(normalized_text)
             return _remove_list_markers(normalized_text)
 
         formulas = _extract_latex_formulas(normalized_text)
@@ -367,7 +427,7 @@ async def convert_formula_to_voice(text: str) -> str:
         logger.exception(
             f"[convert_formula_to_voice] Failed, fallback to unboxed original text | text={(text[:500] if text else text)!r}"
         )
-        return _remove_boxed_wrappers(text) if text else text
+        return basic_math_to_voice(text) if text else text
 
 
 async def convert_math_sentence_to_voice(text: str) -> str:
@@ -395,22 +455,23 @@ async def convert_math_sentence_to_voice(text: str) -> str:
             logger.warning(
                 f"[convert_math_sentence_to_voice] Empty conversion result, fallback to original text | input={text[:300]!r}"
             )
-            return text
+            return basic_math_to_voice(text)
 
         logger.info(
             f"[convert_math_sentence_to_voice] Math sentence converted | input={text[:100]!r} | output={result[:100]!r}"
         )
-        return result
+        return basic_math_to_voice(result) if re.search(r"[\\$=+×÷≤≥≠≈]", result) else result
 
     except Exception:
         logger.exception(
             f"[convert_math_sentence_to_voice] Failed, fallback to original text | input={text[:500]!r}"
         )
-        return text
+        return basic_math_to_voice(text)
 
 
 __all__ = [
     "get_voice_conversion_llm",
     "convert_formula_to_voice",
     "convert_math_sentence_to_voice",
+    "basic_math_to_voice",
 ]
