@@ -16,7 +16,7 @@
 使用方法:
     python -m tests.test_chat_stream_v2
     python -m tests.test_chat_stream_v2 --query "你的问题"
-    python -m tests.test_chat_stream_v2 --employee-id 29 --user-id 3
+    python -m tests.test_chat_stream_v2 --employee-id 29 --user-id 3 --team-id 4 --query "你的问题"
     python -m tests.test_chat_stream_v2 --host http://192.168.100.233:8100
 """
 
@@ -79,7 +79,7 @@ class ChatStreamV2Tester:
         self.user_name = user_name
         self.head_url = head_url
         self.employee_id = employee_id
-        self.session_id = session_id or f"sess_{user_id}_{employee_id}_{int(time.time())}"
+        self.session_id = session_id or f"sess_{team_id}_{user_id}_{employee_id}"
         self.team_id = team_id
         self.channel_name = channel_name
         self.model = model

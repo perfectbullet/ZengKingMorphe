@@ -2,7 +2,12 @@
 WebSocket client test script for stream chunks real-time updates.
 
 Usage:
-    python tests/test_websocket_chunks.py
+    python tests/test_websocket_chunks.py \
+    --host 192.168.100.233 \
+    --port 8100 \
+    --team-id 4 \
+    --user-id 3 \
+    --employee-id 29
 
 This script connects to the WebSocket endpoint and displays received chunks.
 """
@@ -21,7 +26,7 @@ except ImportError:
 async def test_websocket_chunks(
     user_id: str = "3",
     employee_id: str = "29",
-    session_id: str = "sess_4_3_29",
+    team_id: str = "4",
     host: str = "localhost",
     port: int = 8100,
 ):
@@ -31,10 +36,11 @@ async def test_websocket_chunks(
     Args:
         user_id: User ID to filter chunks
         employee_id: Employee ID to filter chunks
-        session_id: Session ID to filter chunks
+        team_id: Team ID used to derive the session ID
         host: WebSocket server host
         port: WebSocket server port
     """
+    session_id = f"sess_{team_id}_{user_id}_{employee_id}"
     uri = f"ws://{host}:{port}/api/chat/ws/view/chunks?user_id={user_id}&employee_id={employee_id}&session_id={session_id}"
 
     print(f"Connecting to: {uri}")
@@ -123,9 +129,9 @@ def main():
         help="Employee ID (default: 29)"
     )
     parser.add_argument(
-        "--session-id",
-        default="sess_4_3_29",
-        help="Session ID (default: sess_4_3_29)"
+        "--team-id",
+        default="4",
+        help="团队 ID；session_id 自动拼接为 sess_{team_id}_{user_id}_{employee_id}"
     )
     parser.add_argument(
         "--host",
@@ -144,7 +150,7 @@ def main():
     asyncio.run(test_websocket_chunks(
         user_id=args.user_id,
         employee_id=args.employee_id,
-        session_id=args.session_id,
+        team_id=args.team_id,
         host=args.host,
         port=args.port,
     ))
