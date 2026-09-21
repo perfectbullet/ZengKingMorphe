@@ -610,6 +610,7 @@ _STATE_DEFAULTS: ConversationState = {
     "streaming_type": None,
     "streaming_llm": None,
     "streaming_messages": None,
+    "math_stream_config": None,
     "rag_query": None,
     "rag_mode": None,
     # ── 客户端附加上下文 ──

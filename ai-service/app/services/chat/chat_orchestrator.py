@@ -4,10 +4,15 @@ import random
 import re
 import time
 from collections.abc import AsyncIterator
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from app.core.logging import get_logger
 from app.services.chat.answer_events import AnswerEvent, ChatContext
+from app.services.chat.math_reasoning_stream import (
+    MathModelConfig,
+    MathReasoningStreamAdapter,
+    ReasoningBuffer,
+)
 from app.utils.latex import normalize_latex_formulas
 from app.utils.sentence_buffer import SentenceBuffer
 
@@ -28,12 +33,18 @@ REALTIME_KEYWORDS = (
 class ChatOrchestrator:
     """Run the workflow and expose one real-time ``AnswerEvent`` stream."""
 
-    def __init__(self, workflow=None) -> None:
+    def __init__(
+        self,
+        workflow=None,
+        *,
+        math_stream_adapter_factory: Callable[[MathModelConfig], MathReasoningStreamAdapter] = MathReasoningStreamAdapter,
+    ) -> None:
         if workflow is None:
             from app.services.conversation_service import conversation_workflow
 
             workflow = conversation_workflow
         self.workflow = workflow
+        self.math_stream_adapter_factory = math_stream_adapter_factory
 
     async def stream(self, context: ChatContext) -> AsyncIterator[AnswerEvent]:
         state = self._initial_state(context)
@@ -97,6 +108,69 @@ class ChatOrchestrator:
                         metadata=metadata,
                     )
                 full_answer = display_text
+            elif plan_type == "math_llm":
+                math_config, messages = plan[1], plan[2]
+                model_name = math_config.model_name
+                reasoning_enabled = self._reasoning_display_enabled()
+                reasoning_buffer = ReasoningBuffer()
+                first_token_received = False
+
+                async for chunk in self.math_stream_adapter_factory(math_config).stream(messages):
+                    model_name = chunk.model_name or model_name
+                    if reasoning_enabled and chunk.reasoning:
+                        buffered_reasoning = reasoning_buffer.add(chunk.reasoning)
+                        if buffered_reasoning:
+                            sequence += 1
+                            yield AnswerEvent(
+                                event_type="reasoning",
+                                content=buffered_reasoning,
+                                content_type="reasoning",
+                                sequence=sequence,
+                                metadata=self._event_metadata(state, model_name),
+                            )
+
+                    if not chunk.content:
+                        continue
+
+                    # Preserve the vLLM ordering boundary: no buffered reasoning
+                    # may appear after the first visible answer token.
+                    if reasoning_enabled:
+                        buffered_reasoning = reasoning_buffer.flush()
+                        if buffered_reasoning:
+                            sequence += 1
+                            yield AnswerEvent(
+                                event_type="reasoning",
+                                content=buffered_reasoning,
+                                content_type="reasoning",
+                                sequence=sequence,
+                                metadata=self._event_metadata(state, model_name),
+                            )
+                    if not first_token_received:
+                        state["ttfb_ms"] = int(
+                            (time.time() - state["workflow_start_time"]) * 1000
+                        )
+                        first_token_received = True
+                    full_answer += chunk.content
+                    sequence += 1
+                    yield AnswerEvent(
+                        event_type="content",
+                        content=chunk.content,
+                        content_type="math",
+                        sequence=sequence,
+                        metadata=self._event_metadata(state, model_name),
+                    )
+
+                if reasoning_enabled:
+                    buffered_reasoning = reasoning_buffer.flush()
+                    if buffered_reasoning:
+                        sequence += 1
+                        yield AnswerEvent(
+                            event_type="reasoning",
+                            content=buffered_reasoning,
+                            content_type="reasoning",
+                            sequence=sequence,
+                            metadata=self._event_metadata(state, model_name),
+                        )
             else:
                 streaming_llm, messages = plan[1], plan[2]
                 model_name = (
@@ -153,7 +227,14 @@ class ChatOrchestrator:
             if direct_text:
                 return "prebuilt", direct_text
 
-        if streaming_type in {"math_llm", "langchain_llm"}:
+        if streaming_type == "math_llm":
+            math_config = state.get("math_stream_config")
+            messages = state.get("streaming_messages")
+            if math_config is not None and messages is not None:
+                return "math_llm", math_config, messages
+            raise RuntimeError("Math streaming state is incomplete")
+
+        if streaming_type == "langchain_llm":
             llm = state.get("streaming_llm")
             messages = state.get("streaming_messages")
             if llm is not None and messages is not None:
@@ -240,7 +321,14 @@ class ChatOrchestrator:
             "classification_confidence": None,
             "classification_reason": None,
             "answer_mode": None,
+            "math_stream_config": None,
         }
+
+    @staticmethod
+    def _reasoning_display_enabled() -> bool:
+        import os
+
+        return os.getenv("MATH_REASONING_DISPLAY_ENABLED", "true").lower() == "true"
 
 
 def _format_sources(

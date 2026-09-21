@@ -11,9 +11,10 @@ os.environ["DEBUG"] = "false"
 os.environ.setdefault("API_KEY", "test")
 
 from app.models.schemas import OpenAIChatRequest
-from app.services.chat.answer_events import ChatContext
+from app.services.chat.answer_events import AnswerEvent, ChatContext
 from app.services.chat.chat_orchestrator import ChatOrchestrator
 from app.services.chat.chat_stream_service import ChatStreamService
+from app.services.chat.math_reasoning_stream import MathModelConfig, MathStreamChunk
 from app.services.chat.request_resolver import RequestResolver
 from app.services.chat.speech_pipeline import SpeechPipeline
 from app.services.revise_llm import basic_math_to_voice
@@ -46,6 +47,15 @@ class FakeLLM:
                 await asyncio.sleep(self.delay)
             self.emitted.append(content)
             yield SimpleNamespace(content=content)
+
+
+class FakeMathAdapter:
+    def __init__(self, chunks: list[MathStreamChunk]):
+        self.chunks = chunks
+
+    async def stream(self, _messages):
+        for chunk in self.chunks:
+            yield chunk
 
 
 class FakeCompiledWorkflow:
@@ -114,10 +124,14 @@ async def run_state(
     state: dict,
     *,
     formula_converter=None,
+    math_stream_adapter_factory=None,
 ) -> tuple[list[str], FakeDatabase, FakeConversationWorkflow]:
     db = FakeDatabase()
     workflow = FakeConversationWorkflow(state)
-    orchestrator = ChatOrchestrator(workflow)
+    kwargs = {}
+    if math_stream_adapter_factory is not None:
+        kwargs["math_stream_adapter_factory"] = math_stream_adapter_factory
+    orchestrator = ChatOrchestrator(workflow, **kwargs)
 
     def speech_factory():
         kwargs = {}
@@ -160,12 +174,25 @@ async def test_general_answer_has_equal_but_separate_display_and_speech_streams(
 
 @pytest.mark.asyncio
 async def test_math_llm_keeps_latex_in_mongo_and_sends_only_voice_text_to_sse():
-    llm = FakeLLM(["推导如下。", "$$x^2=4$$\n", "因此完成。"])
+    math_chunks = [
+        MathStreamChunk(reasoning="先分析函数。", model_name="fake-math-model"),
+        MathStreamChunk(reasoning="再求顶点。", model_name="fake-math-model"),
+        MathStreamChunk(content="推导如下。", model_name="fake-math-model"),
+        MathStreamChunk(content="$$x^2=4$$\n", model_name="fake-math-model"),
+        MathStreamChunk(content="因此完成。", model_name="fake-math-model"),
+    ]
     state = {
         "confidence": 0.8,
         "conversation_id": "conversation-math",
         "streaming_type": "math_llm",
-        "streaming_llm": llm,
+        "math_stream_config": MathModelConfig(
+            base_url="http://math.example/v1",
+            model_name="fake-math-model",
+            api_key="test",
+            max_tokens=128,
+            temperature=0.6,
+            top_p=0.95,
+        ),
         "streaming_messages": [],
     }
 
@@ -173,14 +200,32 @@ async def test_math_llm_keeps_latex_in_mongo_and_sends_only_voice_text_to_sse():
         assert "$$x^2=4$$" in text
         return text.replace("$$x^2=4$$", "x 的平方等于 4")
 
-    payloads, db, _ = await run_state(state, formula_converter=convert_formula)
+    payloads, db, workflow = await run_state(
+        state,
+        formula_converter=convert_formula,
+        math_stream_adapter_factory=lambda _config: FakeMathAdapter(math_chunks),
+    )
     display = display_content(db)
     speech = extract_content(payloads)
+    reasoning_documents = [
+        document for document in db.stream_chunks.documents
+        if document["chunk_type"] == "reasoning"
+    ]
 
     assert "$$x^2=4$$" in display
     assert "x 的平方等于 4" in speech
     assert "$$x^2=4$$" not in speech
+    assert "先分析函数" not in speech
+    assert "再求顶点" not in speech
     assert display != speech
+    assert [
+        document["chunk_data"]["choices"][0]["delta"]["reasoning"]
+        for document in reasoning_documents
+    ] == ["先分析函数。", "再求顶点。"]
+    assert workflow.saved_states[0]["final_answer"] == "推导如下。$$x^2=4$$\n因此完成。"
+    assert [document["sequence"] for document in db.stream_chunks.documents] == list(
+        range(1, len(db.stream_chunks.documents) + 1)
+    )
     assert_single_final_done(payloads)
 
 
@@ -390,3 +435,103 @@ def test_deterministic_math_fallback_never_leaks_latex_to_tts():
     assert "等于" in speech
     assert "$" not in speech
     assert "\\" not in speech
+
+
+@pytest.mark.asyncio
+async def test_speech_pipeline_ignores_reasoning_events():
+    speech = SpeechPipeline()
+    events = [
+        event async for event in speech.handle(
+            AnswerEvent(event_type="reasoning", content="这是不可朗读的思考过程。")
+        )
+    ]
+
+    assert events == []
+
+
+@pytest.mark.asyncio
+async def test_math_reasoning_display_feature_flag_keeps_answer_but_skips_mongo_reasoning(
+    monkeypatch,
+):
+    monkeypatch.setenv("MATH_REASONING_DISPLAY_ENABLED", "false")
+    state = {
+        "confidence": 0.8,
+        "conversation_id": "conversation-math-flag-off",
+        "streaming_type": "math_llm",
+        "math_stream_config": _math_test_config(),
+        "streaming_messages": [],
+    }
+    chunks = [
+        MathStreamChunk(reasoning="不应展示的思考。"),
+        MathStreamChunk(content="正式答案。"),
+    ]
+
+    payloads, db, workflow = await run_state(
+        state,
+        math_stream_adapter_factory=lambda _config: FakeMathAdapter(chunks),
+    )
+
+    assert "正式答案。" in display_content(db)
+    assert "正式答案。" in extract_content(payloads)
+    assert not any(document["chunk_type"] == "reasoning" for document in db.stream_chunks.documents)
+    assert workflow.saved_states[0]["final_answer"] == "正式答案。"
+
+
+@pytest.mark.asyncio
+async def test_math_reasoning_is_persisted_before_the_math_stream_finishes():
+    reasoning_saved = asyncio.Event()
+    release_content = asyncio.Event()
+
+    class ObservingCollection(FakeCollection):
+        async def insert_one(self, document: dict):
+            result = await super().insert_one(document)
+            if document["chunk_type"] == "reasoning":
+                reasoning_saved.set()
+            return result
+
+    class PausingMathAdapter:
+        async def stream(self, _messages):
+            yield MathStreamChunk(reasoning="先观察函数。", model_name="fake-math-model")
+            await release_content.wait()
+            yield MathStreamChunk(content="正式答案。", model_name="fake-math-model")
+
+    db = FakeDatabase()
+    db.stream_chunks = ObservingCollection()
+    workflow = FakeConversationWorkflow({
+        "confidence": 0.8,
+        "conversation_id": "conversation-live-reasoning",
+        "streaming_type": "math_llm",
+        "math_stream_config": _math_test_config(),
+        "streaming_messages": [],
+    })
+    service = ChatStreamService(
+        orchestrator=ChatOrchestrator(
+            workflow,
+            math_stream_adapter_factory=lambda _config: PausingMathAdapter(),
+        ),
+        database_provider=lambda: asyncio.sleep(0, result=db),
+    )
+    stream = service.stream(make_context())
+
+    await anext(stream)  # role
+    next_sse = asyncio.create_task(anext(stream))
+    await asyncio.wait_for(reasoning_saved.wait(), timeout=1)
+
+    assert any(item["chunk_type"] == "reasoning" for item in db.stream_chunks.documents)
+    assert not any(item["chunk_type"] == "token" for item in db.stream_chunks.documents)
+
+    release_content.set()
+    assert "正式答案。" in extract_content([await next_sse])
+    remaining = [payload async for payload in stream]
+    assert_single_final_done(remaining)
+
+
+def _math_test_config() -> MathModelConfig:
+    return MathModelConfig(
+        base_url="http://math.example/v1",
+        model_name="fake-math-model",
+        api_key="test",
+        max_tokens=128,
+        temperature=0.6,
+        top_p=0.95,
+    )

@@ -39,7 +39,7 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.services.conversation.conversation_state import ConversationState
 from app.services.conversation.conversation_nodes import ConversationNodes
-from app.utils.get_vllm_first_model import get_vllm_first_model
+from app.services.chat.math_reasoning_stream import MathModelConfig, _uses_model_generation_defaults
 
 logger = get_logger(__name__)
 
@@ -205,52 +205,37 @@ class ConversationWorkflow:
             logger.info("Math LLM disabled (MATH_LLM_ENABLED=false), falling back to default LLM")
             return self.get_streaming_llm(state)
 
-        base_url = os.getenv("MATH_MODEL_BASE_URL")
-        model_id = os.getenv("MATH_MODEL_NAME")
-        math_api_key = (
-            os.getenv("MATH_MODEL_API_KEY", "").strip().strip('"').strip("'")
-            or "dummy-key"
-        )
-
-        # 未指定模型名时通过 vLLM 自动发现
-        if not model_id:
-            model_id = get_vllm_first_model(base_url)
-
-        math_temperature = float(os.getenv("MATH_TEMPERATURE", 0.6))
-        math_max_token = int(os.getenv("MATH_MAX_TOKEN", 10240))
-        math_top_p = float(os.getenv("MATH_TOP_P", 0.95))
-        use_model_generation_defaults = self._uses_model_generation_defaults(model_id)
-        if use_model_generation_defaults:
-            math_temperature = None
-            math_top_p = None
+        config = self.get_math_model_config()
         math_llm_kwargs = {
-            "base_url": base_url,
-            "api_key": math_api_key,
-            "model": model_id,
-            "max_tokens": math_max_token,
+            "base_url": config.base_url,
+            "api_key": config.api_key,
+            "model": config.model_name,
+            "max_tokens": config.max_tokens,
             "streaming": True,
         }
-        if math_temperature is not None:
-            math_llm_kwargs["temperature"] = math_temperature
-        if math_top_p is not None:
-            math_llm_kwargs["top_p"] = math_top_p
+        if config.temperature is not None:
+            math_llm_kwargs["temperature"] = config.temperature
+        if config.top_p is not None:
+            math_llm_kwargs["top_p"] = config.top_p
         math_llm = ChatOpenAI(**math_llm_kwargs)
 
         logger.info(
-            f"Math ChatOpenAI client created | model={model_id} | base_url={base_url} | "
-            f"sampling={'model_default' if use_model_generation_defaults else 'env'} | "
-            f"math_temperature={math_temperature} | math_top_p={math_top_p} | "
-            f"math_max_token={math_max_token}"
+            f"Math ChatOpenAI client created | model={config.model_name} | base_url={config.base_url} | "
+            f"sampling={'model_default' if config.temperature is None else 'env'} | "
+            f"math_temperature={config.temperature} | math_top_p={config.top_p} | "
+            f"math_max_token={config.max_tokens}"
         )
 
-        return math_llm, model_id
+        return math_llm, config.model_name
+
+    def get_math_model_config(self) -> MathModelConfig:
+        """Return the single source of truth for all math-model clients."""
+        return MathModelConfig.from_env()
 
     @staticmethod
     def _uses_model_generation_defaults(model: str | None) -> bool:
         """Qwen3-32B 使用模型服务端 generation_config.json 的采样参数。"""
-        if not model:
-            return False
-        return "qwen3-32b" in model.lower().replace("_", "-")
+        return _uses_model_generation_defaults(model)
 
     async def save_conversation(self, state: ConversationState):
         """

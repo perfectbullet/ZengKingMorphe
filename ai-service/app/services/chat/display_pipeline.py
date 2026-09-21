@@ -37,14 +37,21 @@ class DisplayPipeline:
         await self.repository.save(chunk_type="role", chunk_data=self._role_payload())
 
     async def handle(self, event: AnswerEvent) -> None:
-        if event.event_type not in {"content", "status"} or not event.content:
+        if event.event_type not in {"content", "status", "reasoning"} or not event.content:
             return
         model = event.metadata.get("model_name") or (
             "status" if event.event_type == "status" else self.default_model
         )
-        payload = self._content_payload(event.content, model=model)
+        payload = (
+            self._reasoning_payload(event.content, model=model)
+            if event.event_type == "reasoning"
+            else self._content_payload(event.content, model=model)
+        )
         await self.repository.save(
-            chunk_type="status" if event.event_type == "status" else "token",
+            chunk_type=(
+                "reasoning" if event.event_type == "reasoning"
+                else "status" if event.event_type == "status" else "token"
+            ),
             chunk_data=payload,
             conversation_id=event.metadata.get("conversation_id"),
         )
@@ -89,3 +96,15 @@ class DisplayPipeline:
             }],
         }
 
+    def _reasoning_payload(self, reasoning: str, *, model: str) -> dict[str, Any]:
+        return {
+            "id": self.context.chat_id,
+            "object": "chat.completion.chunk",
+            "created": self.context.created,
+            "model": model,
+            "choices": [{
+                "index": 0,
+                "delta": {"reasoning": reasoning},
+                "finish_reason": None,
+            }],
+        }

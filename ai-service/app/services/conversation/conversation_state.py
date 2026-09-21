@@ -179,6 +179,7 @@ class ConversationState(TypedDict):
     streaming_type: Optional[str]  # "langchain_llm" / "rag_stream" / "math_llm"
     streaming_llm: Optional[Any]  # LLM instance (for langchain_llm)
     streaming_messages: Optional[List]  # Messages (for langchain_llm)
+    math_stream_config: Optional[Any]  # MathModelConfig (for raw math_llm SSE)
     rag_query: Optional[str]  # Query for unified RAG stream
     rag_mode: Optional[str]  # Unified RAG mode (hybrid, local, global, naive)
     direct_text_answer: Optional[str]  # 直接文本答案，不走LLM（如：系统时间）

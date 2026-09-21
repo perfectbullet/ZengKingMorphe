@@ -2460,20 +2460,30 @@ class ConversationNodes:
                 state.get("is_math_problem", False)
                 or effective_mode == AnswerMode.MATH_LLM.value
             ):
-                # 数学题：数学模型推理，明确不走 RAG
-                streaming_llm, model_name = self.workflow.get_math_streaming_llm(state)
-
-                # math_llm 固定为 ChatOpenAI；数学消息始终含系统提示词。
+                # 数学题：数学模型推理，明确不走 RAG。生成由 Orchestrator 的
+                # raw SSE adapter 负责，以保留 vLLM 的 delta.reasoning。
                 messages = build_math_generation_messages(state)
-                state["streaming_llm"] = streaming_llm
                 state["streaming_messages"] = messages
-                state["streaming_type"] = "math_llm"
-                logger.info(
-                    f"Streaming configured: type=math_llm, model={model_name}, "
-                    f"answer_mode={answer_mode}, "
-                    f"query={state['user_query'][:50]}..., "
-                    f"message_count={len(messages)}"
-                )
+                if os.getenv("MATH_LLM_ENABLED", "true").lower() == "true":
+                    math_config = self.workflow.get_math_model_config()
+                    state["streaming_llm"] = None
+                    state["math_stream_config"] = math_config
+                    state["streaming_type"] = "math_llm"
+                    logger.info(
+                        f"Streaming configured: type=math_llm, model={math_config.model_name}, "
+                        f"answer_mode={answer_mode}, "
+                        f"query={state['user_query'][:50]}..., "
+                        f"message_count={len(messages)}"
+                    )
+                else:
+                    streaming_llm, model_name = self.workflow.get_streaming_llm(state)
+                    state["streaming_llm"] = streaming_llm
+                    state["math_stream_config"] = None
+                    state["streaming_type"] = "langchain_llm"
+                    logger.info(
+                        f"Streaming configured: type=langchain_llm (math disabled), "
+                        f"model={model_name}, answer_mode={answer_mode}"
+                    )
             elif effective_mode == AnswerMode.RAG_WITH_FALLBACK.value:
                 employee_config = state.get("employee_config", {})
                 training_rag_enabled = _training_rag_enabled()
