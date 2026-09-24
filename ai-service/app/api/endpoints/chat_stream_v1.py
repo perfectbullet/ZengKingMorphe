@@ -1221,42 +1221,33 @@ async def generate_openai_stream_v1(
 
             first_token_received = False
             full_answer = ""
-            TALKING_POINTS: list = (
-                [
-                    "好的，我正在梳理您的问题要点…",
-                    "等我一小下下······",
-                ]
-                if prefer_zh_output
-                else [
-                    "Got it—let me think for a moment…",
-                    "One sec, I'm putting this together…",
-                ]
-            )
-
-            # 发送统一过渡话术，按输入语言适配
-            preface = TALKING_POINTS[0] + ("\n" if prefer_zh_output else "\n")
             enable_math_sentence_conversion = current_state.get(
                 "is_math_problem", False
             )
 
-            chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
-                preface,
-                chat_id,
-                created,
-                SERVER_MODEL,
-                db,
-                chunk_sequence,
-                session_id,
-                request.user_id,
-                request.employee_id,
-                current_state.get("conversation_id"),
-                prefer_zh_output=prefer_zh_output,
-                enable_math_sentence_conversion=enable_math_sentence_conversion,
-                log_prefix="Preface",
-            )
-            yield json.dumps(chunk_data)
-
-            if not first_token_received:
+            # 数学题的 reasoning 先经 WebSocket 展示；过渡话术不能混入正式答案 token。
+            if streaming_type != "math_llm":
+                preface = (
+                    "好的，我正在梳理您的问题要点…\n"
+                    if prefer_zh_output
+                    else "Got it—let me think for a moment…\n"
+                )
+                chunk_sequence, chunk_data = await _stream_segment_with_formula_conversion(
+                    preface,
+                    chat_id,
+                    created,
+                    SERVER_MODEL,
+                    db,
+                    chunk_sequence,
+                    session_id,
+                    request.user_id,
+                    request.employee_id,
+                    current_state.get("conversation_id"),
+                    prefer_zh_output=prefer_zh_output,
+                    enable_math_sentence_conversion=enable_math_sentence_conversion,
+                    log_prefix="Preface",
+                )
+                yield json.dumps(chunk_data)
                 first_token_received = True
                 ttfb_ms = int(
                     (time.time() - initial_state["workflow_start_time"]) * 1000

@@ -109,6 +109,17 @@ async def test_v1_math_reasoning_is_saved_for_websocket_only(monkeypatch, tmp_pa
 
     documents = db.stream_chunks.documents
     reasoning = [doc for doc in documents if doc["chunk_type"] == "reasoning"]
+    answer_tokens = [doc for doc in documents if doc["chunk_type"] == "token"]
+    assert [
+        doc["chunk_data"]["choices"][0]["delta"]["content"]
+        for doc in answer_tokens
+    ] == ["2<x<3。"]
+    assert [
+        choice["delta"]["content"]
+        for payload in payloads if isinstance(payload, dict)
+        for choice in payload.get("choices", [])
+        if choice.get("delta", {}).get("content")
+    ] == ["2<x<3。"]
     assert len(reasoning) == 1
     assert reasoning[0]["chunk_data"]["choices"][0]["delta"] == {
         "reasoning": "先求根，再看符号"
@@ -156,3 +167,57 @@ async def test_v1_math_reasoning_display_can_be_disabled(monkeypatch, tmp_path):
     )
     assert payloads[-1] == "[DONE]"
     assert saved.await_args.args[0]["final_answer"] == "2<x<3。"
+
+@pytest.mark.asyncio
+async def test_v1_non_math_keeps_preface(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    db = FakeDatabase()
+
+    class FakeGeneralLLM:
+        async def astream(self, messages):
+            assert messages == [{"role": "user", "content": "番茄是什么"}]
+            yield SimpleNamespace(content="番茄是水果。")
+
+    async def workflow_stream(_initial_state, stream_mode):
+        assert stream_mode == "updates"
+        yield {"post_classification_preprocess": {"user_query": "番茄是什么"}}
+        yield {
+            "generate_answer": {
+                "streaming_type": "langchain_llm",
+                "streaming_llm": FakeGeneralLLM(),
+                "streaming_messages": [{"role": "user", "content": "番茄是什么"}],
+                "is_math_problem": False,
+            }
+        }
+
+    async def passthrough_segment(segment, *args, **kwargs):
+        return segment, segment
+
+    workflow = SimpleNamespace(
+        workflow=SimpleNamespace(astream=workflow_stream),
+        save_conversation=AsyncMock(),
+    )
+    monkeypatch.setattr(chat_stream_v1, "get_database", AsyncMock(return_value=db))
+    monkeypatch.setattr(chat_stream_v1, "conversation_workflow", workflow)
+    monkeypatch.setattr(chat_stream_v1, "_process_segment_for_output", passthrough_segment)
+
+    request = OpenAIChatRequest(
+        messages=[{"role": "user", "content": "番茄是什么"}],
+        stream=True,
+        user_id="user-1",
+        employee_id="employee-1",
+        session_id="session-non-math",
+    )
+    payloads = [
+        json.loads(raw) if raw != "[DONE]" else raw
+        async for raw in chat_stream_v1.generate_openai_stream_v1(request)
+    ]
+    sse_contents = [
+        choice["delta"]["content"]
+        for payload in payloads if isinstance(payload, dict)
+        for choice in payload.get("choices", [])
+        if choice.get("delta", {}).get("content")
+    ]
+    assert sse_contents == ["好的，我正在梳理您的问题要点…\n", "番茄是水果。"]
+    tokens = [doc for doc in db.stream_chunks.documents if doc["chunk_type"] == "token"]
+    assert tokens[0]["chunk_data"]["choices"][0]["delta"]["content"] == sse_contents[0]
