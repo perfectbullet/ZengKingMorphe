@@ -43,6 +43,10 @@ from app.services.math_debug_dump import (
     mark_error,
     safe_write_math_debug,
 )
+from app.services.chat.math_reasoning_stream import (
+    MathReasoningStreamAdapter,
+    ReasoningBuffer,
+)
 
 logger = get_logger(__name__)
 # =============================================================================
@@ -833,10 +837,8 @@ async def generate_openai_stream_v1(
     """
     生成 OpenAI 风格的 v1 API 流式响应。
 
-    维护说明：v1 保留给工业实训分支的既有调用方和回归验证使用。
-    当前数学 / 非数学分流分支的联调统一使用 v2 HTTP 端点
-    ``/api/chat/v2/chat/completions`` 与 ``tests.test_chat_stream_v2``；
-    不要以本函数的进程内直调结果作为当前分支的验收依据。
+    数学题与 v2 共用原始数学流适配器。推理内容保存到 MongoDB，
+    通过展示 WebSocket 返回前端；HTTP SSE 只发送可朗读的答案。
 
     Args:
         request: OpenAI 聊天请求
@@ -1609,25 +1611,50 @@ async def generate_openai_stream_v1(
                 final_state["final_answer"] = full_answer
 
             elif streaming_type == "math_llm":
-                # 数学模型推理流式输出
-                streaming_llm = current_state.get("streaming_llm")
+                # 与 v2 共用数学 SSE 适配器；reasoning 只写入 MongoDB 展示通道。
+                math_config = current_state.get("math_stream_config")
                 messages = current_state.get("streaming_messages")
-                if not streaming_llm or not messages:
-                    logger.error(
-                        "streaming_llm or messages not configured for math_llm type"
-                    )
-                    continue
-                _llm_base_url = getattr(
-                    streaming_llm, "openai_api_base", None
-                ) or getattr(streaming_llm, "base_url", "unknown")
+                if math_config is None or messages is None:
+                    raise RuntimeError("Math streaming state is incomplete")
+                model_name = math_config.model_name
+                _llm_base_url = math_config.base_url
                 logger.info(
-                    f"Using math ChatOpenAI stream | model={model_name} | base_url={_llm_base_url}"
+                    f"Using math raw SSE stream | model={model_name} | base_url={_llm_base_url}"
                 )
+                reasoning_enabled = (
+                    os.getenv("MATH_REASONING_DISPLAY_ENABLED", "true").lower()
+                    == "true"
+                )
+                reasoning_buffer = ReasoningBuffer()
 
-                # 使用真正的流式输出
-                logger.info(
-                    "Starting streaming response with astream | type=math_llm"
-                )
+                async def save_reasoning_chunk(reasoning: str) -> None:
+                    nonlocal chunk_sequence
+                    chunk_sequence += 1
+                    chunk_data = {
+                        "id": chat_id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": model_name,
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"reasoning": reasoning},
+                                "finish_reason": None,
+                            }
+                        ],
+                    }
+                    await save_stream_chunk(
+                        db,
+                        chat_id,
+                        chunk_sequence,
+                        session_id,
+                        request.user_id,
+                        request.employee_id,
+                        "reasoning",
+                        chunk_data,
+                        current_state.get("conversation_id"),
+                    )
+
                 first_token_received = False
                 full_answer = ""
                 # ── 数学模型调试 dump：保存本次数学模型输入/输出为 JSON，便于排查 ──
@@ -1650,11 +1677,6 @@ async def generate_openai_stream_v1(
                                 chat_id=chat_id,
                                 runtime_mode="direct",
                             )
-                            math_model_name = (
-                                getattr(streaming_llm, "model_name", None)
-                                or getattr(streaming_llm, "model", None)
-                                or model_name
-                            )
                             math_debug_payload = build_base_debug_payload(
                                 status="running",
                                 user_id=request.user_id,
@@ -1662,7 +1684,7 @@ async def generate_openai_stream_v1(
                                 session_id=session_id,
                                 chat_id=chat_id,
                                 runtime_mode="direct",
-                                model_name=math_model_name,
+                                model_name=model_name,
                                 base_url=_llm_base_url,
                                 user_query=current_state.get("user_query") or "",
                                 messages=messages,
@@ -1679,13 +1701,22 @@ async def generate_openai_stream_v1(
                             math_debug_path = None
                             math_debug_payload = None
 
-                    async for chunk in streaming_llm.astream(messages):
+                    async for chunk in MathReasoningStreamAdapter(math_config).stream(messages):
+                        model_name = chunk.model_name or model_name
                         if await stop_if_disconnected("math_llm_chunk"):
                             return
-                        token = (
-                            chunk.content if hasattr(chunk, "content") else str(chunk)
-                        )
+                        if reasoning_enabled and chunk.reasoning:
+                            buffered_reasoning = reasoning_buffer.add(chunk.reasoning)
+                            if buffered_reasoning:
+                                await save_reasoning_chunk(buffered_reasoning)
+
+                        token = chunk.content
                         if token:
+                            # 推理先于首个正式答案 token 写入，WebSocket 按序转发。
+                            if reasoning_enabled:
+                                buffered_reasoning = reasoning_buffer.flush()
+                                if buffered_reasoning:
+                                    await save_reasoning_chunk(buffered_reasoning)
                             # 保存模型原始增量（未经 think 标签过滤）用于调试
                             math_output_parts.append(token)
                             raw_token_index += 1
@@ -1714,7 +1745,7 @@ async def generate_openai_stream_v1(
                                         segment,
                                         chat_id,
                                         created,
-                                        SERVER_MODEL,
+                                        model_name,
                                         db,
                                         chunk_sequence,
                                         session_id,
@@ -1740,6 +1771,10 @@ async def generate_openai_stream_v1(
                                         logger.info(
                                             f"First token received | ttfb_ms={ttfb_ms}"
                                         )
+                    if reasoning_enabled:
+                        buffered_reasoning = reasoning_buffer.flush()
+                        if buffered_reasoning:
+                            await save_reasoning_chunk(buffered_reasoning)
                 except asyncio.CancelledError:
                     # 客户端断开 / 任务取消：记录 cancelled 后必须继续 raise
                     if math_debug_payload is not None:
@@ -1752,7 +1787,7 @@ async def generate_openai_stream_v1(
                     raise
                 except Exception as e:
                     logger.error(
-                        f"Math LLM astream failed | base_url={_llm_base_url} | model={model_name} | "
+                        f"Math LLM raw SSE stream failed | base_url={_llm_base_url} | model={model_name} | "
                         f"error_type={type(e).__name__} | tokens_sent_so_far={raw_token_index}",
                         exc_info=True,
                     )
@@ -1800,7 +1835,7 @@ async def generate_openai_stream_v1(
                         final_segment.content,
                         chat_id,
                         created,
-                        SERVER_MODEL,
+                        model_name,
                         db,
                         chunk_sequence,
                         session_id,

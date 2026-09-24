@@ -79,7 +79,10 @@ async def test_websocket_chunks(
                             content = data.get("chunk_data", {}).get("choices", [{}])[0].get("delta", {}).get("content", "")
                             print(f"[{message_count:04d}] 🔤 chunk-{sequence}: {content!r}")
                             print(f"[{message_count:04d}] 🔤 chunk-md-{sequence}: {content}")
-                            
+                        elif chunk_type == "reasoning":
+                            reasoning = data.get("chunk_data", {}).get("choices", [{}])[0].get("delta", {}).get("reasoning", "")
+                            print(f"[{message_count:04d}] 🔤 chunk-{sequence}: {reasoning!r}")
+                            print(f"[{message_count:04d}] 🔤 chunk-md-{sequence}: {reasoning}")
                         elif chunk_type == "done":
                             print(f"[{message_count:04d}] ✅ Done - {chunk_id}")
                         elif chunk_type == "error":

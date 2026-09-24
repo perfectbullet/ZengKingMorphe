@@ -16,7 +16,7 @@
 使用方法:
     python -m tests.test_chat_stream_v2
     python -m tests.test_chat_stream_v2 --query "你的问题"
-    python -m tests.test_chat_stream_v2 --employee-id 29 --user-id 3 --team-id 4 --query "你的问题"
+    python -m tests.test_chat_stream_v2 --host http://192.168.100.233:8100 --employee-id 29 --user-id 3 --team-id 4 --query "北京今天天气怎么样"
     python -m tests.test_chat_stream_v2 --host http://192.168.100.233:8100
 """
 
